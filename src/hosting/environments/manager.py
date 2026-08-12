@@ -79,7 +79,31 @@ class EnvironmentManager:
             raise EnvironmentError("environment_state_invalid")
         if len(value["templates"]) > self.MAX_TEMPLATES or len(value["references"]) > self.MAX_REFERENCES:
             raise EnvironmentError("environment_state_limit_exceeded")
+        try:
+            value["templates"] = {
+                key: EnvironmentTemplate.from_dict(row).to_dict()
+                for key, row in value["templates"].items()
+            }
+            value["references"] = {
+                key: EnvironmentReference.from_dict(row).to_dict()
+                for key, row in value["references"].items()
+            }
+        except (TypeError, ValueError) as exc:
+            raise EnvironmentError("environment_state_invalid") from exc
         return value
+
+    def receipt(self, *, environment_id: str) -> dict[str, Any]:
+        digest = environment_id.split(":", 1)[1] if environment_id.startswith("sha256:") else ""
+        if not digest:
+            raise EnvironmentError("environment_id_invalid")
+        path = self.root / "receipts" / f"{digest}.json"
+        try:
+            receipt = EnvironmentReceipt.from_dict(json.loads(path.read_text(encoding="utf-8")))
+        except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError) as exc:
+            raise EnvironmentError("environment_receipt_invalid") from exc
+        if receipt.environment_id != environment_id or receipt.configuration_revision != self.configuration_revision:
+            raise EnvironmentError("environment_receipt_stale")
+        return receipt.to_dict()
 
     def _write(self, value: Mapping[str, Any]) -> None:
         self.root.mkdir(parents=True, exist_ok=True)
@@ -240,7 +264,7 @@ class EnvironmentManager:
             with self._locked():
                 state = self._read()
                 if receipt_path.is_file() and content_dir.is_dir():
-                    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+                    receipt = self.receipt(environment_id=environment_id)
                     reference = self._acquire_locked(state, environment_id, request)
                     self._write(state)
                     return {"receipt": receipt, "reference": reference, "reused": True}
@@ -257,13 +281,21 @@ class EnvironmentManager:
                     os.replace(staging, content_dir)
                 lock = EnvironmentLock(environment_id, content_key, request.runtime_kind, request.platform, template.template_id, template.revision, request.package_lock_digest, request.configuration_revision)
                 receipt = EnvironmentReceipt(environment_id, content_key, 1, f"@environments/content/{digest}", request.runtime_kind, request.platform, template.template_id, template.revision, request.package_lock_digest, request.configuration_revision, builder_result).to_dict()
-                receipt["environment_lock"] = lock.to_dict()
                 receipt_path.parent.mkdir(parents=True, exist_ok=True)
+                lock_path = self.root / "locks" / f"{digest}.json"
+                lock_path.parent.mkdir(parents=True, exist_ok=True)
                 encoded = json.dumps(receipt, sort_keys=True, separators=(",", ":"))
                 if not receipt_path.exists():
                     temporary = receipt_path.with_suffix(".tmp")
                     temporary.write_text(encoded, encoding="utf-8")
                     os.replace(temporary, receipt_path)
+                if not lock_path.exists():
+                    temporary_lock = lock_path.with_suffix(".tmp")
+                    temporary_lock.write_text(
+                        json.dumps(lock.to_dict(), sort_keys=True, separators=(",", ":")),
+                        encoding="utf-8",
+                    )
+                    os.replace(temporary_lock, lock_path)
                 with self._locked():
                     state = self._read()
                     state["busy"].pop(environment_id, None)
@@ -315,6 +347,11 @@ class EnvironmentManager:
         if not content_dir.is_dir():
             raise EnvironmentError("environment_unavailable")
         receipt_path = self.root / "receipts" / f"{digest}.json"
+        lock_path = self.root / "locks" / f"{digest}.json"
+        lock = EnvironmentLock(
+            environment_id, environment_id, runtime_kind, platform, template_id,
+            template_revision, package_lock_digest, self.configuration_revision,
+        ).to_dict()
         receipt = EnvironmentReceipt(
             environment_id, environment_id, 1, f"@environments/content/{digest}",
             runtime_kind, platform, template_id, template_revision,
@@ -325,7 +362,7 @@ class EnvironmentManager:
         with self._locked():
             state = self._read()
             if receipt_path.exists():
-                existing = json.loads(receipt_path.read_text(encoding="utf-8"))
+                existing = self.receipt(environment_id=environment_id)
                 if existing != receipt:
                     raise EnvironmentError("environment_receipt_conflict")
             else:
@@ -333,6 +370,20 @@ class EnvironmentManager:
                 temporary = receipt_path.with_name(f".{receipt_path.name}.{secrets.token_hex(8)}.tmp")
                 temporary.write_text(json.dumps(receipt, sort_keys=True, separators=(",", ":")), encoding="utf-8")
                 os.replace(temporary, receipt_path)
+            if lock_path.exists():
+                try:
+                    existing_lock = EnvironmentLock.from_dict(
+                        json.loads(lock_path.read_text(encoding="utf-8"))
+                    ).to_dict()
+                except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError) as exc:
+                    raise EnvironmentError("environment_lock_invalid") from exc
+                if existing_lock != lock:
+                    raise EnvironmentError("environment_lock_conflict")
+            else:
+                lock_path.parent.mkdir(parents=True, exist_ok=True)
+                temporary_lock = lock_path.with_name(f".{lock_path.name}.{secrets.token_hex(8)}.tmp")
+                temporary_lock.write_text(json.dumps(lock, sort_keys=True, separators=(",", ":")), encoding="utf-8")
+                os.replace(temporary_lock, lock_path)
             reference = self._acquire_locked(state, environment_id, request)
             self._write(state)
         return {"receipt": receipt, "reference": reference, "reused": existed}
@@ -406,8 +457,14 @@ class EnvironmentManager:
             digest = environment_id.split(":", 1)[1] if environment_id.startswith("sha256:") else ""
             if not digest:
                 raise EnvironmentError("environment_id_invalid")
-            shutil.rmtree(self.root / "content" / digest, ignore_errors=True)
-            (self.root / "receipts" / f"{digest}.json").unlink(missing_ok=True)
+            content_path = self.root / "content" / digest
+            receipt_path = self.root / "receipts" / f"{digest}.json"
+            lock_path = self.root / "locks" / f"{digest}.json"
+            if not content_path.exists() and not receipt_path.exists() and not lock_path.exists():
+                return {"environment_id": environment_id, "state": "already_absent"}
+            shutil.rmtree(content_path, ignore_errors=True)
+            receipt_path.unlink(missing_ok=True)
+            lock_path.unlink(missing_ok=True)
             return {"environment_id": environment_id, "state": "removed"}
 
     def gc(self) -> dict[str, Any]:

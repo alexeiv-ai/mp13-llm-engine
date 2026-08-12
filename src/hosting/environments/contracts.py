@@ -123,6 +123,32 @@ class EnvironmentLock:
 
     CONTRACT = "hosting.environment_lock.v1"
 
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "EnvironmentLock":
+        row = _strict(
+            payload,
+            {
+                "contract", "environment_id", "content_key", "runtime_kind",
+                "platform", "template_id", "template_revision",
+                "package_lock_digest", "configuration_revision",
+            },
+            "environment_lock",
+        )
+        if row["contract"] != cls.CONTRACT:
+            raise ValueError("environment_lock_contract_unsupported")
+        if isinstance(row["template_revision"], bool) or not isinstance(row["template_revision"], int) or row["template_revision"] < 1:
+            raise ValueError("environment_lock_template_revision_invalid")
+        return cls(
+            environment_id=_digest(row["environment_id"], "environment_id"),
+            content_key=_digest(row["content_key"], "environment_content_key"),
+            runtime_kind=_id(row["runtime_kind"], "environment_runtime_kind"),
+            platform=_id(row["platform"], "environment_platform"),
+            template_id=_id(row["template_id"], "environment_template_id"),
+            template_revision=row["template_revision"],
+            package_lock_digest=_digest(row["package_lock_digest"], "package_lock_digest"),
+            configuration_revision=_digest(row["configuration_revision"], "configuration_revision"),
+        )
+
     def to_dict(self) -> dict[str, Any]:
         return {"contract": self.CONTRACT, **self.__dict__}
 
@@ -143,6 +169,39 @@ class EnvironmentReceipt:
 
     CONTRACT = "hosting.environment_receipt.v1"
 
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "EnvironmentReceipt":
+        row = _strict(
+            payload,
+            {
+                "contract", "environment_id", "content_key", "receipt_revision",
+                "logical_root", "runtime_kind", "platform", "template_id",
+                "template_revision", "package_lock_digest", "configuration_revision",
+                "builder_result",
+            },
+            "environment_receipt",
+        )
+        if row["contract"] != cls.CONTRACT:
+            raise ValueError("environment_receipt_contract_unsupported")
+        for key in ("receipt_revision", "template_revision"):
+            if isinstance(row[key], bool) or not isinstance(row[key], int) or row[key] < 1:
+                raise ValueError(f"environment_receipt_{key}_invalid")
+        if not isinstance(row["builder_result"], Mapping):
+            raise ValueError("environment_receipt_builder_result_invalid")
+        return cls(
+            environment_id=_digest(row["environment_id"], "environment_id"),
+            content_key=_digest(row["content_key"], "environment_content_key"),
+            receipt_revision=row["receipt_revision"],
+            logical_root=_id(row["logical_root"], "environment_logical_root"),
+            runtime_kind=_id(row["runtime_kind"], "environment_runtime_kind"),
+            platform=_id(row["platform"], "environment_platform"),
+            template_id=_id(row["template_id"], "environment_template_id"),
+            template_revision=row["template_revision"],
+            package_lock_digest=_digest(row["package_lock_digest"], "package_lock_digest"),
+            configuration_revision=_digest(row["configuration_revision"], "configuration_revision"),
+            builder_result=dict(row["builder_result"]),
+        )
+
     def to_dict(self) -> dict[str, Any]:
         return {"contract": self.CONTRACT, **self.__dict__, "builder_result": dict(self.builder_result)}
 
@@ -158,6 +217,34 @@ class EnvironmentReference:
     released_at_ms: Optional[int]
 
     CONTRACT = "hosting.environment_reference.v1"
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "EnvironmentReference":
+        row = _strict(
+            payload,
+            {
+                "contract", "reference_id", "environment_id", "consumer_kind",
+                "consumer_id", "revision", "acquired_at_ms", "released_at_ms",
+            },
+            "environment_reference",
+        )
+        if row["contract"] != cls.CONTRACT:
+            raise ValueError("environment_reference_contract_unsupported")
+        for key in ("revision", "acquired_at_ms"):
+            if isinstance(row[key], bool) or not isinstance(row[key], int) or row[key] < 0:
+                raise ValueError(f"environment_reference_{key}_invalid")
+        released = row["released_at_ms"]
+        if released is not None and (isinstance(released, bool) or not isinstance(released, int) or released < row["acquired_at_ms"]):
+            raise ValueError("environment_reference_released_at_ms_invalid")
+        return cls(
+            reference_id=_id(row["reference_id"], "environment_reference_id"),
+            environment_id=_digest(row["environment_id"], "environment_id"),
+            consumer_kind=_id(row["consumer_kind"], "environment_consumer_kind"),
+            consumer_id=_id(row["consumer_id"], "environment_consumer_id"),
+            revision=row["revision"],
+            acquired_at_ms=row["acquired_at_ms"],
+            released_at_ms=released,
+        )
 
     def to_dict(self) -> dict[str, Any]:
         return {"contract": self.CONTRACT, **self.__dict__}

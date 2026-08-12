@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -62,16 +61,6 @@ def test_resolved_rollout_skips_reused_and_spawns_added_as_candidate(tmp_path: P
     added = _profile("b", "Beta")
     receipt_root = tmp_path / "environment"
     receipt_root.mkdir()
-    (receipt_root / "verification-receipt.json").write_text(
-        json.dumps(
-            {
-                "contract": "hosting.toolbox.hermetic_environment_receipt.v1",
-                "state": "verified",
-                "environment_key": added.environment_key,
-            }
-        ),
-        encoding="utf-8",
-    )
 
     class Service:
         _toolbox_required_python_abi = TARGET.python_abi
@@ -171,15 +160,12 @@ def test_candidate_readiness_requires_exact_inventory_metadata_and_receipt(tmp_p
     profile = _profile("e", "Alpha")
     environment_root = tmp_path / "verified-env"
     environment_root.mkdir()
-    (environment_root / "verification-receipt.json").write_text(
-        json.dumps(
-            {
-                "contract": "hosting.toolbox.hermetic_environment_receipt.v1",
-                "state": "verified",
-                "environment_key": profile.environment_key,
-            }
-        ),
-        encoding="utf-8",
+    service._environment_manager_instance = SimpleNamespace(  # noqa: SLF001
+        receipt=lambda **_kwargs: {
+            "contract": "hosting.environment_receipt.v1",
+            "environment_id": profile.environment_key,
+            "configuration_revision": service.hosting_configuration_revision,
+        }
     )
     registration = service.register_spawned(
         engine_id="candidate",
@@ -196,7 +182,7 @@ def test_candidate_readiness_requires_exact_inventory_metadata_and_receipt(tmp_p
         environment={
             "venv_path": str(environment_root),
             "environment_key": profile.environment_key,
-            "verification_receipt_contract": "hosting.toolbox.hermetic_environment_receipt.v1",
+            "verification_receipt_contract": "hosting.environment_receipt.v1",
             "verification_state": "verified",
         },
         tool_access={"allowed_tool_names": ["Alpha"]},
@@ -219,7 +205,11 @@ def test_candidate_readiness_requires_exact_inventory_metadata_and_receipt(tmp_p
     assert exc.value.code == "toolbox_candidate_inventory_mismatch"
 
     descriptions[-1] = {"all_registered_tool_names": ["Alpha"]}
-    (environment_root / "verification-receipt.json").write_text("{}", encoding="utf-8")
+    service._environment_manager_instance = SimpleNamespace(  # noqa: SLF001
+        receipt=lambda **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("environment_receipt_invalid")
+        )
+    )
     with pytest.raises(ToolboxRolloutError) as receipt_exc:
         service._ensure_toolbox_assignments_ready([assignment])
     assert receipt_exc.value.code == "toolbox_environment_receipt_unverified"

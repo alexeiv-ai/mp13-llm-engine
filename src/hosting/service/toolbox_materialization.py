@@ -251,7 +251,6 @@ class HermeticToolboxTemplateMaterializer:
             progress("environment_build", "hermetic_environment_building", 0, 1, "The independent environment is being built and verified.", True)
             spec = self.builder.materialize_environment(
                 resolved,
-                reference_id=f"template:{resolved.template_digest.removeprefix('sha256:')}",
             )
             progress("environment_build", "hermetic_environment_verified", 1, 1, "The independent environment passed lock and import verification.", False)
         except ToolboxTemplateMaterializationError:

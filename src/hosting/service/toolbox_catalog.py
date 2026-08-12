@@ -907,7 +907,6 @@ class ToolboxTemplateCatalogMixin:
         intrinsic_names: Sequence[str] = (),
         allowed_template_ids: Sequence[str] | None = None,
         sandbox_policy: Mapping[str, Any] | None = None,
-        reference_id: str,
         resolved_environment: Mapping[str, Any] | None = None,
     ):
         """Resolve and acquire a receipt-verified physical toolbox environment."""
@@ -945,7 +944,7 @@ class ToolboxTemplateCatalogMixin:
                 (item.source_id, item.filename): self._toolbox_artifact_store.object_path(item.sha256)
                 for item in resolved.locked_artifacts
             })
-            return builder.materialize_environment(resolved, reference_id=reference_id, add_reference=False)
+            return builder.materialize_environment(resolved)
         resolution = self.resolve_hosted_template_environment(
             consumer_kind="toolbox",
             files=files,
@@ -966,7 +965,7 @@ class ToolboxTemplateCatalogMixin:
         resolved = HermeticToolboxTemplateMaterializer._resolved_input(
             entry, python_abi=python_abi, platform=platform
         )
-        return builder.materialize_environment(resolved, reference_id=reference_id, add_reference=False)
+        return builder.materialize_environment(resolved)
 
     def initialize_configured_toolbox_templates(
         self,
@@ -1131,10 +1130,9 @@ class ToolboxTemplateCatalogMixin:
             raise ValueError("required_builtin_resolution_not_ready")
         intents = {item.template_id: item for item in configuration.builtins}
         prepared: list[dict[str, Any]] = []
-        references: list[tuple[str, str]] = []
         report = progress or (lambda *_args: None)
+        total = len(startup["closures"])
         try:
-            total = len(startup["closures"])
             for index, raw_closure in enumerate(startup["closures"]):
                 closure = ResolvedBuiltinWheelClosure.from_dict(raw_closure)
                 report(
@@ -1169,13 +1167,6 @@ class ToolboxTemplateCatalogMixin:
                     "artifacts": [item.to_dict() for item in artifacts],
                     "manifest_signature": candidate.manifest_signature,
                 }
-                resolved = HermeticToolboxTemplateMaterializer._resolved_input(
-                    entry,
-                    python_abi=configuration.target.python_abi,
-                    platform=configuration.target.platform,
-                )
-                reference_id = f"template:{template_digest.removeprefix('sha256:')}"
-                references.append((resolved.environment_key, reference_id))
                 receipt = self._toolbox_template_materializer.materialize(
                     catalog_entry=entry,
                     python_abi=configuration.target.python_abi,
@@ -1211,8 +1202,6 @@ class ToolboxTemplateCatalogMixin:
                         "artifact_references": [item.to_dict() for item in artifacts],
                         "manifest_signature": candidate.manifest_signature,
                         "source_bundle_id": candidate.source_bundle_id,
-                        "environment_key": resolved.environment_key,
-                        "reference_id": reference_id,
                         "receipt": receipt.to_dict(),
                     }
                 )
@@ -1225,12 +1214,6 @@ class ToolboxTemplateCatalogMixin:
                     False,
                 )
         except Exception:
-            builder = getattr(self, "_hermetic_toolbox_environment_builder", None)
-            if builder is not None:
-                for environment_key, reference_id in references:
-                    builder.release_reference(
-                        environment_key=environment_key, reference_id=reference_id
-                    )
             raise
         return {
             "status": "prepared",
@@ -1271,8 +1254,6 @@ class ToolboxTemplateCatalogMixin:
             ToolboxTemplateMaterializationReceipt.from_dict(item["receipt"])
             for item in candidates
         )
-        catalog_before = self._toolbox_template_catalog.read()
-        active_before = set(catalog_before["active"].values())
         inserted: tuple[ToolboxTemplateMaterializationReceipt, ...] = ()
         try:
             _all_receipts, inserted = self._toolbox_materialization_receipts.put_many(receipts)
@@ -1291,14 +1272,6 @@ class ToolboxTemplateCatalogMixin:
         except Exception:
             if inserted:
                 self._toolbox_materialization_receipts.remove_exact(inserted)
-            builder = getattr(self, "_hermetic_toolbox_environment_builder", None)
-            if builder is not None:
-                for item in candidates:
-                    if item["template_digest"] not in active_before:
-                        builder.release_reference(
-                            environment_key=item["environment_key"],
-                            reference_id=item["reference_id"],
-                        )
             raise
         result = {
             "status": "published",
@@ -1783,7 +1756,7 @@ class ToolboxTemplateCatalogMixin:
             raise ValueError("template_construct_request_id_required")
         fingerprint = hosted_execution_fingerprint(
             {
-                "execution_kind": HostedExecutionKind.TOOLBOX_TEMPLATE_CONSTRUCT.value,
+                "execution_kind": HostedExecutionKind.ENVIRONMENT_TEMPLATE_CONSTRUCT.value,
                 "configuration_revision": self.hosting_configuration_revision,
                 "template_id": target_id,
                 "base_template_digest": base_digest,
@@ -1797,7 +1770,7 @@ class ToolboxTemplateCatalogMixin:
         owner = self._operation_owner(owner_actor_id)
         prepared = self._hosted_operations.prepare(
             owner_actor_id=owner,
-            execution_kind=HostedExecutionKind.TOOLBOX_TEMPLATE_CONSTRUCT,
+            execution_kind=HostedExecutionKind.ENVIRONMENT_TEMPLATE_CONSTRUCT,
             selector=HostedOperationSelector(kind="template_id", id=target_id),
             namespace=f"environment_template_construct:{target_id}",
             request_id=rid,
@@ -1958,7 +1931,6 @@ class ToolboxTemplateCatalogMixin:
                 ),
             )
 
-        reference: tuple[str, str] | None = None
         receipt: ToolboxTemplateMaterializationReceipt | None = None
         try:
             checkpoint("validation", "template_construct_validated", 1, 1, "The exact base revision and construction request were validated.", True)
@@ -1973,15 +1945,6 @@ class ToolboxTemplateCatalogMixin:
                 "artifacts": [item.to_dict() for item in artifacts],
                 "manifest_signature": signature,
             }
-            resolved = HermeticToolboxTemplateMaterializer._resolved_input(
-                entry,
-                python_abi=self._toolbox_host_project_config.target.python_abi,
-                platform=self._toolbox_host_project_config.target.platform,
-            )
-            reference = (
-                resolved.environment_key,
-                f"template:{template_digest.removeprefix('sha256:')}",
-            )
             receipt = self._toolbox_template_materializer.materialize(
                 catalog_entry=entry,
                 python_abi=self._toolbox_host_project_config.target.python_abi,
@@ -2030,9 +1993,6 @@ class ToolboxTemplateCatalogMixin:
         except Exception as exc:
             if receipt is not None:
                 self._toolbox_materialization_receipts.remove_exact((receipt,))
-            builder = getattr(self, "_hermetic_toolbox_environment_builder", None)
-            if reference is not None and builder is not None:
-                builder.release_reference(environment_key=reference[0], reference_id=reference[1])
             code = str(getattr(exc, "code", "") or str(exc)).strip()
             if not re.fullmatch(r"[a-z][a-z0-9_]{0,127}", code):
                 code = "template_construct_failed"

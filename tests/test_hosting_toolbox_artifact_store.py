@@ -686,8 +686,7 @@ def test_prepublication_import_probe_failure_releases_reference_and_publishes_no
 
     assert service._toolbox_template_catalog.read()["entries"] == []  # noqa: SLF001
     assert not service._toolbox_materialization_receipts.path.exists()  # noqa: SLF001
-    references = service._hermetic_toolbox_environment_builder.references_path  # noqa: SLF001
-    assert not references.exists() or json.loads(references.read_text())["environments"] == {}
+    assert not (service._hermetic_toolbox_environment_builder.environments_root / "references.json").exists()  # noqa: SLF001
 
 
 def test_candidate_provenance_requires_one_unambiguous_signed_bundle(tmp_path: Path) -> None:
@@ -748,7 +747,7 @@ def test_complete_prepared_batch_publishes_atomically_and_is_restart_idempotent(
     assert len(restarted.svc._toolbox_template_catalog.read()["entries"]) == 2  # noqa: SLF001
 
 
-def test_catalog_batch_failure_rolls_back_new_receipt_and_candidate_reference(
+def test_catalog_batch_failure_rolls_back_new_receipt(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     configuration = _runtime_configuration()
@@ -776,8 +775,7 @@ def test_catalog_batch_failure_rolls_back_new_receipt_and_candidate_reference(
         python_abi=configuration.target.python_abi,
         platform=configuration.target.platform,
     ) is None
-    references = service._hermetic_toolbox_environment_builder.references_path  # noqa: SLF001
-    assert json.loads(references.read_text())["environments"] == {}
+    assert not (service._hermetic_toolbox_environment_builder.environments_root / "references.json").exists()  # noqa: SLF001
 
 
 def test_system_setup_operation_returns_immediately_is_idempotent_and_publishes_readiness(

@@ -159,7 +159,7 @@ R7 plan/confirmation field assertions are provisional and must be replaced.
   `engine_host_toolbox_config_file`, ephemeral launcher JSON behavior, and all
   remaining help/fixture vocabulary. Reject old arguments; do not absorb them
   through permissive `**kwargs`.
-- [ ] **R6.5** Remove final legacy environment receipt/reference readers and
+- [x] **R6.5** Remove final legacy environment receipt/reference readers and
   compatibility aliases. Legacy roots must not affect resolution, reuse,
   references, GC, or execution.
 

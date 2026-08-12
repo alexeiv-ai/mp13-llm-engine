@@ -11,6 +11,8 @@ from hosting import engine_host_cli
 from hosting.daemon import EngineHostDaemon
 from hosting.engine_host_channel import EngineHostControlChannel
 from hosting.service.host_service import EngineHostService
+from hosting.toolbox.host_project_config import ToolboxHostProjectConfiguration
+from tests.hosting_v3_fixtures import hosting_configuration, write_hosting_configuration
 from hosting.toolbox.bundle_models import (
     ResolvedToolboxProfileSpec,
     ToolboxBundleAutoTool,
@@ -123,7 +125,7 @@ def _install_active(service: EngineHostService, *, include_registration: bool = 
 def _service(tmp_path: Path) -> EngineHostService:
     return EngineHostService(
         engines_state_file=tmp_path / "managed.json",
-        control_state_file=tmp_path / "control.json",
+        hosting_configuration=hosting_configuration(tmp_path),
     )
 
 
@@ -172,27 +174,46 @@ def _configuration(*, protected: tuple[str, ...] = ()) -> dict:
     }
 
 
-class _RemovalBuilder:
+class _RemovalManager:
     def __init__(self, *, references: dict[str, dict[str, int]] | None = None, result: str = "removed"):
         self.references = {str(key): dict(value) for key, value in dict(references or {}).items()}
         self.result = result
         self.removed: list[str] = []
 
-    def _read_references_unlocked(self):
-        return {"environments": self.references}
+    def list_references(self, *, cursor: str = "", limit: int = 500):
+        rows = [
+            {
+                "contract": "hosting.environment_reference.v1",
+                "reference_id": reference_id,
+                "environment_id": environment_id,
+                "consumer_kind": "toolbox",
+                "consumer_id": "demo",
+                "revision": 1,
+                "acquired_at_ms": acquired_at_ms,
+                "released_at_ms": None,
+            }
+            for environment_id, references in self.references.items()
+            for reference_id, acquired_at_ms in references.items()
+        ]
+        return {"references": rows, "next_cursor": None}
 
-    def remove_environment(self, *, environment_key: str) -> str:
-        if self.references.get(environment_key):
+    def remove(self, *, environment_id: str) -> dict:
+        if self.references.get(environment_id):
             raise RuntimeError("environment_references_present")
-        self.removed.append(environment_key)
-        return self.result
+        self.removed.append(environment_id)
+        return {"environment_id": environment_id, "state": self.result}
+
+    def gc(self) -> dict:
+        return {"removed_environment_ids": [], "removed_count": 0}
 
 
 def _configured_service(tmp_path: Path, *, protected: tuple[str, ...] = ()) -> EngineHostService:
     service = EngineHostService(
         engines_state_file=tmp_path / "managed.json",
-        control_state_file=tmp_path / "control.json",
-        toolbox_host_project_configuration=_configuration(protected=protected),
+        hosting_configuration=hosting_configuration(tmp_path),
+    )
+    service._toolbox_host_project_config = ToolboxHostProjectConfiguration.from_dict(  # noqa: SLF001
+        _configuration(protected=protected)
     )
     return service
 
@@ -205,8 +226,8 @@ def _wait_remove(service: EngineHostService, started: dict) -> dict:
 
 def test_environment_remove_is_durable_idempotent_and_reports_progress(tmp_path: Path) -> None:
     service = _configured_service(tmp_path)
-    builder = _RemovalBuilder()
-    service._hermetic_toolbox_environment_builder = builder  # type: ignore[attr-defined]
+    builder = _RemovalManager()
+    service._environment_manager_instance = builder  # type: ignore[attr-defined]
     digest = _digest("d")
 
     first = service.toolbox_environment_remove(
@@ -228,8 +249,8 @@ def test_environment_remove_is_durable_idempotent_and_reports_progress(tmp_path:
 def test_environment_remove_blocks_active_candidate_and_builder_references(tmp_path: Path) -> None:
     service = _configured_service(tmp_path)
     digest = _digest("a")
-    builder = _RemovalBuilder(references={digest: {"candidate:one": 1}})
-    service._hermetic_toolbox_environment_builder = builder  # type: ignore[attr-defined]
+    builder = _RemovalManager(references={digest: {"candidate:one": 1}})
+    service._environment_manager_instance = builder  # type: ignore[attr-defined]
     service.register_spawned(
         engine_id="candidate-one",
         pid=1234,
@@ -255,7 +276,7 @@ def test_environment_remove_blocks_active_candidate_and_builder_references(tmp_p
 def test_environment_remove_blocks_protected_digest_and_reports_already_absent(tmp_path: Path) -> None:
     protected = _digest("b")
     service = _configured_service(tmp_path, protected=(protected,))
-    service._hermetic_toolbox_environment_builder = _RemovalBuilder(result="already_absent")  # type: ignore[attr-defined]
+    service._environment_manager_instance = _RemovalManager(result="already_absent")  # type: ignore[attr-defined]
 
     blocked = _wait_remove(
         service,
@@ -277,7 +298,7 @@ def test_environment_remove_blocks_protected_digest_and_reports_already_absent(t
 
 
 def test_environment_remove_is_admin_only() -> None:
-    command = "toolbox-environment-remove"
+    command = "environment-remove"
     assert command in EngineHostService._commands_allowed_for_role("admin")  # noqa: SLF001
     for role in ("config_editor", "worker_user", "diagnostic_user", "dependency_approver"):
         assert command not in EngineHostService._commands_allowed_for_role(role)  # noqa: SLF001
@@ -288,7 +309,7 @@ def test_environment_remove_checks_unexpired_plan_confirmation_and_operation_ref
 ) -> None:
     service = _configured_service(tmp_path)
     digest = _digest("d")
-    service._hermetic_toolbox_environment_builder = _RemovalBuilder()  # type: ignore[attr-defined]
+    service._environment_manager_instance = _RemovalManager()  # type: ignore[attr-defined]
 
     class _Plan:
         def to_dict(self):
@@ -446,11 +467,15 @@ def test_hosted_maintenance_request_conflict_and_pre_dispatch_cancel_are_immedia
         request_id="maintenance-1",
         toolbox_ids=["demo"],
         owner_actor_id="admin:test",
+        apply=True,
+        mutation_authorized=True,
     )
     conflict = service.toolbox_repair(
         request_id="maintenance-1",
         toolbox_ids=["other"],
         owner_actor_id="admin:test",
+        apply=True,
+        mutation_authorized=True,
     )
     canceled = service.hosted_operation_cancel(
         ref=started["operation"],
@@ -516,7 +541,7 @@ def test_channel_and_daemon_require_op_start_for_mutating_maintenance(tmp_path: 
     daemon = EngineHostDaemon(
         pid_file=tmp_path / "daemon.pid",
         engines_state_file=tmp_path / "daemon-engines.json",
-        control_state_file=tmp_path / "daemon-control.json",
+        mp13_config_file=write_hosting_configuration(tmp_path),
     )
     raw = asyncio.run(
         daemon._dispatch(  # noqa: SLF001

@@ -2661,17 +2661,18 @@ class ToolboxRuntimeMixin:
                     or environment.get("environment_key") != expected_environment_key
                     or environment.get("verification_state") != "verified"
                     or environment.get("verification_receipt_contract")
-                    != "hosting.toolbox.hermetic_environment_receipt.v1"
+                    != "hosting.environment_receipt.v1"
                 ):
                     raise ToolboxRolloutError(
                         f"toolbox candidate metadata mismatch for {engine_id}",
                         code="toolbox_candidate_metadata_mismatch",
                         details={"engine_id": engine_id, "failure_phase": "metadata"},
                     )
-                receipt_path = Path(str(environment.get("venv_path") or "")) / "verification-receipt.json"
                 try:
-                    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
-                except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+                    receipt = self._environment_manager.receipt(
+                        environment_id=expected_environment_key
+                    )
+                except Exception as exc:
                     raise ToolboxRolloutError(
                         f"toolbox environment receipt unavailable for {engine_id}",
                         code="toolbox_environment_receipt_unverified",
@@ -2679,9 +2680,10 @@ class ToolboxRuntimeMixin:
                     ) from exc
                 if (
                     not isinstance(receipt, dict)
-                    or receipt.get("contract") != "hosting.toolbox.hermetic_environment_receipt.v1"
-                    or receipt.get("state") != "verified"
-                    or receipt.get("environment_key") != expected_environment_key
+                    or receipt.get("contract") != "hosting.environment_receipt.v1"
+                    or receipt.get("environment_id") != expected_environment_key
+                    or receipt.get("configuration_revision")
+                    != self.hosting_configuration_revision
                 ):
                     raise ToolboxRolloutError(
                         f"toolbox environment receipt mismatch for {engine_id}",

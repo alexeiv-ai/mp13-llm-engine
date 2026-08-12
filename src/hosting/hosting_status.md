@@ -2,7 +2,7 @@
 
 Last updated: 2026-08-12
 
-Status: R4.2 complete; ready to open R6.5
+Status: P0 clean cut complete; ready to open R7.1
 
 This is the current execution ledger for
 [`hosting_access_plan.md`](hosting_access_plan.md). Detailed completed-slice
@@ -12,10 +12,10 @@ compact evidence index, and external completion gates.
 
 ## 1. Current gate and resume order
 
-No slice is active. **R4.2 removed startup vocabulary** made obsolete direct
-and profile-loaded settings fail fast, retained explicit removed-flag rejection,
-and aligned the app attachment path and display with the sole top-level
-configuration input.
+No slice is active. **R6.5 legacy environment cut** removed the builder-owned
+reference index and old receipt reader. Strict generic locks, receipts, and
+references now own runtime readiness, removal blockers, release, and GC; old
+roots and contracts fail closed.
 
 Resume in this order:
 
@@ -68,7 +68,7 @@ are authoritative for unfinished item-level work.
 
 ### P0 before R7
 
-- R6.5: remove final legacy receipt/reference readers and aliases.
+The pre-R7 P0 clean-cut items are complete.
 
 ### R7.1 planning and selective revision
 
@@ -112,6 +112,7 @@ are authoritative for unfinished item-level work.
 | CODE/TEST-R4.2 | Removed startup flags/settings fail fast; app attachment uses only the top-level config input; client/startup lane passed 67 tests. |
 | CODE-R5 | Generic package ingress, daemon hashing, locks, commands, and denial paths passed focused coverage. |
 | CODE-R6A–D | Generic environment contracts/manager/commands and legacy-root cut passed focused coverage. |
+| CODE/TEST-R6.5 | Generic lock/receipt/reference validation replaced legacy readers and builder references; lifecycle/runtime lanes passed 27 tests, atomic publication 7, and maintenance 15. |
 | CODE-R7A/B | Generic materializer/package/reference bridges and atomic candidate publication remain valid foundations; old plan/confirmation field assertions are provisional. |
 | CODE-R8A–C | Versioned neutral state, Python/JS shared manager adoption, GC/repair controls passed focused coverage. |
 | CODE/TEST-R9 partial | Structured auth, role/hash authority, redaction, startup modes, generic lifecycle, and retry/restart identity passed focused coverage. |

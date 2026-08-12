@@ -619,15 +619,11 @@ def test_r7_real_daemon_no_double_acceptance(tmp_path: Path) -> None:
     active_snapshot = daemon.svc._toolbox_state_v2.get("r7-e2e")  # noqa: SLF001
     addon_profile_id = active_snapshot["tool_routes"]["Addon"]["profile_id"]
     addon_reference = active_snapshot["profiles"][addon_profile_id]["environment_reference"]
-    references = json.loads(
-        daemon.svc._hermetic_toolbox_environment_builder.references_path.read_text(  # noqa: SLF001
-            encoding="utf-8"
-        )
-    )["environments"]
+    references = daemon.svc._environment_manager.list_references(limit=500)["references"]  # noqa: SLF001
     custom_environment = next(
-        environment_key
-        for environment_key, reference_ids in references.items()
-        if addon_reference in reference_ids
+        row["environment_id"]
+        for row in references
+        if row["reference_id"] == addon_reference
     )
     current = active_snapshot["active_revision"]
     removal_plan, removal = _plan_confirm(

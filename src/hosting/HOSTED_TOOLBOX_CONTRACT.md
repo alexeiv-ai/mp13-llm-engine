@@ -521,9 +521,10 @@ configuration revision, reports progress through `validation`,
 `reference_check`, `removal`, and `cleanup`, and returns `removed`,
 `already_absent`, or a stable ordered list of blocking reference kinds. Active
 profiles, candidates, unexpired plans and confirmations, active operations,
-built-in references, protected digests, and any builder reference prevent
-removal. GC uses the revisioned retention policy and never bypasses those
-checks.
+built-in references, protected digests, and any live
+`hosting.environment_reference.v1` prevent removal. GC is owned by the shared
+environment manager, uses the revisioned retention policy, and never bypasses
+those checks.
 
 Mutating `toolbox-gc`, `toolbox-repair`, and `toolbox-reconcile` are
 administrator-only `toolbox_maintenance` hosted operations. Each is submitted
@@ -634,9 +635,10 @@ Removal planning resolves each remaining profile again from only its complete
 remaining tool and package requirements. Packages needed solely by removed
 tools are not retained implicitly: a custom closure may contract to the exact
 built-in closure. Apply reuses an active immutable environment only when the
-complete profile identity is unchanged, preserving its actual builder
-reference. Replaced and removed builder references remain present through the
-atomic definition publication and are released only afterward. Physical
+complete profile identity is unchanged, preserving its generic environment
+reference. Replaced and removed `hosting.environment_reference.v1` records
+remain live through the atomic definition publication and are released only
+afterward. Physical
 deletion remains a separate grace-period, reference-checked operation.
 
 Each cache miss creates a new candidate with `venv` configured as
@@ -652,8 +654,10 @@ non-inheriting `pyvenv.cfg`, complete installed lock, and successful probes is
 atomically renamed to its digest-addressed published path. Failed candidates
 are moved under the quarantine namespace with a bounded code and are never
 returned as ready. Per-environment OS file locks plus in-process locks
-deduplicate concurrent builders. Reference IDs are persisted separately;
-release removes only a reference, and deletion occurs only in grace-period GC.
+deduplicate concurrent builders. The builder owns no reference index. Strict
+generic receipts, locks, and references are persisted by the shared environment
+manager; release changes only a generic reference, and deletion occurs only in
+its reference-aware GC.
 
 All environment builds, staging, spawn, and readiness checks occur before the
 single active-definition publication. A failure before publication retires
@@ -737,7 +741,7 @@ atomically replaced state file and marks exactly one revision current. Applying
 the same revision is idempotent. A transition to a different revision
 invalidates unconsumed definition plans and materialization receipts not tied
 to an active catalog revision. It does not mutate the active catalog map,
-published toolbox definition state, or hermetic environment references. An
+published toolbox definition state, or generic environment references. An
 otherwise unconfigured restart does not resurrect the last persisted revision;
 explicit daemon configuration remains required.
 

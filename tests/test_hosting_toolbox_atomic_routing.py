@@ -144,9 +144,9 @@ class _FakeOrchestrator:
             self.service._test_environment_references[  # type: ignore[attr-defined]
                 assignment.materialization_reference_id
             ] = assignment.resolved_profile.environment_key
-            builder = getattr(self.service, "_hermetic_toolbox_environment_builder", None)
-            if isinstance(builder, _TrackingBuilder):
-                builder.add(
+            tracker = getattr(self.service, "_test_reference_tracker", None)
+            if isinstance(tracker, _TrackingReferences):
+                tracker.add(
                     assignment.resolved_profile.environment_key,
                     assignment.materialization_reference_id,
                 )
@@ -175,7 +175,7 @@ class _FakeOrchestrator:
         return list(assignments)
 
 
-class _TrackingBuilder:
+class _TrackingReferences:
     def __init__(self) -> None:
         self.references: dict[str, set[str]] = {}
         self.released: list[tuple[str, str]] = []
@@ -183,7 +183,7 @@ class _TrackingBuilder:
     def add(self, environment_key: str, reference_id: str) -> None:
         self.references.setdefault(environment_key, set()).add(reference_id)
 
-    def release_reference(self, *, environment_key: str, reference_id: str) -> None:
+    def release(self, *, environment_key: str, reference_id: str) -> None:
         self.released.append((environment_key, reference_id))
         references = self.references.get(environment_key, set())
         references.discard(reference_id)
@@ -197,9 +197,9 @@ def _install_fake_rollout(service: EngineHostService) -> _FakeOrchestrator:
 
     def release_reference(*, reference_id: str):
         environment_key = service._test_environment_references.pop(reference_id, "")  # type: ignore[attr-defined]
-        builder = getattr(service, "_hermetic_toolbox_environment_builder", None)
-        if environment_key and isinstance(builder, _TrackingBuilder):
-            builder.release_reference(
+        tracker = getattr(service, "_test_reference_tracker", None)
+        if environment_key and isinstance(tracker, _TrackingReferences):
+            tracker.release(
                 environment_key=environment_key,
                 reference_id=reference_id,
             )
@@ -289,8 +289,8 @@ def test_identical_reapply_reuses_engine_environment_and_materialization_referen
     tmp_path: Path,
 ) -> None:
     service = _service(tmp_path)
-    builder = _TrackingBuilder()
-    service._hermetic_toolbox_environment_builder = builder  # type: ignore[attr-defined]
+    builder = _TrackingReferences()
+    service._test_reference_tracker = builder  # type: ignore[attr-defined]
     orchestrator = _install_fake_rollout(service)
     first = _draft("Alpha", "a", None)
     first_result = service._apply_resolved_toolbox_definition(
@@ -326,8 +326,8 @@ def test_removed_profile_reference_exists_through_publication_then_is_released(
     tmp_path: Path,
 ) -> None:
     service = _service(tmp_path)
-    builder = _TrackingBuilder()
-    service._hermetic_toolbox_environment_builder = builder  # type: ignore[attr-defined]
+    builder = _TrackingReferences()
+    service._test_reference_tracker = builder  # type: ignore[attr-defined]
     _install_fake_rollout(service)
     first = _draft("Alpha", "a", None)
     service._apply_resolved_toolbox_definition(
@@ -471,8 +471,8 @@ def test_continuous_routing_observes_only_complete_old_or_new_definition(tmp_pat
 
 def test_published_replacement_marks_busy_old_worker_retired_without_killing_inflight_work(tmp_path: Path) -> None:
     service = _service(tmp_path)
-    builder = _TrackingBuilder()
-    service._hermetic_toolbox_environment_builder = builder  # type: ignore[attr-defined]
+    builder = _TrackingReferences()
+    service._test_reference_tracker = builder  # type: ignore[attr-defined]
     _install_fake_rollout(service)
     first = _draft("Alpha", "a", None)
     service._apply_resolved_toolbox_definition(

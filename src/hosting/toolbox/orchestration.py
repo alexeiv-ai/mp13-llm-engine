@@ -140,7 +140,6 @@ class ToolboxSandboxOrchestrator:
                 intrinsic_names=list(staged.manifest.get("intrinsic_tool_names") or []),
                 allowed_template_ids=(profile.template_id,),
                 sandbox_policy=profile.sandbox_policy,
-                reference_id=adoption_request_id,
                 resolved_environment=dict(pinned_environments.get(profile.profile_id) or {}),
             )
             if (
@@ -404,7 +403,6 @@ class ToolboxSandboxOrchestrator:
                     declared_imports=item.sandbox_profile.normalized_required_imports(),
                     intrinsic_names=list(staged.manifest.get("intrinsic_tool_names") or []),
                     sandbox_policy=dict(item.sandbox_profile.sandbox_policy or {}),
-                    reference_id=f"toolbox:{toolbox_id}:{item.sandbox_profile.normalized_profile_id()}:{revision}",
                 )
                 environment_spec = ToolboxEnvironmentSpec(
                     venv_key=hermetic.environment_key,

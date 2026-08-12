@@ -36,7 +36,7 @@ from .target import (
 TOOLBOX_ENVIRONMENT_KEY_DOMAIN = ENVIRONMENT_IDENTITY_DOMAIN
 _ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")
 _ARTIFACT_FILE_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+-]{0,255}")
-_ENVIRONMENT_RECEIPT_CONTRACT = "hosting.toolbox.hermetic_environment_receipt.v1"
+_ENVIRONMENT_RECEIPT_CONTRACT = "hosting.environment_build_verification.v1"
 _THREAD_LOCKS: dict[str, threading.Lock] = {}
 _THREAD_LOCKS_GUARD = threading.Lock()
 
@@ -332,7 +332,6 @@ class PythonEnvironmentBuilder:
         *,
         artifact_sources: Mapping[str, Path],
         environment_root: Path | None = None,
-        gc_grace_ms: int = 24 * 60 * 60 * 1000,
         build_timeout_seconds: int = 300,
     ) -> None:
         self.resolver = HermeticToolboxEnvironmentResolver(hosting_root)
@@ -342,16 +341,11 @@ class PythonEnvironmentBuilder:
         self.locks_root = self.environments_root / ".locks"
         self.candidates_root = self.environments_root / ".candidates"
         self.quarantine_root = self.environments_root / ".quarantine"
-        self.references_path = self.environments_root / "references.json"
-        self.references_lock = self.locks_root / "references.lock"
         self.artifact_sources = {
             _id(source_id, label="artifact_source_id"): Path(path).expanduser().resolve()
             for source_id, path in dict(artifact_sources or {}).items()
         }
         self.verified_artifact_paths: dict[tuple[str, str], Path] = {}
-        if isinstance(gc_grace_ms, bool) or not isinstance(gc_grace_ms, int) or gc_grace_ms < 1:
-            raise ValueError("environment_gc_grace_ms_invalid")
-        self.gc_grace_ms = gc_grace_ms
         if (
             isinstance(build_timeout_seconds, bool)
             or not isinstance(build_timeout_seconds, int)
@@ -632,12 +626,8 @@ class PythonEnvironmentBuilder:
     def materialize_environment(
         self,
         resolved: ResolvedToolboxEnvironmentInput | Mapping[str, Any],
-        *,
-        reference_id: str,
-        add_reference: bool = True,
     ) -> HermeticToolboxEnvironmentSpec:
         model = resolved if isinstance(resolved, ResolvedToolboxEnvironmentInput) else ResolvedToolboxEnvironmentInput.from_dict(resolved)
-        reference = _id(reference_id, label="environment_reference_id")
         spec = self.resolver.environment_spec(model)
         key = spec.environment_key.removeprefix("sha256:")
         lock_path = self.locks_root / f"{key}.lock"
@@ -667,8 +657,6 @@ class PythonEnvironmentBuilder:
                     raise HermeticToolboxEnvironmentBuildError(
                         "environment_build_failed", "The hermetic toolbox environment build failed."
                     ) from exc
-        if add_reference:
-            self._add_reference(spec.environment_key, reference)
         return spec
 
     def verified_environment(
@@ -677,96 +665,6 @@ class PythonEnvironmentBuilder:
         spec = self.resolver.environment_spec(resolved)
         self._validate_published(spec)
         return spec
-
-    def _read_references_unlocked(self) -> dict[str, Any]:
-        if not self.references_path.exists():
-            return {"contract": "hosting.toolbox.environment_references.v1", "environments": {}}
-        row = self._read_json(self.references_path)
-        if set(row) != {"contract", "environments"} or row["contract"] != "hosting.toolbox.environment_references.v1" or not isinstance(row["environments"], dict):
-            raise HermeticToolboxEnvironmentBuildError(
-                "environment_references_invalid", "The environment reference index is invalid."
-            )
-        return row
-
-    def _add_reference(self, environment_key: str, reference_id: str) -> None:
-        with _environment_process_lock(self.references_lock):
-            state = self._read_references_unlocked()
-            refs = state["environments"].setdefault(environment_key, {})
-            refs[reference_id] = int(time.time() * 1000)
-            self._atomic_json(self.references_path, state)
-
-    def release_reference(self, *, environment_key: str, reference_id: str) -> None:
-        key = require_digest(environment_key, label="environment_key")
-        reference = _id(reference_id, label="environment_reference_id")
-        with _environment_process_lock(self.references_lock):
-            state = self._read_references_unlocked()
-            refs = state["environments"].get(key, {})
-            refs.pop(reference, None)
-            if not refs:
-                state["environments"].pop(key, None)
-            self._atomic_json(self.references_path, state)
-
-    def remove_environment(self, *, environment_key: str) -> str:
-        """Remove one exact unreferenced environment, never a logical/glob path."""
-
-        key = require_digest(environment_key, label="environment_key")
-        root = (self.environments_root / key.removeprefix("sha256:")).resolve()
-        if root.parent != self.environments_root:
-            raise HermeticToolboxEnvironmentBuildError(
-                "environment_path_invalid", "The exact environment digest escaped the cache root."
-            )
-        with _environment_process_lock(self.references_lock):
-            state = self._read_references_unlocked()
-            if dict(state["environments"].get(key) or {}):
-                raise HermeticToolboxEnvironmentBuildError(
-                    "environment_references_present",
-                    "The environment still has one or more active references.",
-                )
-            if not root.exists():
-                return "already_absent"
-            if not root.is_dir():
-                raise HermeticToolboxEnvironmentBuildError(
-                    "environment_path_invalid", "The exact environment target is not a directory."
-                )
-            with _environment_process_lock(self.locks_root / f"{key.removeprefix('sha256:')}.lock"):
-                shutil.rmtree(root)
-            return "removed"
-
-    def garbage_collect(
-        self,
-        *,
-        now_ms: int | None = None,
-        protected_environment_keys: Sequence[str] = (),
-        maximum_cache_bytes: int | None = None,
-        maximum_cache_artifacts: int | None = None,
-    ) -> tuple[str, ...]:
-        current = int(time.time() * 1000) if now_ms is None else int(now_ms)
-        protected = {
-            require_digest(item, label="protected_environment_key")
-            for item in protected_environment_keys
-        }
-        if maximum_cache_bytes is not None and int(maximum_cache_bytes) < 1:
-            raise ValueError("maximum_cache_bytes_invalid")
-        if maximum_cache_artifacts is not None and int(maximum_cache_artifacts) < 1:
-            raise ValueError("maximum_cache_artifacts_invalid")
-        removed: list[str] = []
-        with _environment_process_lock(self.references_lock):
-            state = self._read_references_unlocked()
-            referenced = set(state["environments"])
-            for root in self.environments_root.iterdir() if self.environments_root.exists() else ():
-                if not root.is_dir() or not re.fullmatch(r"[0-9a-f]{64}", root.name):
-                    continue
-                key = f"sha256:{root.name}"
-                if key in referenced or key in protected:
-                    continue
-                receipt = self._read_json(root / "verification-receipt.json")
-                verified_at = int(receipt.get("verified_at_ms", current))
-                if current - verified_at < self.gc_grace_ms:
-                    continue
-                with _environment_process_lock(self.locks_root / f"{root.name}.lock"):
-                    shutil.rmtree(root)
-                    removed.append(key)
-        return tuple(sorted(removed))
 
     def required_environment_readiness(
         self, resolved_inputs: Sequence[ResolvedToolboxEnvironmentInput]

@@ -149,12 +149,12 @@ def _run(python: str, source: str) -> subprocess.CompletedProcess[str]:
     )
 
 
-def _materialize_in_process(host: str, source: str, payload: dict, reference: str, queue) -> None:
+def _materialize_in_process(host: str, source: str, payload: dict, queue) -> None:
     try:
         builder = PythonEnvironmentBuilder(
             Path(host), artifact_sources={"approved": Path(source)}
         )
-        spec = builder.materialize_environment(payload, reference_id=reference)
+        spec = builder.materialize_environment(payload)
         queue.put({"ok": True, "environment_root": spec.environment_root})
     except Exception as exc:  # pragma: no cover - asserted through child result
         queue.put({"ok": False, "error": type(exc).__name__, "detail": str(exc)})
@@ -175,7 +175,7 @@ def test_builder_rejects_cross_target_wheel_before_source_access(tmp_path: Path)
     )
 
     with pytest.raises(HermeticToolboxEnvironmentBuildError) as captured:
-        builder.materialize_environment(resolved, reference_id="cross-target")
+        builder.materialize_environment(resolved)
 
     assert captured.value.code == "environment_artifact_target_mismatch"
 
@@ -188,7 +188,7 @@ def test_offline_preseed_builds_non_inheriting_venv_and_publishes_verified_recei
     resolved = _resolved((alpha,))
     builder = PythonEnvironmentBuilder(tmp_path / "host", artifact_sources={"approved": source})
 
-    spec = builder.materialize_environment(resolved, reference_id="toolbox:one")
+    spec = builder.materialize_environment(resolved)
 
     assert Path(spec.python_executable).is_file()
     config = (Path(spec.environment_root) / "pyvenv.cfg").read_text(encoding="utf-8").lower()
@@ -213,7 +213,7 @@ def test_failed_final_interpreter_probe_is_quarantined_and_never_published(tmp_p
     builder = PythonEnvironmentBuilder(tmp_path / "host", artifact_sources={"approved": source})
 
     with pytest.raises(HermeticToolboxEnvironmentBuildError, match="environment_import_probe_failed"):
-        builder.materialize_environment(resolved, reference_id="toolbox:bad")
+        builder.materialize_environment(resolved)
 
     spec = builder.resolver.environment_spec(resolved)
     assert not Path(spec.environment_root).exists()
@@ -230,7 +230,7 @@ def test_artifact_digest_mismatch_fails_before_install(tmp_path: Path) -> None:
     builder = PythonEnvironmentBuilder(tmp_path / "host", artifact_sources={"approved": source})
 
     with pytest.raises(HermeticToolboxEnvironmentBuildError, match="environment_artifact_verification_failed"):
-        builder.materialize_environment(_resolved((bad,)), reference_id="toolbox:bad-artifact")
+        builder.materialize_environment(_resolved((bad,)))
 
 
 def test_concurrent_requests_deduplicate_one_physical_build(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -251,12 +251,10 @@ def test_concurrent_requests_deduplicate_one_physical_build(tmp_path: Path, monk
 
     monkeypatch.setattr(builder, "_build_candidate", counted)
     with ThreadPoolExecutor(max_workers=4) as pool:
-        specs = list(pool.map(lambda index: builder.materialize_environment(resolved, reference_id=f"toolbox:{index}"), range(4)))
+        specs = list(pool.map(lambda _index: builder.materialize_environment(resolved), range(4)))
 
     assert count == 1
     assert len({item.environment_root for item in specs}) == 1
-    references = json.loads(builder.references_path.read_text(encoding="utf-8"))["environments"]
-    assert sorted(references[resolved.environment_key]) == ["toolbox:0", "toolbox:1", "toolbox:2", "toolbox:3"]
 
 
 def test_concurrent_processes_share_one_atomically_published_environment(tmp_path: Path) -> None:
@@ -270,7 +268,7 @@ def test_concurrent_processes_share_one_atomically_published_environment(tmp_pat
     processes = [
         context.Process(
             target=_materialize_in_process,
-            args=(str(host), str(source), resolved.to_dict(), f"process:{index}", queue),
+            args=(str(host), str(source), resolved.to_dict(), queue),
         )
         for index in range(2)
     ]
@@ -286,8 +284,6 @@ def test_concurrent_processes_share_one_atomically_published_environment(tmp_pat
     builder = PythonEnvironmentBuilder(host, artifact_sources={"approved": source})
     assert builder.verified_environment(resolved).environment_root == results[0]["environment_root"]
     assert not list(builder.candidates_root.glob("*"))
-    references = json.loads(builder.references_path.read_text(encoding="utf-8"))["environments"]
-    assert sorted(references[resolved.environment_key]) == ["process:0", "process:1"]
 
 
 def test_complete_base_plus_delta_lock_is_independent_of_base_site_packages(tmp_path: Path) -> None:
@@ -305,8 +301,8 @@ def test_complete_base_plus_delta_lock_is_independent_of_base_site_packages(tmp_
         lock_digest=_digest("5"),
     )
 
-    base_spec = builder.materialize_environment(base, reference_id="template:core")
-    derived_spec = builder.materialize_environment(derived, reference_id="toolbox:derived")
+    base_spec = builder.materialize_environment(base)
+    derived_spec = builder.materialize_environment(derived)
 
     assert base_spec.environment_root != derived_spec.environment_root
     check = _run(
@@ -321,41 +317,6 @@ def test_complete_base_plus_delta_lock_is_independent_of_base_site_packages(tmp_
     }
 
 
-def test_references_defer_deletion_to_grace_period_gc(tmp_path: Path) -> None:
-    source = tmp_path / "approved"
-    source.mkdir()
-    alpha = _wheel(source, "alpha-package", "1.0.0", "alpha_pkg")
-    resolved = _resolved((alpha,))
-    builder = PythonEnvironmentBuilder(
-        tmp_path / "host", artifact_sources={"approved": source}, gc_grace_ms=100
-    )
-    spec = builder.materialize_environment(resolved, reference_id="toolbox:gc")
-    verified_at = json.loads((Path(spec.environment_root) / "verification-receipt.json").read_text(encoding="utf-8"))["verified_at_ms"]
-
-    assert builder.garbage_collect(now_ms=verified_at + 1_000) == ()
-    builder.release_reference(environment_key=spec.environment_key, reference_id="toolbox:gc")
-    assert builder.garbage_collect(now_ms=verified_at + 50) == ()
-    assert builder.garbage_collect(now_ms=verified_at + 101) == (spec.environment_key,)
-    assert not Path(spec.environment_root).exists()
-
-
-def test_exact_environment_removal_requires_released_reference_and_is_idempotent(
-    tmp_path: Path,
-) -> None:
-    source = tmp_path / "approved"
-    source.mkdir()
-    alpha = _wheel(source, "alpha-package", "1.0.0", "alpha_pkg")
-    resolved = _resolved((alpha,))
-    builder = PythonEnvironmentBuilder(tmp_path / "host", artifact_sources={"approved": source})
-    spec = builder.materialize_environment(resolved, reference_id="toolbox:remove")
-
-    with pytest.raises(HermeticToolboxEnvironmentBuildError, match="environment_references_present"):
-        builder.remove_environment(environment_key=spec.environment_key)
-    builder.release_reference(environment_key=spec.environment_key, reference_id="toolbox:remove")
-    assert builder.remove_environment(environment_key=spec.environment_key) == "removed"
-    assert builder.remove_environment(environment_key=spec.environment_key) == "already_absent"
-
-
 def test_required_environment_readiness_is_receipt_gated(tmp_path: Path) -> None:
     source = tmp_path / "approved"
     source.mkdir()
@@ -364,7 +325,7 @@ def test_required_environment_readiness_is_receipt_gated(tmp_path: Path) -> None
     builder = PythonEnvironmentBuilder(tmp_path / "host", artifact_sources={"approved": source})
 
     assert builder.required_environment_readiness((resolved,))["state"] == "degraded"
-    builder.materialize_environment(resolved, reference_id="template:required")
+    builder.materialize_environment(resolved)
     readiness = builder.required_environment_readiness((resolved,))
     assert readiness["state"] == "ready"
     assert readiness["environments"][0]["code"] == "environment_verified"

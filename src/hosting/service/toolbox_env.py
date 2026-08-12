@@ -69,14 +69,20 @@ class ToolboxMaintenanceMixin:
             ):
                 blockers.add("operation")
 
-        builder = getattr(self, "_hermetic_toolbox_environment_builder", None)
-        if builder is not None:
-            references = dict(builder._read_references_unlocked().get("environments") or {})  # noqa: SLF001
-            for reference_id in dict(references.get(key) or {}):
-                if str(reference_id).startswith("template:"):
+        cursor = ""
+        while True:
+            page = self._environment_manager.list_references(cursor=cursor, limit=500)
+            for reference in list(page.get("references") or []):
+                row = dict(reference or {})
+                if row.get("environment_id") != key or row.get("released_at_ms") is not None:
+                    continue
+                if "template" in str(row.get("consumer_kind") or ""):
                     blockers.add("built_in")
                 else:
                     blockers.add("reference")
+            cursor = str(page.get("next_cursor") or "")
+            if not cursor:
+                break
         return [item for item in (
             "active", "candidate", "plan", "confirmation", "operation",
             "built_in", "protected", "reference",
@@ -98,7 +104,7 @@ class ToolboxMaintenanceMixin:
             raise ValueError("toolbox_host_project_configuration_required")
         fingerprint = hosted_execution_fingerprint(
             {
-                "execution_kind": HostedExecutionKind.TOOLBOX_ENVIRONMENT_REMOVE.value,
+                "execution_kind": HostedExecutionKind.ENVIRONMENT_REMOVE.value,
                 "configuration_revision": self.hosting_configuration_revision,
                 "environment_digest": key,
                 "config_revision": configuration.config_revision,
@@ -108,7 +114,7 @@ class ToolboxMaintenanceMixin:
         owner = self._operation_owner(owner_actor_id)
         prepared = self._hosted_operations.prepare(
             owner_actor_id=owner,
-            execution_kind=HostedExecutionKind.TOOLBOX_ENVIRONMENT_REMOVE,
+            execution_kind=HostedExecutionKind.ENVIRONMENT_REMOVE,
             selector=HostedOperationSelector(kind="environment_digest", id=key),
             namespace=f"environment_remove:{key}",
             request_id=rid,
@@ -201,15 +207,13 @@ class ToolboxMaintenanceMixin:
                         "blocking_reference_kinds": blockers,
                     },
                 )
-            builder = getattr(self, "_hermetic_toolbox_environment_builder", None)
-            if builder is None:
-                raise ValueError("toolbox_environment_builder_unconfigured")
             progress(
                 "removal", "environment_remove_started",
                 "The exact unreferenced environment is being removed.",
                 completed_units=0, total_units=1, cancellable=False,
             )
-            result = builder.remove_environment(environment_key=environment_digest)
+            removal = self._environment_manager.remove(environment_id=environment_digest)
+            result = str(removal.get("state") or "removed")
             progress(
                 "cleanup", "environment_remove_complete",
                 "The exact environment removal completed.",
@@ -590,30 +594,10 @@ class ToolboxMaintenanceMixin:
                 shutil.rmtree(path)
                 removed_bundles.append(str(path))
         removed_environments: List[str] = []
-        builder = getattr(self, "_hermetic_toolbox_environment_builder", None)
         configuration = getattr(self, "_toolbox_host_project_config", None)
-        if builder is not None:
-            retention = configuration.retention if configuration is not None else None
-            active_references = {
-                str(item or "")
-                for snapshot in self._toolbox_v2_snapshots().values()
-                for item in list(snapshot.get("environment_references") or [])
-            }
-            index = builder._read_references_unlocked()  # noqa: SLF001 - same service boundary
-            for environment_key, refs in list(dict(index.get("environments") or {}).items()):
-                for reference_id in list(dict(refs or {})):
-                    if reference_id not in active_references:
-                        builder.release_reference(
-                            environment_key=environment_key,
-                            reference_id=reference_id,
-                        )
-            removed_environments = list(
-                builder.garbage_collect(
-                    protected_environment_keys=(retention.protected_digests if retention else ()),
-                    maximum_cache_bytes=(retention.maximum_cache_bytes if retention else None),
-                    maximum_cache_artifacts=(retention.maximum_cache_artifacts if retention else None),
-                )
-            )
+        removed_environments = list(
+            self._environment_manager.gc().get("removed_environment_ids") or []
+        )
         return {
             "status": "ok",
             "contract": "hosting.toolbox.gc.v2",

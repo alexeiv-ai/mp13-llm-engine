@@ -153,6 +153,36 @@ def test_adopt_published_bytes_issues_generic_receipt_and_reference(tmp_path: Pa
     )
     assert first["receipt"]["contract"] == "hosting.environment_receipt.v1"
     assert first["reference"] == second["reference"]
+    digest = environment_id.split(":", 1)[1]
+    lock = json.loads(
+        (tmp_path / "environments" / "locks" / f"{digest}.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert lock["contract"] == "hosting.environment_lock.v1"
+
+
+def test_legacy_receipt_and_reference_contracts_fail_closed(tmp_path: Path) -> None:
+    manager, _ = _manager(tmp_path)
+    result = manager.ensure(
+        _request(request_id="one", consumer_kind="toolbox", consumer_id="tb-1")
+    )
+    environment_id = result["receipt"]["environment_id"]
+    digest = environment_id.split(":", 1)[1]
+    receipt_path = tmp_path / "environments" / "receipts" / f"{digest}.json"
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    receipt["contract"] = "hosting.toolbox.hermetic_environment_receipt.v1"
+    receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+    with pytest.raises(EnvironmentError, match="environment_receipt_invalid"):
+        manager.receipt(environment_id=environment_id)
+
+    state_path = tmp_path / "environments" / "state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    reference = next(iter(state["references"].values()))
+    reference["contract"] = "hosting.toolbox.environment_references.v1"
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    with pytest.raises(EnvironmentError, match="environment_state_invalid"):
+        manager.list_references()
 
 
 def test_legacy_roots_and_incomplete_builds_are_not_discovered(tmp_path: Path) -> None:
