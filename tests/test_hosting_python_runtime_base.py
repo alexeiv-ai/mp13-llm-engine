@@ -13,7 +13,7 @@ def _policy():
     }
 
 
-def test_workflow_python_environment_spec_uses_runtime_envs_and_stable_key(tmp_path: Path) -> None:
+def test_workflow_python_environment_spec_uses_generic_environments_and_stable_key(tmp_path: Path) -> None:
     manager = HostedPythonRuntimeManager(tmp_path)
 
     left = manager.environment_spec(
@@ -31,11 +31,11 @@ def test_workflow_python_environment_spec_uses_runtime_envs_and_stable_key(tmp_p
 
     assert left["environment_key"] == right["environment_key"]
     env = left["environment"]
-    assert env["environment_root_kind"] == "runtime_envs"
+    assert env["environment_root_kind"] == "environments"
     assert env["environment_consumer_kind"] == "workflow_python_helper"
     assert env["environment_name"] == "workflow-python-helper"
     assert env["required_imports"] == ["json", "math"]
-    assert str(env["venv_path"]).startswith(str(tmp_path / "runtime_envs"))
+    assert str(env["venv_path"]).startswith(str(tmp_path / "environments"))
 
 
 def test_python_runtime_base_sits_above_process_pool_base(tmp_path: Path) -> None:

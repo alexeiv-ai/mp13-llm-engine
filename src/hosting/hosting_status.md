@@ -839,6 +839,19 @@ the slice.
   tests/test_hosted_toolbox_shipped_templates.py -q --maxfail=30` passed all 21
   tests, including generic operation-kind persistence and fail-closed materialization
 
+### TEST-R6.5B — generic runtime-root and restart fixture cut
+
+- Date: 2026-08-12
+- Plan IDs: R4.1/R4.2, R6.5, and R9.3/R9.4 (partial); P0/P2; high expertise
+- Outcome: Python workflow runtime assertions now require the generic
+  `environments` root, while registration, duplicate execution, cancellation,
+  and live-refresh restart fixtures load immutable v3 hosting configuration
+- Removal proof: the restart-healing fixture contains zero `control_state_file`
+  or retired control filename matches; the runtime test no longer expects
+  `runtime_envs`
+- Proof: `python -m pytest tests/test_hosting_python_runtime_base.py
+  tests/test_hosting_r6_restart_healing.py -q --maxfail=20` passed all 21 tests
+
 Append one concise entry per completed slice. Include exact commands, counts,
 durations where useful, negative-path results, commit pin, and dependent receipt
 impact. Do not paste an unstructured full test transcript.

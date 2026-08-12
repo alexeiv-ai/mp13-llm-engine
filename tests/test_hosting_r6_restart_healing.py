@@ -9,12 +9,13 @@ import pytest
 from hosting._process_utils import configure_parent_death_signal
 from hosting.operation_contract import HostedExecutionKind, HostedOperationSelector, hosted_execution_fingerprint
 from hosting.service.host_service import EngineHostService
+from tests.hosting_v3_fixtures import hosting_configuration
 
 
 def _service(tmp_path: Path) -> EngineHostService:
     return EngineHostService(
         engines_state_file=tmp_path / "engines.json",
-        control_state_file=tmp_path / "control.json",
+        hosting_configuration=hosting_configuration(tmp_path),
     )
 
 
