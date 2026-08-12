@@ -58,6 +58,14 @@ def test_minimal_configuration_is_immutable_and_preserves_logical_paths(tmp_path
     assert config.resolved_paths["artifact_root"].endswith("packages-data\\artifacts") or config.resolved_paths["artifact_root"].endswith("packages-data/artifacts")
     with pytest.raises(TypeError):
         config.control["authentication"] = {}  # type: ignore[index]
+    assert config.control["lifecycle"]["toolbox_candidate_retention_ms"] == 1800000
+    assert config.control["lifecycle"]["toolbox_candidate_limit_per_actor"] == 3
+    assert config.inspect()["toolbox_candidate_policy"] == {
+        "retention_ms": 1800000,
+        "limit_per_actor": 3,
+        "minimum_retention_ms": 300000,
+        "maximum_retention_ms": 14400000,
+    }
 
 
 def test_full_configuration_and_sanitized_inspection(tmp_path: Path) -> None:
@@ -72,6 +80,8 @@ def test_full_configuration_and_sanitized_inspection(tmp_path: Path) -> None:
             "on_terminal_disconnect": "keep_daemon_running",
             "terminal_control_enabled": False,
             "owner_disconnect_shutdown": False,
+            "toolbox_candidate_retention_ms": 600000,
+            "toolbox_candidate_limit_per_actor": 8,
         },
         "claims": {"owner_ttl_seconds": 120, "audit_event_limit": 200},
         "traffic": {
@@ -92,6 +102,27 @@ def test_full_configuration_and_sanitized_inspection(tmp_path: Path) -> None:
     assert "SENTINEL_TOKEN" not in remote
     assert "resolved_paths" not in remote
     assert "resolved_paths" in config.inspect(local_admin=True)
+    assert config.inspect()["toolbox_candidate_policy"]["retention_ms"] == 600000
+    assert config.inspect()["toolbox_candidate_policy"]["limit_per_actor"] == 8
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "code"),
+    [
+        ("toolbox_candidate_retention_ms", 299999, "hosting_configuration_type_invalid"),
+        ("toolbox_candidate_retention_ms", 14400001, "hosting_configuration_value_invalid"),
+        ("toolbox_candidate_limit_per_actor", 0, "hosting_configuration_type_invalid"),
+        ("toolbox_candidate_limit_per_actor", 17, "hosting_configuration_value_invalid"),
+    ],
+)
+def test_candidate_lifecycle_policy_is_strictly_bounded(
+    tmp_path: Path, field: str, value: int, code: str
+) -> None:
+    payload = _minimal()
+    payload["control"]["lifecycle"] = {field: value}
+    with pytest.raises(HostingConfigurationError) as captured:
+        parse_hosting_configuration(payload, _resolver(tmp_path))
+    assert captured.value.code == code
 
 
 @pytest.mark.parametrize(

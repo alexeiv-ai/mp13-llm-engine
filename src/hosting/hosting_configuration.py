@@ -128,6 +128,12 @@ class HostingConfiguration:
             },
             "source_availability": source_health,
             "environment_health": {"status": "ok", "code": "environment_configuration_ready"},
+            "toolbox_candidate_policy": {
+                "retention_ms": int(self.control["lifecycle"]["toolbox_candidate_retention_ms"]),
+                "limit_per_actor": int(self.control["lifecycle"]["toolbox_candidate_limit_per_actor"]),
+                "minimum_retention_ms": 300000,
+                "maximum_retention_ms": 14400000,
+            },
         }
         if local_admin:
             result["resolved_paths"] = dict(self.resolved_paths)
@@ -184,7 +190,11 @@ def parse_hosting_configuration(payload: Mapping[str, Any], resolver: PathResolv
     lifecycle = _mapping(control.get("lifecycle", {}), "control.lifecycle")
     _exact_keys(
         lifecycle,
-        {"profile", "on_terminal_disconnect", "terminal_control_enabled", "owner_disconnect_shutdown"},
+        {
+            "profile", "on_terminal_disconnect", "terminal_control_enabled",
+            "owner_disconnect_shutdown", "toolbox_candidate_retention_ms",
+            "toolbox_candidate_limit_per_actor",
+        },
         "control.lifecycle",
     )
     if "profile" in lifecycle:
@@ -199,6 +209,24 @@ def parse_hosting_configuration(payload: Mapping[str, Any], resolver: PathResolv
             )
     _optional_bool(lifecycle, "terminal_control_enabled", "control.lifecycle")
     _optional_bool(lifecycle, "owner_disconnect_shutdown", "control.lifecycle")
+    _optional_int(lifecycle, "toolbox_candidate_retention_ms", "control.lifecycle", minimum=300000)
+    _optional_int(lifecycle, "toolbox_candidate_limit_per_actor", "control.lifecycle", minimum=1)
+    candidate_retention_ms = int(lifecycle.get("toolbox_candidate_retention_ms", 1800000))
+    candidate_limit_per_actor = int(lifecycle.get("toolbox_candidate_limit_per_actor", 3))
+    if candidate_retention_ms > 14400000:
+        raise HostingConfigurationError(
+            "hosting_configuration_value_invalid", "control.lifecycle.toolbox_candidate_retention_ms"
+        )
+    if candidate_limit_per_actor > 16:
+        raise HostingConfigurationError(
+            "hosting_configuration_value_invalid", "control.lifecycle.toolbox_candidate_limit_per_actor"
+        )
+    lifecycle = {
+        **lifecycle,
+        "toolbox_candidate_retention_ms": candidate_retention_ms,
+        "toolbox_candidate_limit_per_actor": candidate_limit_per_actor,
+    }
+    control = {**control, "lifecycle": lifecycle}
     claims = _mapping(control.get("claims", {}), "control.claims")
     _exact_keys(claims, {"owner_ttl_seconds", "audit_event_limit"}, "control.claims")
     for key in claims:

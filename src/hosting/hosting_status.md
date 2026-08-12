@@ -2,7 +2,7 @@
 
 Last updated: 2026-08-12
 
-Status: R7.1 complete; ready for R7.2 candidate lifecycle
+Status: R7.2 active on durable candidate records
 
 This is the current execution ledger for
 [`hosting_access_plan.md`](hosting_access_plan.md). Detailed completed-slice
@@ -12,10 +12,11 @@ compact evidence index, and external completion gates.
 
 ## 1. Current gate and resume order
 
-No slice is active. **R7.1 planning and selective revision is complete**:
+**R7.2 is active at the durable candidate-record boundary.** R7.1 planning and selective revision is complete:
 generic locks/requests, CAS changes, evidence, child replanning, exact public
 projections, and stale/retry/restart/concurrency safety proofs are committed.
-Open R7.2 at the durable candidate lifecycle boundary.
+The strict v3 candidate retention/quota policy prerequisite is complete. Next,
+split preparation from publication and persist the exact warmed candidate.
 
 Resume in this order:
 
