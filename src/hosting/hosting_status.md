@@ -2,7 +2,7 @@
 
 Last updated: 2026-08-12
 
-Status: R9.6 consumer adoption gated; R9.7 local matrix complete, external lanes gated
+Status: R9.6 consumer adoption gated; R9.7 sensitive Windows lane gated
 
 This is the current execution ledger for
 [`hosting_access_plan.md`](hosting_access_plan.md). Detailed completed-slice
@@ -14,14 +14,14 @@ compact evidence index, and external completion gates.
 
 **R9.6 consumer adoption is gated; every locally executable R9.7 lane is now
 green.** The repository aggregate, actionable lint, declared type check,
-security/redaction proof, Windows x64 native target, and relay-equivalent lanes
-pass. Four native CI targets require external runners, and the opt-in Windows
-sensitive-sandbox lane requires an external engine model or configuration.
+security/redaction proof, relay-equivalent lane, and five-target external native
+workflow pass. The opt-in Windows sensitive-sandbox lane still requires an
+external engine model or configuration.
 
 Resume in this order:
 
 1. Obtain the dependent owner/revision/test adoption receipt.
-2. Run the external native/platform and sensitive-sandbox lanes.
+2. Run the external sensitive-sandbox lane.
 3. Reconcile all remaining evidence and close R9.8.
 
 Do not repeat the repository aggregate unless code changes after the recorded
@@ -40,7 +40,7 @@ R9.7 run or a remaining lane exposes a regression.
 | R6 Generic environments | Complete | Final aggregate/platform proof at R9.7. |
 | R7 Toolbox adoption | Complete | Public acceptance/removal proof at R9. |
 | R8 Worker-neutral state | Complete | Final local aggregate proof recorded at R9.7. |
-| R9 Acceptance/handoff | Partial | Dependent receipt, external platform lanes, and closeout remain. |
+| R9 Acceptance/handoff | Partial | Dependent receipt, sensitive Windows sandbox, and closeout remain. |
 
 The plan progress table records completed blocks; its remaining-work checkboxes
 are authoritative for unfinished item-level work.
@@ -70,7 +70,7 @@ The pre-R7 P0 clean-cut items are complete.
 ### R9 closeout
 
 - Obtain the dependent implementation pin/receipt.
-- Run the four external native targets and opt-in sensitive Windows sandbox.
+- Run the opt-in sensitive Windows sandbox lane.
 - Reconcile external evidence and close R9.8.
 
 ## 5. Compact evidence index
@@ -136,8 +136,8 @@ The pre-R7 P0 clean-cut items are complete.
 | CODE/TEST-R9.7C | Declared actionable lint policy preserves fatal/error and useful warning checks while documenting intentional mixin/runtime architecture exceptions; `python -m pylint src/hosting` passed at 10.00/10. |
 | CODE/TEST-R9.7D | The declared mypy lane checks `src/hosting`, follows imported dependencies in skip mode, and disables only the deliberate sibling-mixin `attr-defined` pattern; `python -m mypy` passed all 130 source files. |
 | TEST-R9.7E | Focused authentication, daemon-state, operation/result, callable-surface, host-capability, catalog, and identity security/redaction proof passed 172 tests. |
-| OPEN-R9.7F | Windows ARM64, Linux x64/ARM64, macOS ARM64, and opt-in Windows sensitive-sandbox results require external runners/resources and remain open. |
-| DOC-R9.6A | The final parent handoff is pinned to accepted implementation commit `c0ff90777cca476b87322a67d60693d56dac0eea`; only the named dependent owner/revision/test receipt remains open in R9.6. |
+| CODE/TEST-R9.7F | Draft PR #2 executed native workflow run `31605912784` at `cb39c0ee73d0beb7f1b852b4e4a9e80a5220883e`; Windows x64/ARM64, Linux x64/ARM64, and macOS ARM64 all passed. The first Windows ARM64 attempt exposed the obsolete, unused mandatory-signing `cryptography` dependency; removing it from package/workflow/lock state and regenerating the lock produced the green rerun. |
+| DOC-R9.6A | The final parent handoff is pinned to accepted implementation commit `cb39c0ee73d0beb7f1b852b4e4a9e80a5220883e`; only the named dependent owner/revision/test receipt remains open in R9.6. |
 | CODE-R8A–C | Versioned neutral state, Python/JS shared manager adoption, GC/repair controls passed focused coverage. |
 | CODE/TEST-R9 partial | Structured auth, role/hash authority, redaction, startup modes, generic lifecycle, and retry/restart identity passed focused coverage. |
 | TEST-R8.2C checkpoint | Workflow operation suite passed; full helper suite passed 116 tests on resume. |
@@ -145,8 +145,7 @@ The pre-R7 P0 clean-cut items are complete.
 ## 6. External completion gates
 
 - Dependent owner/revision/test receipt against parent implementation
-  `c0ff90777cca476b87322a67d60693d56dac0eea`.
-- Native CI results for Windows ARM64, Linux x64/ARM64, and macOS ARM64.
+  `cb39c0ee73d0beb7f1b852b4e4a9e80a5220883e`.
 - Opt-in Windows sensitive-sandbox validation with an external engine model or
   configuration; the local aggregate skip records the exact requirement.
 - R9.8 reconciliation after R9.6 and every required R9.7 lane pass.

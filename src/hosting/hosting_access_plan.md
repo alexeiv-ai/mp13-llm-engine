@@ -1,7 +1,7 @@
 # Unified hosting configuration and package/environment cutover plan
 
-Status: active breaking-change plan; local R9.7 acceptance complete, with R9.6
-consumer adoption and external R9.7 platform lanes still gated
+Status: active breaking-change plan; local and native R9.7 acceptance complete,
+with R9.6 consumer adoption and the sensitive Windows R9.7 lane still gated
 
 This is the current execution plan, not a history log. Completed-slice detail is
 retained in Git history and summarized in `hosting_status.md`. Exact external
@@ -130,10 +130,9 @@ only in `HOSTING_CLIENT_BREAKING_CHANGES.md`.
 Resume in this order:
 
 1. Obtain the R9.6 dependent-owner adoption receipt.
-2. Run and record Windows ARM64, Linux x64/ARM64, and macOS ARM64 native CI.
-3. Run the opt-in Windows sensitive-sandbox lane with an external engine model
+2. Run the opt-in Windows sensitive-sandbox lane with an external engine model
    or configuration.
-4. Reconcile those external results and the receipt, then perform R9.8
+3. Reconcile that external result and the receipt, then perform R9.8
    closeout. Do not repeat locally green lanes unless intervening code changes
    or an external lane exposes a regression.
 
@@ -231,7 +230,7 @@ side-effect-free.
   dependent owner, implementation revision, and tests. A daemon shim is not an
   adoption receipt.
   - [x] Final parent handoff is frozen against implementation commit
-    `c0ff90777cca476b87322a67d60693d56dac0eea`.
+    `cb39c0ee73d0beb7f1b852b4e4a9e80a5220883e`.
   - [ ] Named dependent owner, full dependent revision, and reproducible test
     receipt remain required.
 - [ ] **R9.7 Full matrix:** after removals, run required aggregate, lint, type,
@@ -245,8 +244,10 @@ side-effect-free.
   - [x] Focused security/redaction proof passed 172 tests.
   - [x] Windows x64 native and relay-equivalent lanes passed as recorded in
     `hosting_status.md`.
-  - [ ] External Windows ARM64, Linux x64/ARM64, macOS ARM64, and opt-in
-    Windows sensitive-sandbox lanes remain required.
+  - [x] External native workflow run `31605912784` passed Windows x64/ARM64,
+    Linux x64/ARM64, and macOS ARM64 at implementation commit
+    `cb39c0ee73d0beb7f1b852b4e4a9e80a5220883e`.
+  - [ ] Opt-in Windows sensitive-sandbox lane remains required.
 - [ ] **R9.8 Closeout:** reconcile every remaining checkbox and every target or
   locked rule in Sections 1–2 with evidence, verify schema/capability/docs/
   handoff agreement, verify no compatibility code escaped review, and mark
