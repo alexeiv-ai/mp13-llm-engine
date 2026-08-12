@@ -27,7 +27,7 @@ HTTP/relay/channel startup now accepts the top-level MP13 configuration and
 loads immutable v3 policy before listener construction; static and dynamic
 records are separated; legacy launcher inputs and module are removed from
 production. New focused tests pass. The aggregate lane currently reports 100
-failures before its configured stop after 336 passes, predominantly deliberate
+failures before its configured stop after 509 passes, predominantly deliberate
 legacy fixture/signature expectations. R3.2/R4 remain open until those fixtures
 and remaining permanent documents are migrated and the named proofs pass.
 
@@ -513,6 +513,21 @@ the slice.
 - Remaining: migrate/delete inventoried legacy tests and permanent-doc matches,
   exercise password/public-key policy parity, and run process/log/path leakage
   acceptance before closing R9.2/R9.4
+
+### TEST-R9B — aggregate and dependent gate audit
+
+- Date: 2026-08-11
+- Aggregate: `python -m pytest -q --tb=no --maxfail=200` collected cleanly,
+  reached 509 passes, then stopped at 200 failures; the failure list is dominated
+  by pre-v3 service/daemon constructors, mutable static-authority expectations,
+  and retired toolbox catalog/template fixtures. No compatibility shim was added.
+- Dependent read-only audit: `O:/repos/mp13-docs` remains at
+  `a36400e8af908f702a4db84e4fdb1894ac28da36` with the pre-existing untracked
+  `parent_project_feature.md`; searches found no new generic config/package/
+  environment/readiness adoption and did find the retired command family in its
+  refactoring plan
+- Gate impact: R9.6 cannot pass without a dependent-team revision, tests, named
+  owner, and receipt. The dependent worktree was not modified.
 
 Append one concise entry per completed slice. Include exact commands, counts,
 durations where useful, negative-path results, commit pin, and dependent receipt
