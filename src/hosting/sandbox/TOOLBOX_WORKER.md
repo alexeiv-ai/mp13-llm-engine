@@ -104,10 +104,11 @@ to the same identities and actor authority.
 ## Template and custom package environments
 
 The initial catalog provides independent `core` and `py-compute` templates.
-Each selected template revision is pinned by its signed manifest, complete lock,
-runtime artifact, Python ABI, platform, and isolation policy. A custom delta is
-resolved into a new complete base-plus-delta lock; it never layers onto or
-imports from another virtual environment.
+Each selected template revision is pinned by its generic package lock and
+environment receipt, runtime artifact, Python ABI, platform, and isolation
+policy. An optional package verifier may add evidence but is not required by
+the baseline. A custom delta is resolved into a new complete base-plus-delta
+lock; it never layers onto or imports from another virtual environment.
 
 Environment construction accepts only host-derived
 `ResolvedToolboxEnvironmentInput`. The digest-addressed key covers the runtime
