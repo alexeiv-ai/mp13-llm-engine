@@ -6,6 +6,7 @@
 # SPDX-License-Identifier: Apache-2.0
 import json
 import os
+import re
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -23,6 +24,7 @@ HOSTING_STATE_SUBDIR = "hosting/state"
 HOSTING_BOOTSTRAP_SUBDIR = "hosting/bootstrap"
 HOSTING_ENGINES_STATE_FILENAME = "managed_engines.json"
 HOSTING_CONTROL_STATE_FILENAME = "access_control.json"
+HOSTING_CONFIGURATION_FILENAME = "hosting_config.json"
 HOSTING_DAEMON_PID_FILENAME = "daemon.pid"
 HOSTING_DAEMON_HTTP_PID_FILENAME = "daemon_http.pid"
 
@@ -33,6 +35,9 @@ DEFAULT_CATEGORY_DIRS = {
     "sessions_root_dir": "@home/.mp13-llm/sessions",
     "tools_root_dir": "@project/configs",
     "logs_root_dir": "@temp",
+    "hosting_root_dir": "@home/.mp13-llm/hosting",
+    "packages_root_dir": "@home/.mp13-llm/packages",
+    "environments_root_dir": "@home/.mp13-llm/environments",
 }
 
 DEFAULT_INFERENCE_PARAMS = {
@@ -114,7 +119,16 @@ CATEGORY_ROOT_KEYS = {
     "data": "data_root_dir",
     "tools": "tools_root_dir",
     "logs": "logs_root_dir",
+    "hosting": "hosting_root_dir",
+    "packages": "packages_root_dir",
+    "environments": "environments_root_dir",
 }
+
+HOSTING_CATEGORY_ROOT_KEYS = frozenset(
+    {"hosting_root_dir", "packages_root_dir", "environments_root_dir"}
+)
+STABLE_PERSISTENT_ROOT_ANCHORS = frozenset({"home", "config", "temp"})
+_WINDOWS_DRIVE_RE = re.compile(r"^[A-Za-z]:")
 
 TOOLS_CONFIG_KEYS = ("tools_config_path",)
 ENGINE_PATH_KEYS = {
@@ -344,6 +358,24 @@ def _split_anchor(value: str) -> Tuple[str, str]:
     return anchor, rest
 
 
+def _safe_anchor_path(base: Path, rest: str, *, label: str, allow_parent: bool = False) -> Path:
+    normalized = str(rest or "").replace("\\", "/")
+    if normalized.startswith("/") or _WINDOWS_DRIVE_RE.match(normalized):
+        raise ValueError(f"{label}_absolute_suffix_invalid")
+    parts = [part for part in normalized.split("/") if part not in {"", "."}]
+    if allow_parent:
+        return base.resolve().joinpath(*parts).resolve()
+    if any(part == ".." for part in parts):
+        raise ValueError(f"{label}_traversal_invalid")
+    base_resolved = base.resolve()
+    candidate = base_resolved.joinpath(*parts).resolve()
+    try:
+        candidate.relative_to(base_resolved)
+    except ValueError as exc:
+        raise ValueError(f"{label}_containment_invalid") from exc
+    return candidate
+
+
 @dataclass
 class PathResolver:
     cwd: Path
@@ -364,8 +396,15 @@ class PathResolver:
             anchor, rest = _split_anchor(raw)
             base = self._anchor_base(anchor)
             if base is None:
-                return raw
-            return str((base / rest).resolve()) if rest else str(base.resolve())
+                raise ValueError(f"unknown_path_label:{anchor or '<empty>'}")
+            return str(
+                _safe_anchor_path(
+                    base,
+                    rest,
+                    label=f"path_label_{anchor}",
+                    allow_parent=anchor not in {"hosting", "packages", "environments"},
+                )
+            )
         if raw.startswith("~"):
             return str(Path(raw).expanduser().resolve())
         if Path(raw).is_absolute():
@@ -397,6 +436,83 @@ def _build_paths_from_config(config: Dict[str, Any]) -> Dict[str, Any]:
     return paths
 
 
+def _resolve_category_paths(
+    category_paths: Dict[str, Any],
+    *,
+    cwd: Path,
+    config_dir: Path,
+    home_dir: Path,
+    project_dir: Optional[Path],
+) -> Dict[str, Path]:
+    key_by_label = dict(CATEGORY_ROOT_KEYS)
+    resolved: Dict[str, Path] = {}
+    resolving: list[str] = []
+
+    def stable_anchor(anchor: str) -> Optional[Path]:
+        if anchor == "home":
+            return home_dir
+        if anchor == "config":
+            return config_dir
+        if anchor == "temp":
+            return Path(tempfile.gettempdir()).resolve()
+        if anchor == "project":
+            return project_dir or cwd
+        return None
+
+    def resolve_key(key: str) -> Path:
+        if key in resolved:
+            return resolved[key]
+        if key in resolving:
+            cycle = "->".join([*resolving, key])
+            raise ValueError(f"category_root_cycle:{cycle}")
+        value = category_paths.get(key)
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"category_root_invalid:{key}")
+        raw = value.strip()
+        resolving.append(key)
+        try:
+            if key in HOSTING_CATEGORY_ROOT_KEYS:
+                if not raw.startswith("@"):
+                    raise ValueError(f"persistent_root_must_use_stable_anchor:{key}")
+                anchor, rest = _split_anchor(raw)
+                if anchor not in STABLE_PERSISTENT_ROOT_ANCHORS:
+                    raise ValueError(f"persistent_root_anchor_invalid:{key}:{anchor}")
+                base = stable_anchor(anchor)
+                assert base is not None
+                path = _safe_anchor_path(base, rest, label=key)
+            elif raw.startswith("@"):
+                anchor, rest = _split_anchor(raw)
+                base = stable_anchor(anchor)
+                if base is None:
+                    referenced_key = key_by_label.get(anchor)
+                    if referenced_key is None:
+                        raise ValueError(f"unknown_path_label:{anchor or '<empty>'}")
+                    base = resolve_key(referenced_key)
+                path = _safe_anchor_path(base, rest, label=key, allow_parent=True)
+            elif raw.startswith("~"):
+                path = Path(raw).expanduser().resolve()
+            elif Path(raw).is_absolute():
+                path = Path(raw).resolve()
+            elif _has_explicit_rel_prefix(raw):
+                path = (cwd / raw).resolve()
+            else:
+                path = (config_dir / raw).resolve()
+            resolved[key] = path
+            return path
+        finally:
+            resolving.pop()
+
+    for category_key in category_paths:
+        resolve_key(category_key)
+
+    persistent = [resolved[key] for key in HOSTING_CATEGORY_ROOT_KEYS]
+    for index, left in enumerate(persistent):
+        for right in persistent[index + 1 :]:
+            if left == right or left in right.parents or right in left.parents:
+                raise ValueError("persistent_roots_overlap")
+    return resolved
+
+
 def resolve_config_paths(
     config: Dict[str, Any],
     *,
@@ -418,11 +534,13 @@ def resolve_config_paths(
     category_paths = dict(DEFAULT_CATEGORY_DIRS)
     if isinstance(config.get(CATEGORY_DIRS_KEY), dict):
         category_paths.update(config[CATEGORY_DIRS_KEY])
-    resolved_paths: Dict[str, Path] = {}
-    for key, value in category_paths.items():
-        resolved = resolver.resolve(value, category=None)
-        if isinstance(resolved, str):
-            resolved_paths[key] = Path(resolved)
+    resolved_paths = _resolve_category_paths(
+        category_paths,
+        cwd=cwd,
+        config_dir=config_dir,
+        home_dir=resolver.home_dir,
+        project_dir=resolver.project_dir,
+    )
     resolver.category_roots = {
         "models": resolved_paths.get("models_root_dir", config_dir),
         "adapters": resolved_paths.get("adapters_root_dir", config_dir),
@@ -430,6 +548,9 @@ def resolve_config_paths(
         "data": resolved_paths.get("data_root_dir", config_dir),
         "tools": resolved_paths.get("tools_root_dir", config_dir),
         "logs": resolved_paths.get("logs_root_dir", config_dir),
+        "hosting": resolved_paths["hosting_root_dir"],
+        "packages": resolved_paths["packages_root_dir"],
+        "environments": resolved_paths["environments_root_dir"],
     }
 
     config = dict(config)

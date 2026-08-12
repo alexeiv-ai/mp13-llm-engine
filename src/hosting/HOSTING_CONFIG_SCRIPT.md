@@ -115,6 +115,23 @@ API gating:
 4. Remote backend workflows may generate/import local artifacts and instructions, but they do not apply setup to a remote daemon through a daemon API.
 5. `get_local_hosting_setup_status` is the host-local replacement for direct GUI/backend reads of hosting-owned setup files.
 6. Running daemons expose equivalent metadata through `hosting-setup-status` and `hosting-secure-state-status`.
+7. Root customization uses the `hosting.setup.v1` API contract with
+   `mp13_config_file`, logical `roots`, expected top-level/hosting revisions,
+   and explicit `confirm=True` for apply. Local plan/inspect/status may return
+   resolved paths; remote daemon status may not.
+
+Root-update safety:
+1. The shared MP13 path library validates `@hosting`, `@packages`, and
+   `@environments`; the hosting setup API does not maintain a second root map.
+2. Plan checks permissions, overlap/collisions, free space, non-empty
+   destinations, daemon activity, and cross-volume moves without writing.
+3. Apply refuses stale revisions, active-daemon relocation, unsafe non-empty
+   destinations, and cross-volume moves unless the frozen local request permits
+   the latter two.
+4. Writes are locked, restrictive, temporary-file/fsync/replace operations.
+   A local journal records `prepared`, `top_level_written`,
+   `hosting_written`, and `committed`; retry recovers to one declared revision
+   pair and does not claim cross-filesystem atomic rename.
 
 Reset semantics:
 1. `Reset to unconfigured` is available from the main menu when active hosting access files or keys exist.

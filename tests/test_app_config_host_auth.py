@@ -24,6 +24,16 @@ def _run_main(argv: list[str]) -> int:
         sys.argv = old
 
 
+def test_shared_config_ui_exposes_host_owned_roots() -> None:
+    fields = {field.path for _key, _label, section in app_config.SECTION_SPECS for field in section}
+
+    assert {
+        ("category_dirs", "hosting_root_dir"),
+        ("category_dirs", "packages_root_dir"),
+        ("category_dirs", "environments_root_dir"),
+    } <= fields
+
+
 def test_host_auth_status_and_upsert_key(tmp_path: Path, capsys) -> None:
     control_state = tmp_path / "access_control.json"
 

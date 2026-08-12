@@ -460,6 +460,9 @@ SECTION_SPECS: List[Tuple[str, str, List[FieldSpec]]] = [
             FieldSpec(("category_dirs", "sessions_root_dir"), "Sessions root", "Root folder for session outputs.", "text"),
             FieldSpec(("category_dirs", "tools_root_dir"), "Tools root", "Root folder for tools config.", "text"),
             FieldSpec(("category_dirs", "logs_root_dir"), "Logs root", "Root folder for log files.", "text"),
+            FieldSpec(("category_dirs", "hosting_root_dir"), "Hosting root", "Host-local control, audit, state, and scratch root.", "text"),
+            FieldSpec(("category_dirs", "packages_root_dir"), "Packages root", "Host-local immutable package artifacts and locks root.", "text"),
+            FieldSpec(("category_dirs", "environments_root_dir"), "Environments root", "Host-local reusable built environments root.", "text"),
         ],
     ),
     (

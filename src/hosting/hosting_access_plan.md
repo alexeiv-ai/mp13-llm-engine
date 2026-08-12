@@ -515,11 +515,11 @@ Proof: no known user-facing document is left without an owning work item.
 
 ##### R2.1 Add and resolve the three top-level roots
 
-- [ ] Extend `DEFAULT_CATEGORY_DIRS`, `CATEGORY_ROOT_KEYS`, anchor parsing, and
+- [x] Extend `DEFAULT_CATEGORY_DIRS`, `CATEGORY_ROOT_KEYS`, anchor parsing, and
   `PathResolver` in `src/mp13_engine/mp13_config_paths.py` as one contract.
-- [ ] Reject unknown labels, cycles, traversal escapes, invalid root types, and
+- [x] Reject unknown labels, cycles, traversal escapes, invalid root types, and
   ambiguous self-reference.
-- [ ] Preserve logical values during load/save; resolve only at an explicit
+- [x] Preserve logical values during load/save; resolve only at an explicit
   host boundary.
 
 Proof: table-driven resolver tests cover default/custom roots, nested labels,
@@ -527,12 +527,12 @@ Windows/POSIX forms, normalization, cycles, and traversal.
 
 ##### R2.2 Give hosting setup ownership of root customization
 
-- [ ] Add the three root fields to the shared config model/UI in
+- [x] Add the three root fields to the shared config model/UI in
   `src/app/config.py`.
-- [ ] Make `hosting_setup_api.py` expose hosting-focused plan/apply/inspect/
+- [x] Make `hosting_setup_api.py` expose hosting-focused plan/apply/inspect/
   status/reset operations that call the shared writer.
-- [ ] Remove or redirect duplicate editing in `src/app/mp13chat.py`.
-- [ ] Return logical refs by default; return resolved paths only to a local
+- [x] Remove or redirect duplicate editing in `src/app/mp13chat.py`.
+- [x] Return logical refs by default; return resolved paths only to a local
   authorized operator surface.
 
 Proof: round-trip tests show both the general config UI and hosting setup use
@@ -540,11 +540,11 @@ one validator and preserve unrelated top-level configuration.
 
 ##### R2.3 Implement safe multi-file local apply
 
-- [ ] Add locked, atomic-per-file writes with restrictive permissions and
+- [x] Add locked, atomic-per-file writes with restrictive permissions and
   fsync/replace semantics appropriate to the platform.
-- [ ] Journal the two-authority update when both top-level roots and
+- [x] Journal the two-authority update when both top-level roots and
   `hosting_config.json` change; make retry/recovery idempotent.
-- [ ] Refuse active-daemon relocation and unsafe/non-empty destinations unless
+- [x] Refuse active-daemon relocation and unsafe/non-empty destinations unless
   the frozen local plan explicitly permits them.
 
 Proof: fault-injection tests interrupt every journal phase and recover to one

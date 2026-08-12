@@ -2125,6 +2125,9 @@ def prompt_for_config(config_to_update: Optional[Dict[str, Any]] = None, save_to
     data_root_dir = _input_with_default("Enter data root directory", category_dirs.get("data_root_dir", ""), category_dirs.get("data_root_dir"))
     tools_root_dir = _input_with_default("Enter tools root directory", category_dirs.get("tools_root_dir", ""), category_dirs.get("tools_root_dir"))
     logs_root_dir = _input_with_default("Enter logs root directory", category_dirs.get("logs_root_dir", ""), category_dirs.get("logs_root_dir"))
+    hosting_root_dir = _input_with_default("Enter hosting root directory", category_dirs.get("hosting_root_dir", ""), category_dirs.get("hosting_root_dir"))
+    packages_root_dir = _input_with_default("Enter packages root directory", category_dirs.get("packages_root_dir", ""), category_dirs.get("packages_root_dir"))
+    environments_root_dir = _input_with_default("Enter environments root directory", category_dirs.get("environments_root_dir", ""), category_dirs.get("environments_root_dir"))
     engine_params = dict(current_values.get("engine_params") or {})
     base_model_path = _input_with_default("Enter base model folder (or hf:<repo-id> for Hugging Face)", engine_params.get("base_model_path", ""), engine_params.get("base_model_path"))
     base_model_dtype = _input_with_default("Enter base model dtype (auto, bfloat16, float16, float32)", engine_params.get("base_model_dtype", "auto"), engine_params.get("base_model_dtype"))
@@ -2188,6 +2191,9 @@ def prompt_for_config(config_to_update: Optional[Dict[str, Any]] = None, save_to
         "data_root_dir": data_root_dir,
         "tools_root_dir": tools_root_dir,
         "logs_root_dir": logs_root_dir,
+        "hosting_root_dir": hosting_root_dir,
+        "packages_root_dir": packages_root_dir,
+        "environments_root_dir": environments_root_dir,
     })
     config_data["category_dirs"] = category_dirs
 

@@ -68,7 +68,8 @@ Other helpers:
 ## Path resolution rules
 
 - Config names (used with `--config`, `--clone`, `--merge`, `--diff`) default to `.json` and resolve relative to the current working directory.
-- Absolute paths stay absolute.
+- Absolute paths stay absolute for general engine categories. Persistent
+  hosting/package/environment roots must use a stable logical anchor.
 - Paths starting with `./` or `../` resolve relative to the current working directory.
 - Other relative paths resolve relative to the category root.
 - `~` expands to the user home directory.
@@ -78,7 +79,12 @@ Anchors:
 - `@temp` -> OS temp directory
 - `@project` -> git project root (or cwd if no git root)
 - `@config` -> directory of the config file
-- `@models`, `@adapters`, `@data`, `@tools`, `@sessions`, `@logs` -> category roots
+- `@models`, `@adapters`, `@data`, `@tools`, `@sessions`, `@logs` -> engine category roots
+- `@hosting`, `@packages`, `@environments` -> host-owned persistent roots
+
+Unknown labels and category-root cycles are errors. A logical path below
+`@hosting`, `@packages`, or `@environments` cannot contain `..` or escape its
+resolved root.
 
 ---
 
@@ -94,10 +100,25 @@ Set via `category_dirs` in config, for example:
     "data_root_dir": "@project/data",
     "sessions_root_dir": "@home/.mp13-llm/sessions",
     "tools_root_dir": "@project/configs",
-    "logs_root_dir": "@temp"
+    "logs_root_dir": "@temp",
+    "hosting_root_dir": "@home/.mp13-llm/hosting",
+    "packages_root_dir": "@home/.mp13-llm/packages",
+    "environments_root_dir": "@home/.mp13-llm/environments"
   }
 }
 ```
+
+The three persistent roots may be defined only from `@home`, `@config`, or
+`@temp`; they cannot use `@project`, reference one another, overlap after
+resolution, be absolute, or contain traversal. Configuration load/save keeps
+the logical strings. Resolution happens only at an explicit host boundary.
+
+Host-local root relocation uses `hosting.hosting_setup_api` plan/apply rather
+than a remote control command. Planning reports both logical and local resolved
+paths plus permission, collision, free-space, non-empty, daemon-activity, and
+cross-volume checks. Apply requires confirmation and matching configuration
+revisions. A locked journal makes interruption recovery idempotent when both
+the top-level configuration and hosting configuration are changed.
 
 ---
 

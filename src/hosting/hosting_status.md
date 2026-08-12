@@ -2,7 +2,7 @@
 
 Last updated: 2026-08-11
 
-Status: active; R0–R1 complete; paused before R2
+Status: active; R0–R2 complete; R3 next
 
 This is the fresh execution ledger for
 [`hosting_access_plan.md`](hosting_access_plan.md). The prior toolbox corrective
@@ -17,9 +17,8 @@ Current continuous block: C — implementation and acceptance (`high`, P0–P2)
 
 Active slice: none
 
-R0.1–R0.7 and R1.1–R1.5 are complete. Work is intentionally paused before R2;
-no production implementation slice has started and no dependent adoption is
-claimed.
+R0.1–R0.7, R1.1–R1.5, and R2.1–R2.3 are complete. R3 is the next production
+slice; no dependent adoption is claimed.
 
 ## 2. Progress ledger
 
@@ -37,7 +36,7 @@ claimed.
 | R1.3 Tests/fixtures inventory | P0 | medium | Complete | DOC-R1 |
 | R1.4 Dependent read-only inventory | P0 | medium | Complete | DOC-R1 |
 | R1.5 Documentation cutover map | P0 | medium | Complete | DOC-R1 |
-| R2 Shared paths/config foundation | P0 | high | Not started | — |
+| R2 Shared paths/config foundation | P0 | high | Complete | CODE-R2 |
 | R3 Unified hosting configuration | P0 | high | Not started | — |
 | R4 Single-path daemon startup | P0 | high | Not started | — |
 | R5 Generic package subsystem | P0 | high | Not started | — |
@@ -342,6 +341,24 @@ the slice.
   `git diff --check` passed
 - Dependent handoff impact: implementable handoff is ready, but delivery,
   named owner acknowledgment, revision, tests, and receipt remain R9.6 work
+
+### CODE-R2 — shared roots and host-local setup
+
+- Date: 2026-08-11
+- Plan IDs: R2.1–R2.3; P0; high expertise
+- Production boundary: shared `category_dirs`/`PathResolver`, both config UIs,
+  and host-local setup plan/apply/inspect/status/reset
+- Outcome: added `@hosting`, `@packages`, and `@environments`; strict
+  label/cycle/traversal/type/overlap validation; logical round trips; local
+  preflight; optimistic revisions; locked restrictive atomic writes; and
+  four-phase idempotent recovery without remote relocation
+- Positive/negative proof: 90 focused path, UI, setup, legacy setup, and doc
+  tests passed, including all journal phases, unsafe roots, non-empty targets,
+  remote denial, and stale revisions; `git diff --check` passed
+- Native lane: Windows path and file-replace behavior passed locally; POSIX and
+  real service/SSH lanes remain required by R9.7
+- Dependent handoff impact: root fields and `hosting.setup.v1` are now available;
+  dependent adoption remains external R9.6 work
 
 Append one concise entry per completed slice. Include exact commands, counts,
 durations where useful, negative-path results, commit pin, and dependent receipt
