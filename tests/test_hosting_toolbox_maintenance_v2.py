@@ -414,6 +414,41 @@ def test_route_based_references_consistency_and_review(tmp_path: Path) -> None:
     assert consistency["consistent"] is True
     assert review["recommended_action"] == "observe"
     assert review["toolboxes"]["demo"]["tool_names"] == ["Alpha"]
+    assert review["summary"]["live_generic_reference_count"] == 0
+    assert review["summary"]["active_generic_execution_count"] == 0
+    assert review["summary"]["ready_candidate_count"] == 0
+
+
+def test_gate_and_consistency_fail_closed_for_released_generic_environment_reference(
+    tmp_path: Path
+) -> None:
+    service = _service(tmp_path)
+    engine_id = _install_active(service)
+    registration = service.get_registration(engine_id)
+    reference_id = "ref-" + "1" * 32
+    registration["environment"]["environment_reference"] = reference_id
+    service._write_engines(  # noqa: SLF001
+        [registration if row["engine_id"] == engine_id else row for row in service._read_engines()]
+    )
+    service._environment_manager_instance = _RemovalManager()  # noqa: SLF001
+
+    consistency = service.toolbox_consistency()
+    gate = service.toolbox_gate(toolbox_id="demo", tool_name="Alpha")
+
+    assert consistency["issues"] == [{
+        "toolbox_id": "demo",
+        "profile_id": next(iter(service._toolbox_state_v2.get("demo")["profiles"])),
+        "engine_id": engine_id,
+        "issue": "environment_reference_unavailable",
+    }]
+    assert gate["outcome"] == "unavailable_backend"
+    assert gate["reason"] == "environment_reference_unavailable"
+
+    service._environment_manager_instance = _RemovalManager(  # noqa: SLF001
+        references={_digest("a"): {reference_id: 1}}
+    )
+    assert service.toolbox_consistency()["consistent"] is True
+    assert service.toolbox_gate(toolbox_id="demo", tool_name="Alpha")["outcome"] == "allowed"
 
 
 def test_missing_active_registration_requires_definition_reapply(tmp_path: Path) -> None:

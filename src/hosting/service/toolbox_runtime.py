@@ -3020,6 +3020,18 @@ class ToolboxRuntimeMixin:
                     "requires_confirmation": False,
                     "backend": "sandbox",
                 }
+        if not self._toolbox_registration_environment_reference_ready(reg):
+            return {
+                "status": "ok",
+                "engine_id": eid,
+                "toolbox_id": tid or self._registration_toolbox_id(reg),
+                "tool_name": name,
+                "outcome": "unavailable_backend",
+                "reason": "environment_reference_unavailable",
+                "executable": False,
+                "requires_confirmation": False,
+                "backend": "sandbox",
+            }
         result = {
             "status": "ok",
             "engine_id": eid,

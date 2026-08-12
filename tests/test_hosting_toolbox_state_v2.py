@@ -410,12 +410,51 @@ def test_archive_v1_validates_digest_moves_payload_and_initializes_empty_v2(tmp_
     assert (archive / "payload" / "toolbox_bundles" / "demo" / "revision" / "manifest.json").is_file()
     inventory = json.loads((archive / "inventory.json").read_text(encoding="utf-8"))
     assert inventory["parent_release_commit"] == "a" * 40
+    assert inventory["archive_scope"] == "legacy_toolbox_state_only"
+    assert inventory["shared_package_environment_state_archived"] is False
     assert {item["source_relative_path"] for item in inventory["files"]} == {
         "state/toolbox_sandboxes.json",
         "toolbox_bundles/demo/revision/manifest.json",
     }
     v2 = AtomicJsonToolboxStateV2Repository(state_root / "toolbox_sandboxes_v2.json").read()
     assert v2["version"] == 2 and v2["toolboxes"] == {}
+
+
+@pytest.mark.parametrize(
+    "newer_state_name",
+    [
+        "toolbox_sandboxes_v2.json",
+        "toolbox_definition_plans.json",
+        "toolbox_definition_candidates.json",
+    ],
+)
+def test_archive_v1_refuses_newer_toolbox_lifecycle_state_without_moving_shared_state(
+    tmp_path: Path, monkeypatch, newer_state_name: str
+) -> None:
+    root = tmp_path.resolve()
+    state_root = root / "state"
+    state_root.mkdir()
+    state_file = state_root / "toolbox_sandboxes.json"
+    state_file.write_text('{"version":1,"toolboxes":{}}', encoding="utf-8")
+    newer_state = state_root / newer_state_name
+    newer_state.write_text("{}", encoding="utf-8")
+    shared_state = root / "environments" / "state.json"
+    shared_state.parent.mkdir()
+    shared_state.write_text('{"contract":"hosting.environment_state.v2"}', encoding="utf-8")
+    digest = "sha256:" + hashlib.sha256(state_file.read_bytes()).hexdigest()
+    monkeypatch.setenv("MP13_RELEASE_COMMIT", "d" * 40)
+
+    with pytest.raises(ToolboxStateArchiveError, match="toolbox_archive_newer_state_present"):
+        EngineHostService.toolbox_state_archive_v1(
+            hosting_root=str(root),
+            expected_state_sha256=digest,
+            acknowledge_version_1_archive=True,
+        )
+
+    assert state_file.is_file()
+    assert newer_state.is_file()
+    assert shared_state.is_file()
+    assert not (root / "archive").exists()
 
 
 def test_archive_v1_refuses_running_daemon_or_digest_mismatch_without_moving_state(tmp_path: Path, monkeypatch) -> None:

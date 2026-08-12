@@ -18,6 +18,20 @@ from ..toolbox.identity import require_digest
 
 
 class ToolboxMaintenanceMixin:
+    def _toolbox_registration_environment_reference_ready(
+        self, registration: Mapping[str, Any]
+    ) -> bool:
+        environment = dict(registration.get("environment") or {})
+        reference_id = str(environment.get("environment_reference") or "").strip()
+        if not reference_id:
+            return True
+        environment_id = self._toolbox_registration_environment_key(dict(registration))
+        return any(
+            str(row.get("reference_id") or "") == reference_id
+            and str(row.get("environment_id") or "") == environment_id
+            for row in self._environment_manager.protection_snapshot()["live_references"]
+        )
+
     @staticmethod
     def _contains_environment_digest(value: Any, environment_digest: str) -> bool:
         if isinstance(value, str):
@@ -418,6 +432,13 @@ class ToolboxMaintenanceMixin:
                         "engine_id": engine_id,
                         "issue": "registration_toolbox_mismatch",
                     })
+                if not self._toolbox_registration_environment_reference_ready(registration):
+                    issues.append({
+                        "toolbox_id": toolbox_id,
+                        "profile_id": profile_id,
+                        "engine_id": engine_id,
+                        "issue": "environment_reference_unavailable",
+                    })
                 expected_names = {
                     name
                     for name, route in routes.items()
@@ -507,7 +528,14 @@ class ToolboxMaintenanceMixin:
                 "issue_count": len(issues),
                 **{
                     key: int(dict(references.get("summary") or {}).get(key) or 0)
-                    for key in ("stale_engine_count", "stale_bundle_count", "stale_environment_count")
+                    for key in (
+                        "stale_engine_count",
+                        "stale_bundle_count",
+                        "stale_environment_count",
+                        "live_generic_reference_count",
+                        "active_generic_execution_count",
+                        "ready_candidate_count",
+                    )
                 },
             },
         }

@@ -1,7 +1,7 @@
 # Unified hosting configuration and package/environment cutover plan
 
-Status: active breaking-change plan; execution paused at clean commit `757c13f`
-after the R7.0 consumer-contract freeze
+Status: active breaking-change plan; R7 toolbox adoption complete and R9 public
+acceptance/handoff active
 
 This is the current execution plan, not a history log. Completed-slice detail is
 retained in Git history and summarized in `hosting_status.md`. Exact external
@@ -121,20 +121,19 @@ only in `HOSTING_CLIENT_BREAKING_CHANGES.md`.
 | R2 paths/setup | Complete | Final aggregate/platform evidence at R9.7. |
 | R3 unified configuration | Complete | Final aggregate/platform evidence at R9.7. |
 | R4 startup cut | Complete | Final aggregate/platform evidence at R9.7. |
-| R5 generic packages | Complete | Toolbox planning adopts locks at R7.1. |
-| R6 generic environments | Active | Final legacy readers/aliases; candidate policy fields. |
-| R7 toolbox adoption | R7.2 complete | R7.3 maintenance adaptation. |
+| R5 generic packages | Complete | Final aggregate/platform evidence at R9.7. |
+| R6 generic environments | Complete | Final aggregate/platform evidence at R9.7. |
+| R7 toolbox adoption | Complete | Public acceptance/removal evidence at R9. |
 | R8 neutral state/workers | Complete | One conditional focused checkpoint below. |
 | R9 acceptance/handoff | Partial | Public surfaces, matrices, removals, docs, receipt. |
 
 Resume in this order:
 
-1. If no equivalent post-`757c13f` receipt exists, run once:
-   `python -m pytest tests/test_workflow_helper_service.py -q`.
-2. Close the remaining R3.2, R4.1/R4.2, and R6.5 P0 work.
-3. Implement R7.1, then R7.2/R7.3 against the frozen R7.0 contract.
-4. Complete R9 and run the aggregate/platform matrix only when legacy removals
-   make its result meaningful.
+1. Complete R9.1 public surfaces and typed high-level client methods.
+2. Complete R9.3 lifecycle/no-double coverage, then R9.4 removals.
+3. Bring permanent docs and the consumer handoff to the shipped contract.
+4. Run the aggregate/platform matrix only after removals make its result
+   meaningful, obtain the dependent receipt, and perform R9.8 closeout.
 
 Do not run the repository aggregate merely on resume. Its last diagnostic
 reached 509 passes before 100 expected legacy-fixture failures.
@@ -204,7 +203,7 @@ side-effect-free.
 
 ### R7.3 — adapt toolbox maintenance
 
-- [ ] Route toolbox consistency, gate, reconcile, repair, review snapshot,
+- [x] Route toolbox consistency, gate, reconcile, repair, review snapshot,
   references, GC, and archive behavior through generic package/environment
   operations where appropriate.
 - [x] Keep toolbox-only and generic shared state in separately versioned

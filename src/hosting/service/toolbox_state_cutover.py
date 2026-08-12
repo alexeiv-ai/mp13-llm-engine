@@ -18,6 +18,14 @@ from .toolbox_state_v2 import AtomicJsonToolboxStateV2Repository
 
 _DIGEST_RE = re.compile(r"sha256:[0-9a-f]{64}")
 _COMMIT_RE = re.compile(r"[0-9a-f]{40}")
+_NEWER_TOOLBOX_STATE_NAMES = (
+    "toolbox_sandboxes_v2.json",
+    "toolbox_definition_plans.json",
+    "toolbox_host_configurations.json",
+    "toolbox_dependency_approvals.json",
+    "toolbox_definition_confirmations.json",
+    "toolbox_definition_candidates.json",
+)
 
 
 class ToolboxStateArchiveError(RuntimeError):
@@ -125,8 +133,9 @@ def archive_toolbox_state_v1(
             raise ToolboxStateArchiveError("toolbox_archive_daemon_running")
     lock_path = source.with_suffix(source.suffix + ".lock")
     with _exclusive_process_file_lock(lock_path):
-        if v2_path.exists():
-            raise ToolboxStateArchiveError("toolbox_state_v2_already_initialized")
+        newer_state = [name for name in _NEWER_TOOLBOX_STATE_NAMES if (state_root / name).exists()]
+        if newer_state:
+            raise ToolboxStateArchiveError("toolbox_archive_newer_state_present")
         actual = _sha256(source)
         if actual != expected:
             raise ToolboxStateArchiveError("toolbox_archive_state_digest_mismatch")
@@ -158,6 +167,8 @@ def archive_toolbox_state_v1(
                 archive_root / "inventory.json",
                 {
                     "contract": "hosting.toolbox.state_v1_archive_inventory.v1",
+                    "archive_scope": "legacy_toolbox_state_only",
+                    "shared_package_environment_state_archived": False,
                     "hosting_root": str(root),
                     "state_sha256": actual,
                     "parent_release_commit": release_commit,
@@ -174,6 +185,8 @@ def archive_toolbox_state_v1(
                 {
                     "contract": "hosting.toolbox.state_v1_archive_receipt.v1",
                     "status": "complete",
+                    "archive_scope": "legacy_toolbox_state_only",
+                    "shared_package_environment_state_archived": False,
                     "state_sha256": actual,
                     "parent_release_commit": release_commit,
                     "inventory_count": len(inventory),

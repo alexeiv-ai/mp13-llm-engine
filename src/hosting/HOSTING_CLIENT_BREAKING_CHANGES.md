@@ -295,7 +295,10 @@ The complete toolbox command disposition is:
   above, plus `toolbox-gc` to `hosting-gc`; and
 - removed without an alias: `toolbox-state-archive-v1`. The v3 daemon rejects
   old state directly and provides only the separately authorized local cleanup
-  procedure; it does not expose a remote legacy-state archive command.
+  procedure; it does not expose a remote legacy-state archive command. The
+  procedure archives only legacy toolbox-owned state, never generic package or
+  environment state, and refuses to run after any newer toolbox lifecycle
+  repository has been initialized.
 
 Strings such as `toolbox-host`, `toolbox-ready`, `toolbox-executor-v1`, and
 `toolbox-host-capability-dispatch` are internal selectors, readiness states, or
