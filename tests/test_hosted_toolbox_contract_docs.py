@@ -7,7 +7,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 CONTRACT = ROOT / "src" / "hosting" / "HOSTED_TOOLBOX_CONTRACT.md"
-HANDOFF = ROOT / "src" / "hosting" / "HOSTING_CLIENT_BREAKING_CHANGES.md"
 ACCESS = ROOT / "src" / "hosting" / "HOSTING_ACCESS.md"
 OLD_OPERATION_CONTRACT = ROOT / "src" / "hosting" / "HOSTING_OPERATION_CONTRACT.md"
 
@@ -120,33 +119,6 @@ def test_contract_contains_only_supported_vocabulary() -> None:
         "compatibility",
     ]
     assert not {item for item in forbidden if item in text}
-
-
-def test_handoff_specifies_corrective_migration_and_adoption_receipt() -> None:
-    text = HANDOFF.read_text(encoding="utf-8")
-    prose = " ".join(text.split())
-    assert "[Hosted Toolbox Definition Contract](HOSTED_TOOLBOX_CONTRACT.md)" in text
-    assert "[Hosting Access §11.6]" in text
-    assert "Status: migration required before corrective hosting rollout (2026-08-10)" in text
-    assert "mp13-docs" in prose
-    assert "125d20f232bf5b755d18c1b23bc1e4b8929edf21" in text
-    for required in [
-        "## Adoption gate and pins",
-        "## Removed target and host-configuration contract",
-        "## Removed toolbox mutation commands and fields",
-        "## Exact replacement request sequence",
-        "## Retry, watch, confirmation, and recovery logic",
-        "## Dependent code, configuration, tests, and documentation",
-        '"command": "toolbox-confirm-definition-plan"',
-        '"confirmation_ref": "opaque-confirmation-ref"',
-        "toolbox-approve-confirmed-definition-plan",
-        "shared_environment_incomplete",
-    ]:
-        assert required in text
-    assert "Current dependent receipt status: **supplied**" in text
-    assert "06fc0d3f7df..." in text
-    assert "Windows64 with CPython 3.12.7" in text
-    assert "No pending client-breaking-change action remains" not in prose
 
 
 def test_generic_operation_contract_is_consolidated_into_hosting_access() -> None:

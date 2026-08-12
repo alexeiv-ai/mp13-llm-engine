@@ -1,857 +1,935 @@
-# Hosting toolbox completion plan
-
-Status: Active corrective work
-
-This plan replaces the completed 2026-08-08 ledger. It describes only the
-remaining corrective work and the code boundaries that must change. Progress is
-recorded in [hosting_status.md](hosting_status.md); normative behavior belongs in
-[HOSTED_TOOLBOX_CONTRACT.md](HOSTED_TOOLBOX_CONTRACT.md).
-
-The product is unreleased. When a final design supersedes an existing public or
-internal compatibility path, the implementation slice must remove the old path,
-tests, commands, models, aliases, fallbacks, and documentation. It must not keep
-a legacy adapter or deprecation period.
-
-## Ownership and dependent-project rule
-
-This repository must not modify a dependent project. In particular, no slice in
-this plan may edit `mp13-docs`. Read-only inspection may be used to understand a
-consumer, but its maintainers perform and validate their own migration.
-
-Before a parent change requires any consumer or administrator action,
-[HOSTING_CLIENT_BREAKING_CHANGES.md](HOSTING_CLIENT_BREAKING_CHANGES.md) must be
-populated with all of the following:
-
-- removed contract names, payload fields, commands, error codes, and behavior;
-- the exact replacement request/response sequence with representative payloads;
-- changes to client branching, retry, approval, confirmation, and recovery logic;
-- code, configuration, tests, and documentation the dependent must remove;
-- code, configuration, tests, and documentation the dependent must add or change;
-- parent release/commit pin, rollout order, and an adoption receipt supplied by
-  the dependent project.
-
-The handoff file remains populated until every listed dependent confirms
-adoption. Parent code must not infer adoption by changing a dependent worktree.
-
-## Objective
-
-An authenticated consumer submits a complete desired toolbox definition that
-may add, update, or remove more than one tool. The daemon analyzes imports,
-offers exact current-host package mutations for confirmation, obtains distinct
-privileged approval when policy requires it, constructs immutable environments,
-warms changed workers, and atomically publishes the confirmed effective
-definition.
-
-The result must support:
-
-- packages absent from built-in templates without a local terminal session;
-- deterministic notification and confirmation of package additions, version
-  transitions, and removals, including transitive packages;
-- partial consumer decline: affected proposed tools are skipped and identified
-  without silently removing their currently active versions;
-- host-configured built-in realization, package sources, air-gapped artifacts,
-  and safe removal of unreferenced non-built-in environments;
-- CPython 3.12 on Windows x64/ARM64, Linux glibc x64/ARM64, and macOS ARM64;
-- consumer-triggered, conflict-safe healing after daemon restart without
-  restoring stale workers or leaking daemon/runtime state.
-
-## Existing code map and defects
-
-Implementation work must start from these seams rather than introduce a second
-parallel subsystem.
-
-1. Definition and dependency request models are in
-   `toolbox/bundle_models.py` (`ToolboxDependencyRequest`,
-   `ToolboxDefinitionSpec`, and the V2 assignment requests). They currently
-   represent one complete requested definition but not confirmation choices or
-   an effective definition after skips.
-2. Import analysis and reviewed import-to-distribution mapping are in
-   `toolbox/dependency_analysis.py` and `toolbox/catalog.py`. They select a
-   template or unresolved custom delta; they do not produce bounded alternative
-   exact locks from configured sources.
-3. `toolbox/definition_planner.py::_resolve_member` computes a custom lock digest
-   from the direct delta and literal `"artifacts": []`. It therefore cannot be
-   passed to the real hermetic builder.
-4. `service/toolbox_plans.py::PersistedToolboxDefinitionPlan` pins catalog and
-   package-policy revisions but has no source/config revision, exact resolved
-   artifacts, confirmation choices, effective definition, or skip receipt.
-5. `service/toolbox_runtime.py::toolbox_plan_definition`,
-   `toolbox_approve_definition_plan`, and `toolbox_apply_definition` expose the
-   current sequence. Approval is minted through the ordinary consumer route and
-   apply requires the original definition, so consumer confirmation and
-   privileged dependency approval are incorrectly conflated.
-6. `toolbox/host_project_config.py::ToolboxHostProjectConfiguration` accepts a
-   shipped catalog resource, two x86 targets, and source IDs. It does not model
-   built-in intent, source definitions/mode/revision, resolver policy, imported
-   air-gap artifacts, or non-built-in environment retention/removal.
-7. `daemon/local_ipc.py::EngineHostDaemon` constructs `EngineHostService`
-   without the configuration and source inputs accepted by
-   `service/host_service.py`, leaving normal daemon startup disconnected from
-   real materialization.
-8. `service/toolbox_catalog.py::materialize_toolbox_environment_for_bundle`
-   accepts a verified template. `toolbox/shipped_templates.py` publishes lock
-   JSON as an artifact, while `toolbox/hermetic_environment.py` requires one
-   compatible exact wheel per locked distribution. Existing setup tests bridge
-   this mismatch with doubles.
-9. Target defaults and validators are duplicated in
-   `toolbox/host_project_config.py`, `toolbox/dependency_policy.py`,
-   `toolbox/catalog.py`, `toolbox/hermetic_environment.py`,
-   `toolbox/orchestration.py`, and `service/toolbox_runtime.py`. Non-Windows is
-   often assumed to be Linux x64; ARM64 and macOS are not modeled consistently.
-10. Rollout and persisted-state paths in `toolbox/orchestration.py`,
-    `service/toolbox_rollout.py`, `service/toolbox_state_v2.py`,
-    `service/toolbox_env.py`, and `service/engines.py` have manifest-normalization,
-    identical-reapply, deterministic candidate-ID, and runtime-repair defects.
-11. POSIX `sandbox/launcher.py` uses `plain_subprocess`; daemon-death containment
-    is absent. Orphan scanning and cleanup must cover
-    `hosting.toolbox_executor_ipc` and its IPC/spec/candidate resources before a
-    POSIX target can be advertised for untrusted toolbox execution.
-12. **Blocking interactive/network boundary.** Existing management commands are
-    dispatched through synchronous `engine_host_channel.py::_invoke` calls.
-    `toolbox_plan_definition` and the pre-dispatch part of
-    `toolbox_apply_definition` analyze synchronously; `toolbox_describe` may wait
-    ten seconds on worker IPC; GC/repair/reconcile and hosted cancellation may
-    wait on process/filesystem work. The planned resolver would add HTTPS work
-    to the synchronous planning path. A request must never hold its connection
-    while waiting for a human package confirmation or dependency approval.
-    `daemon/local_ipc.py` already has `op-start`/`op-status`, but that store is
-    separate from `service/operation_repository.py`, has only 200 snapshots, and
-    does not reconcile an in-flight record after restart. Workflow/proxy stream
-    sessions are execution-specific and in-memory, so they are not a durable
-    substitute.
-
-## Final mutation protocol
-
-### Roles are separate
-
-The final protocol has three distinct authorities:
-
-- the toolbox consumer requests a complete definition and confirms offered
-  package choices;
-- a dependency approver authorizes the exact accepted custom lock when host
-  policy requires privileged review;
-- a host administrator configures built-ins, artifact sources, trust, air-gap
-  ingestion, retention, and explicit environment removal.
-
-No operation may silently borrow another role. The existing consumer-callable
-approval minting path is removed when the replacement approver path lands.
-
-### Plan response and bounded alternatives
-
-One plan may contain multiple tool additions, updates, and removals. Planning
-must resolve the complete definition against the active definition and return
-an ordered `environment_mutations` offer. Each proposed environment entry must
-contain:
-
-- stable affected tool keys and whether each is added, updated, unchanged, or
-  explicitly removed;
-- selected base template ID and immutable revision;
-- exact direct and transitive package additions and removals compared with the
-  active lock, with upgrades/downgrades represented as an explicit version
-  transition;
-- import root, mapped distribution, dependency reason, version, wheel filename,
-  artifact digest, current-host compatibility tags, provenance, and logical
-  source ID for every exact artifact;
-- at most three deterministic viable resolution/source alternatives, including
-  the policy-preferred selection; and
-- whether consumer confirmation and separate privileged approval are required.
-
-Alternatives may use only administrator-configured sources. Responses expose a
-logical source ID and sanitized origin URL, never credentials, signed query
-parameters, or daemon filesystem paths. If the solver has more viable outcomes,
-it reports that alternatives were truncated; it does not enumerate an
-unbounded dependency solution space. A missing compatible exact wheel is a
-bounded planning/setup error rather than permission to compile an sdist.
-
-The persisted plan in `service/toolbox_plans.py` must pin the definition, active
-revision, target identity, catalog revision, host-config revision, dependency
-policy revision, source-set revision, every offered exact lock/artifact digest,
-and expiry. Any pin change makes confirmation or apply stale and requires a new
-plan.
-
-### Consumer confirmation and skip semantics
-
-Add a confirmation operation between plan and approval/apply. Its request names
-the plan and, for every offered environment, selects one offered alternative
-and accepts or declines its package additions. It cannot submit a new version,
-URL, source, lock, artifact, path, or install command.
-
-The final semantic sequence is `toolbox_get_definition`,
-`toolbox_plan_definition`, `toolbox_confirm_definition_plan`, and
-`toolbox_apply_definition`. Consumers submit the three potentially long mutation
-commands through the generic `op-start` façade described below. Planning's
-terminal hosted result contains the plan and alternatives. Confirmation's
-terminal hosted result supplies an opaque `confirmation_ref` after acquiring
-and verifying selected package artifacts. Apply accepts `plan_id`,
-`confirmation_ref`, `request_id`, and, only when required,
-`dependency_approval_ref`; it no longer accepts or re-resolves a second copy of
-the definition. The privileged, bounded synchronous operation is
-`toolbox_approve_confirmed_definition_plan`. Remove
-`toolbox_approve_definition_plan` and its dispatch/channel/CLI surface when the
-replacement is available.
-
-The daemon returns a durable, idempotently recoverable confirmation receipt
-bound to the actor, plan, target, selected exact resolutions, accepted and
-declined package groups, and resulting effective-definition hash. The receipt
-must list:
-
-- accepted tool keys;
-- skipped tool keys with stable reason codes and the declined direct or
-  transitive package choice that affected each tool;
-- explicit tool removals that will proceed;
-- exact package additions, removals, and version transitions for the effective
-  definition; and
-- whether privileged dependency approval is still required.
-
-Skip behavior is deterministic:
-
-1. Declining any required package skips every proposed new tool that depends on
-   it directly or transitively.
-2. If an update to an active tool is skipped, the previous active tool remains
-   in the effective definition; it is not treated as an implicit removal.
-3. Explicit removals still proceed because they require no package install.
-4. Accepted tools may proceed only if their complete shared environment remains
-   resolvable after all declines. Otherwise they are also skipped with
-   `shared_environment_incomplete`.
-5. Namespace/file conflicts are revalidated on the effective definition. A
-   conflict cannot be resolved by arbitrary tool ordering; affected entries are
-   rejected with a stable diagnostic and apply does not start.
-6. Apply accepts the plan plus confirmation receipt and publishes exactly the
-   pinned effective definition. It must not reinterpret the original request.
-
-An offer containing only removals still produces a notification receipt but
-requires no install acceptance. Package removal means removal from the new
-logical lock; physical wheel/environment deletion remains reference-safe GC.
-
-### Privileged approval and apply
-
-After confirmation, policy may require a dependency approver to authorize the
-exact effective custom locks and artifacts. Approval binds the confirmation
-receipt and all plan/config/source/policy pins. It cannot approve declined or
-unoffered choices. Apply validates and consumes the confirmation and approval
-receipts, builds or reuses immutable environments, probes required imports,
-warms unique candidates, and atomically publishes the complete route map.
-
-No environment is mutated or uninstalled in place. Failure before publication
-leaves the previous definition active. Publication failure drains candidates and
-releases only their references.
-
-## Host configuration and setup contract
-
-Extend `ToolboxHostProjectConfiguration` rather than add terminal-only state.
-The strict, revisioned host-owned configuration must model:
-
-- current-target detection policy; never a configured cross-target build;
-- built-in template intents (`template_id`, imports, package requirements,
-  sandbox policy, required/prewarm flags, and provenance);
-- ordered package sources with logical ID, kind (`https_index`,
-  `https_artifact`, or `airgap_store`), sanitized origin, credential reference,
-  allowed package namespaces, priority, trust keys, and download bounds;
-- resolution mode (`online`, `prefer_airgap`, or `air_gapped`), timeouts, maximum
-  bytes/artifacts, allowed redirects/origins, and wheel-only policy;
-- immutable artifact-cache and non-built-in-environment retention policy,
-  including grace period, byte/count bounds, protected digests, and whether
-  unreferenced custom revisions are removed on config apply.
-
-Configuration apply is atomic and creates a new config/source-set revision. It
-invalidates unused plans and confirmation/approval receipts, but never mutates
-an active environment. Existing definitions remain pinned until explicitly
-replanned. Source credentials stay daemon-owned.
-
-Air-gapped operation has two administrator paths: a configured read-only
-artifact store, or a bounded signed artifact bundle uploaded through an
-authenticated chunked admin control operation and committed into that store.
-Normal toolbox consumers cannot supply archives or paths. Setup verifies the
-manifest, hashes, signatures, exact target tags, and complete closure before
-publication. If a required built-in wheel is unavailable, setup reports the
-missing distribution/tags/source IDs and does not enter toolbox-ready state.
-
-The upload lifecycle is begin/chunk/commit/cancel, with one durable operation ID,
-declared total size and archive digest, bounded chunk and archive sizes, expiry,
-and idempotent commit. It stages outside the trusted store and publishes only
-after full verification; interruption leaves no partially visible source.
-
-Environment deletion is not encoded as a repeatedly executed list of paths in
-configuration. The configuration authorizes retention/automatic GC, while a
-separate authenticated admin operation removes an exact non-built-in
-environment digest. Removal is refused while any active, candidate, persisted
-operation, confirmation, or plan reference exists. Built-in revisions cannot be
-explicitly removed; they are replaced through built-in config revision and
-setup, with old revisions reclaimed only when unreferenced.
-
-Name the explicit operation `toolbox_environment_remove`. Its result reports
-`removed`, `already_absent`, or a stable list of blocking reference kinds. It
-never accepts a path, glob, logical template ID, or `force` bypass.
-
-## Package ingress vehicle
-
-New packages always arrive as exact wheel artifacts and converge on the daemon's
-content-addressed artifact store before any environment is built.
-
-### Online source
-
-The daemon reads PEP 503/691 metadata from configured HTTPS sources, resolves
-current-host wheel alternatives, and includes source-provided hashes in the
-plan. After consumer confirmation, the daemon downloads only the selected exact
-wheels using daemon-owned credentials. It stages each download, enforces size
-and time bounds, verifies filename/tags/size/digest/provenance, and atomically
-publishes it under the digest. A source that cannot provide a trusted digest is
-not an eligible alternative.
-
-### Air-gapped source
-
-The transport vehicle is a strict signed ZIP artifact bundle, not a venv or a
-consumer-provided install script. It contains only:
-
-- one canonical manifest with bundle/target/source revision and, for every
-  wheel, normalized distribution, exact version, filename, size, SHA-256,
-  compatible tags, and provenance;
-- one detached signature/key ID accepted by host configuration; and
-- wheels stored by manifest-declared names beneath a single `wheels/` prefix.
-
-Import rejects undeclared entries, duplicate normalized names, symlinks,
-absolute/parent-traversal paths, compression/size-limit violations, target
-mismatches, invalid signatures, and incomplete closures. An administrator may
-place the bundle in a configured read-only air-gap store or send it with the
-authenticated begin/chunk/commit upload lifecycle. Upload commit imports wheels
-into the same content-addressed store used by online acquisition.
-
-### Environment construction
-
-`toolbox/hermetic_environment.py` consumes only the verified artifact-store
-paths pinned by the plan/confirmation. It installs the full exact lock with
-`--no-index --no-deps`, then performs import probes. The consumer never uploads
-a package, passes an index URL, or invokes pip. Downloading/caching a confirmed
-wheel is acquisition; creating a new immutable environment is the confirmed
-environment mutation. Neither action alters an active environment.
-
-## Non-blocking API and progress contract
-
-Python service methods and `engine_host_channel.py` wrappers are synchronous
-functions today. `daemon/local_ipc.py::_dispatch` runs ordinary service calls in
-`asyncio.to_thread`, which protects the daemon event loop but still blocks the
-requesting client until that call completes. That is not an asynchronous public
-API.
-
-The final rule is:
-
-- bounded local reads and receipt/authorization checks may return synchronously;
-- any network access, artifact transfer/verification, dependency resolution,
-  environment build/probe/prewarm, worker rollout/drain, recursive cleanup, or
-  restart repair returns a durable `HostedOperationRef` immediately;
-- duplicate/idempotent submission returns current durable status immediately;
-  it never waits for the first request to finish; and
-- cancellation records `cancel_requested` immediately and performs teardown in
-  the operation worker. The cancel request does not wait for worker shutdown.
-
-### Least-invasive consumer API
-
-Use the existing generic `op-start`, `op-status`, and `op-cancel` commands as the
-consumer façade instead of adding a separate `*-start`/`*-status` family for
-every long hosting command. A consumer submits the existing command name and
-payload once through `EngineHostChannel.start_host_operation`, then observes the
-returned operation ID with `get_host_operation_status`.
-
-Existing high-level channel methods such as `toolbox_plan_definition` and
-`toolbox_apply_definition` become thin wrappers around `start_host_operation`,
-so most consumers do not construct the generic envelope themselves. Their final
-return type is operation status and the required result-handling change is
-documented in the breaking handoff. Raw top-level dispatch of a command
-classified as long must fail with `operation_start_required`; there is no second
-synchronous execution path.
-
-The server implementation must stop treating that façade as a second source of
-truth. For the long commands identified below, `daemon/local_ipc.py::op-start`
-must prepare/dispatch through `service/operation_repository.py` and
-`service/hosted_operations.py`, and `op-status`/`op-cancel` must delegate to the
-canonical hosted record. The target payload must contain a request ID and the
-canonical fingerprint must make retrying `op-start` return the same operation.
-The current `operations.json` snapshot path may remain only for non-toolbox
-daemon operations that are independently part of the final product contract; it
-is removed if no such user remains and must never mirror a hosted operation.
-
-Human decisions are continuations, not running jobs. Planning terminates with a
-result that says confirmation/approval is required. The consumer collects the
-decision without an open daemon request, then starts the confirmation or apply
-operation. No background worker waits for a person and no approval callback
-lease is held across disconnect.
-
-The existing workflow Python/JS and proxy streaming APIs are not reused: their
-stream IDs and event buffers are tied to live execution pools and are not the
-durable operation ledger. For convenient progress, add
-`EngineHostChannel.watch_host_operation(operation_id, ...)`, a client-side
-iterator that polls `op-status` and yields changed snapshots. Optionally add
-`after_updated_at` plus a bounded `wait_timeout_ms` to `op-status` for long
-polling. This is a transport optimization only; correctness and recovery remain
-status-based. No SSE or new generic stream-session protocol is required.
-
-Each long operation updates the existing strict `HostedOperationProgress`
-snapshot with `phase`, stable `code`, `completed_units`, `total_units`,
-`updated_at_ms`, bounded `summary`, and `cancellable`. Phase defines the units:
-artifact acquisition uses verified bytes, resolution/probe/warmup use completed
-items, and cleanup uses removed candidates. Status exposes the latest committed
-snapshot; terminal result contains the detailed package/tool receipt. Suggested
-polling is immediate, then 500 ms, backing off to 2 seconds while unchanged.
-
-### Final async audit
-
-| API group | Final client behavior | Disposition |
-| --- | --- | --- |
-| `toolbox_get_definition`, template list/describe, references, consistency, review snapshot, hosted-operation status/result/resolve | Synchronous and client-blocking, but local/bounded | Keep synchronous and bounded. |
-| `toolbox_describe` and live refresh | Persisted/registration inventory is synchronous and bounded. | Live worker inventory is the durable `toolbox_describe_refresh` operation submitted through `op-start`. |
-| Plan, confirm, apply | Each long command returns canonical durable status immediately. | Human review occurs only between terminal plan/confirmation operations. |
-| Dependency approval | `toolbox_approve_confirmed_definition_plan` is a bounded exact-receipt mint. | Only the distinct dependency-approver authority may invoke it. |
-| Template lifecycle | Construct/prewarm are durable; activate/replace/deprecate/revoke are bounded exact-revision mutations. | Raw publish and combined publish/activate are removed. |
-| GC, repair, reconcile, and exact environment removal | Mutating work is submitted through `op-start`. | Reference/consistency/review reads remain bounded. |
-| `toolbox_execute` duplicate attach | Returns the current durable status immediately. | It never waits for the original worker call. |
-| Hosted cancellation | Persists cancellation progress and acknowledges immediately. | Worker teardown/repair continues asynchronously. |
-| Daemon built-in realization and artifact import | System setup and upload commit are canonical durable operations. | Control readiness remains available while toolbox readiness is pending/degraded. |
-
-The implemented `operation_contract.py::HostedExecutionKind` includes
-`toolbox_definition_plan`, `toolbox_definition_confirm`, `toolbox_setup`,
-`toolbox_template_construct`, `toolbox_artifact_import`,
-`toolbox_environment_remove`, `toolbox_maintenance`, and
-`toolbox_describe_refresh` in addition to apply/prewarm/tool execution.
-`HostedOperationSelector` includes
-`environment_digest`, `artifact_bundle_id`, and `host_scope` (whose only initial
-ID is `toolbox-host`) in addition to toolbox/template/engine selectors.
-`service/hosted_operations.py::hosted_operation_resolve_request` defines one
-canonical namespace per kind and cancellation policy defines the last
-cancellable phase. Add strict phase sets in `operation_contract.py`; do not
-accept arbitrary progress phase strings.
-
-## Target and artifact contract
-
-The initial target set is CPython 3.12 Windows x64/ARM64, Linux glibc
-x64/ARM64, and macOS ARM64. One detector must derive interpreter ABI and
-compatible `packaging.tags.sys_tags()` from the running daemon. Exact internal
-target identity includes Python ABI, OS, architecture, and the platform baseline
-needed for wheel compatibility.
-
-Setup resolves and downloads only for that identity. A daemon never builds or
-ships a venv for another host. Signed locks and wheels may be transported; the
-destination always constructs and probes its own environment. Native CI must
-prove resolution, compatible wheel selection, native-extension import, sandbox
-containment, restart, and cleanup on every advertised target.
-
-Windows x64 and WSL2 Linux x64 execution are available to this project. All
-in-scope Linux implementation and test work runs in WSL2 with a Linux Poetry
-environment; timing-sensitive work should use the WSL ext4 filesystem rather
-than DrvFS where practical. WSL2 exercises the real Linux x64 target, wheel,
-AF_UNIX/path, process, parent-death, cleanup, and restart paths, but its result
-must be labeled WSL2 rather than a separate native-host receipt. For Windows
-ARM64, Linux ARM64, and macOS ARM64, record code-path review of target
-normalization, ordered `sys_tags()`, incompatible-wheel rejection,
-filesystem/IPC selection, containment, cleanup, workflow mapping, and test
-collection. Native Linux-host and ARM real-test receipts are external release
-evidence and explicitly out of scope for this corrective plan; their absence
-does not block plan closure and no reviewed-only target is reported as passed.
-
-Source builds are intentionally outside this plan. If an allowed package has no
-compatible verified wheel for the daemon target, the resolution fails. Adding
-reproducible sdist compilation would require a separately reviewed compiler,
-toolchain, build-sandbox, provenance, and cache contract.
-
-## Priority and required implementation expertise
-
-The expertise label is the minimum primary-agent level for the item, not a
-license to work ahead of prerequisites. A higher tier may take any lower-tier
-item. `medium` work starts only after its governing contract is frozen and must
-not make new protocol, concurrency, destructive-operation, or security choices.
-
-| Priority | Required expertise | Plan items | Why |
-| --- | --- | --- | --- |
-| P0: contract/concurrency decisions | average | R0-02, R3-01, R3-04, R4-01, R4-02, R4-04, R6-01, R6-02, R6-03, R6-06 | Effective-definition semantics, authority separation, immutable receipt binding, atomic publication/healing, and non-blocking idempotency have the highest wrong-implementation blast radius. |
-| P0: platform/package implementation | high | R1-01..R1-03, R2-01..R2-06, R3-02, R3-03, R3-05..R3-07, R4-03, R4-05 | Requires repository-wide Python changes, resolver/artifact expertise, durable operations, daemon wiring, and native-platform diagnosis under an already decided contract. |
-| P1: destructive/admin safety | average | R5-02, R6-04 | Exact environment deletion and native process/sandbox containment require adversarial reference and OS-lifecycle reasoning. |
-| P1: lifecycle implementation | high | R5-01, R5-03, R5-04, R5-05, R6-05 | Dependency contraction, immutable template lifecycle, maintenance operations, and native failure testing are substantial but governed by the P0 design. |
-| P2: production acceptance | high | R7-02 | The no-double suite must diagnose cross-boundary failures rather than merely assemble fixtures. |
-| P0/P2: precise handoff and audit | medium | R0-03, R7-01, R7-03, R7-04 | Once replacement contracts are frozen, drafting exact migration payloads, running prescribed suites, recording evidence, and removing enumerated obsolete docs/tests are bounded tasks. A high-or-higher reviewer verifies the handoff before release. |
-| P3: test determinism and performance | medium/high | R8-01..R8-05 | Measurement and lane definition are bounded medium work. Shared immutable fixture design, worker-event synchronization, and safe parallel execution require high skill because test isolation must not weaken process, restart, artifact, or security boundaries. |
-
-Execution order is P0 contract decisions, P0 platform/package implementation,
-P1 lifecycle/safety, then P2 acceptance. R0-03 is prepared immediately before
-each client-visible P0/P1 slice, not deferred to final closeout.
-
-### Slice and commit discipline
-
-Every implementation commit is one declared plan slice. The following rules are
-mandatory during execution:
-
-1. Start from a clean worktree and record the slice ID(s), required expertise
-   (`average`, `medium`, or `high`), production boundary, and exact tests in
-   `hosting_status.md` before changing production code.
-2. One slice may contain multiple plan items only when they are tightly coupled,
-   adjacent in dependency order, and have the same required expertise label.
-3. A change from one identified expertise label to another always ends the
-   current slice. Finish validation, update checkboxes/status, commit, and verify
-   a clean worktree before the next expertise level begins. This applies even if
-   the same person or agent performs both slices.
-4. The slice commit contains its production code, focused tests, normative docs,
-   breaking-change handoff updates, `hosting_status.md` evidence, and `[x]`
-   updates for every plan item completed by that commit. Checkbox updates are
-   not deferred to a later bulk documentation commit.
-5. Mark an item `[x]` only after its named production boundary and required tests
-   pass. If an item cannot reasonably fit in one reviewable commit, first split
-   it in this plan into ordered, independently verifiable sub-checkboxes; check
-   only the subitems completed by each slice and check the parent when all pass.
-6. An incomplete or failing slice leaves its boxes unchecked. Diagnostic work
-   may be committed only as an explicitly declared diagnostic slice with its own
-   scope/evidence; it must not be mixed with the next implementation level.
-7. Use a concise commit subject containing the principal work ID, for example
-   `hosting: detect current target (R1-01)`. After the commit, report its hash and
-   confirm the worktree is clean; a commit cannot record its own hash in its
-   contents.
-
-The already adopted consumer baseline does not authorize parent-side consumer
-edits. Only newly implemented breaks create new handoff work, and the medium
-handoff slice must be committed before switching to the implementation slice's
-expertise level.
-
-### Code guidance for high work
-
-| Items | Start at these production seams | Required proof |
-| --- | --- | --- |
-| R1-01..R1-03 | Replace `_SUPPORTED_TARGETS` and every `os.name` x64 fallback in `toolbox/host_project_config.py`, `toolbox/dependency_policy.py`, `toolbox/catalog.py`, `toolbox/hermetic_environment.py`, `toolbox/orchestration.py`, and `service/toolbox_runtime.py` with one detector returning ABI plus ordered `packaging.tags.sys_tags()`. | Extend host-config, catalog, hermetic-builder, rollout, and hash-vector tests; native jobs must assert the detected machine and import a native wheel. |
-| R2-01..R2-06 | Change `ToolboxHostProjectConfiguration.from_dict`; pass the result from `daemon/local_ipc.py::EngineHostDaemon.__init__` to `service/host_service.py::EngineHostService`; replace `initialize_configured_toolbox_templates`, `shipped_templates.py`, and shipped resource locks with intent resolution; converge acquisition in `service/toolbox_materialization.py` and `toolbox/hermetic_environment.py`. | `tests/test_hosting_toolbox_host_config.py` and `tests/test_hosted_toolbox_shipped_templates.py` must use the normal daemon and real materializer; add online/air-gap source fixtures that verify the same artifact digest and a missing-wheel not-ready result. |
-| R3-02, R3-03, R3-07 | Add strict kinds/phases in `operation_contract.py`; make `daemon/local_ipc.py` `op-start`/`op-status`/`op-cancel` delegate to `AtomicJsonHostedOperationRepository`; update namespace resolution in `service/hosted_operations.py`; dispatch planning/confirmation in `service/toolbox_runtime.py`; expose start/status/watch helpers in `engine_host_channel.py` and CLI. Never write a parallel record to `operations.json`. | Extend definition transport/service/public-guarantee tests with lost-response retry, daemon restart, long-poll timeout, changed-snapshot iteration, no open request during human decision, and one canonical receipt per request ID. |
-| R3-05, R3-06 | Build alternatives from `toolbox/dependency_analysis.py` import evidence and `toolbox/catalog.py` mapping rules; persist the exact source/config/artifact pins in `service/toolbox_plans.py`; sanitize projections in `service/toolbox_runtime.py`. | Extend the definition matrix with multiple tools sharing direct/transitive dependencies, three-choice truncation, declined packages, source redaction, and stable ordering through the authenticated daemon channel. |
-| R4-03, R4-05 | Carry the confirmed resolved input through `toolbox/orchestration.py::spawn_resolved_assignments` into `service/toolbox_catalog.py::materialize_toolbox_environment_for_bundle` and `service/toolbox_materialization.py`; feed the exact wheel closure to `HermeticToolboxEnvironmentBuilder`. | Replace hand-built resolved inputs in hermetic-builder tests with plan/confirm output; prove every pre-publication failure leaves active state, routes, registrations, and references unchanged. |
-| R5-01, R5-03..R5-05 | Use `definition_planner.py::classify_toolbox_profiles`, `service/toolbox_rollout.py`, `service/toolbox_env.py`, and catalog lifecycle methods. Route GC/repair/reconcile through the generic operation façade and preserve reference checks in the builder index. | Extend maintenance, catalog-control, and atomic-routing tests with shared-lock contraction, inactive construction, lifecycle replacement, cancellation, restart recovery, and no synchronous recursive deletion. |
-| R6-05 | Exercise `service/toolbox_rollout.py::recover`, `_retire_toolbox_registration`, `service/engines.py`, and the OS launcher/worker ownership boundary. | Extend resolved-rollout, atomic-routing, and sandbox tests with native abrupt death, two healers, and checkpoints immediately before/after publication. |
-| R7-02 | Create a real-daemon suite beside the current definition transport tests; do not inject catalog/materializer doubles or manufacture `ResolvedToolboxEnvironmentInput`. | One suite must traverse config load, source acquisition, plan/confirm/approve/apply, execution, removal, restart healing, maintenance, and terminal result recovery. |
-
-### Code guidance for medium work
-
-| Items | Bounded instructions |
-| --- | --- |
-| R0-03, R7-01 | Diff command names and payloads in `daemon/local_ipc.py::_call_service`, `engine_host_channel.py`, `engine_host_cli.py`, `service/auth.py`, and `service/policy.py`. Put exact removed/replacement JSON, retry/status/watch logic, and obsolete client branches/tests in `HOSTING_CLIENT_BREAKING_CHANGES.md`; never edit the dependent repository. |
-| R7-03 | Run the focused files named in the high-work table, `tests/test_hosted_toolbox_contract_docs.py`, all native CI commands supplied by the high implementation slices, then the full parent suite. Record command, count, duration, and commit in `hosting_status.md`; do not reinterpret a failing contract. |
-| R7-04 | Use `rg` for every removed command, contract version, old target literal, shipped realized lock, raw publish payload, `wait_for_terminal` attach, and toolbox use of `operations.json`. Reconcile `HOSTED_TOOLBOX_CONTRACT.md`, `HOSTING_ACCESS.md`, `sandbox/TOOLBOX_WORKER.md`, CLI docs, plan/status, and the breaking handoff with the surviving symbols. |
-
-## Itemized corrective work
-
-Every slice follows the discipline above, passes `git diff --check`, and is
-committed separately. A checkbox is completed only after its production
-boundary—not a double—passes.
-
-### R0 - Corrective contract baseline
-
-- [x] **R0-01** Replace the obsolete ledger with this code-referenced plan and
-  compact current-state ledger; record that no runtime behavior changed.
-- [x] **R0-02** Update `HOSTED_TOOLBOX_CONTRACT.md` and
-  `sandbox/TOOLBOX_WORKER.md` as each replacement slice becomes real. Remove
-  superseded normative text rather than retain compatibility notes.
-- [x] **R0-03** Before the first client-visible implementation break, replace
-  the reset marker in `HOSTING_CLIENT_BREAKING_CHANGES.md` with the complete
-  dependent handoff described above. Do not edit dependent repositories.
-
-### R1 - Canonical current-host target
-
-- [x] **R1-01** Add one detector module using the running interpreter and
-  `packaging.tags.sys_tags()`. Replace target defaults in
-  `host_project_config.py`, `dependency_policy.py`, `catalog.py`,
-  `hermetic_environment.py`, `orchestration.py`, and `toolbox_runtime.py`.
-- [x] **R1-02** Update strict target/lock/catalog/cache models for the five
-  target families listed above and reject cross-target wheels before download or
-  build.
-- [x] **R1-03** Add native CI jobs and production-boundary tests, run the
-  available Windows x64 boundary, and review unavailable platform paths. A
-  target is not recorded as natively validated until its sandbox, worker
-  ownership, restart, and cleanup tests pass there.
-  - [x] **R1-03a** Add native Windows x64/ARM64, Linux glibc x64/ARM64, and
-    macOS ARM64 jobs that assert the canonical detected machine and import a
-    native CPython 3.12 wheel.
-  - [x] **R1-03b** Run the sandbox, worker-ownership, restart, and cleanup
-    boundary on Windows x64 and use WSL2 for all in-scope Linux x64 execution.
-    For Windows ARM64, Linux ARM64, and macOS ARM64, review detector/tag, wheel,
-    IPC/path, containment, cleanup, workflow, and test-collection code without
-    converting review into a pass. Native Linux-host and ARM receipts are out
-    of scope.
-
-### R2 - Revisioned hosting configuration and built-ins
-
-- [x] **R2-01** Replace the current shipped-catalog-only schema in
-  `toolbox/host_project_config.py` with the strict built-in/source/mode/retention
-  schema above; remove old schema parsing and standard-config fixtures.
-  - [x] **R2-01a** Land strict built-in intent, source, resolution, and retention
-    models with deterministic config/source-set revisions; switch
-    `EngineHostService` to the new schema and delete every old field parser.
-  - [x] **R2-01b** Persist atomic configuration revisions, invalidate unused
-    plans/receipts on revision changes, and leave active environments pinned.
-- [x] **R2-02** Wire configuration, sources, policy, and target detection through
-  `daemon/local_ipc.py::EngineHostDaemon` into `EngineHostService`; refuse
-  toolbox readiness on invalid or incomplete setup.
-  - [x] **R2-02a** Add strict daemon construction inputs for configuration,
-    logical source bindings, dependency policy, and detected target; prove the
-    normal daemon supplies them to `EngineHostService`.
-  - [x] **R2-02b** Publish bounded not-ready diagnostics for missing, invalid, or
-    incomplete setup without partially publishing built-ins.
-- [x] **R2-03** Replace realized shipped lock resources in
-  `toolbox/shipped_templates.py` and `resources/toolbox_templates/` with built-in
-  intent. Resolve exact transitive wheel closures for the current host.
-  - [x] **R2-03a** Replace the shipped catalog and lock JSON resources with
-    strict release-owned built-in intents and remove lock-JSON artifact bridges.
-  - [x] **R2-03b** Resolve each intent to one exact current-host transitive wheel
-    closure from the configured source mode with stable missing-wheel results.
-    - [x] **R2-03b1** Resolve bounded read-only air-gap wheelhouses into exact
-      deterministic current-host closures with stable missing-wheel results.
-    - [x] **R2-03b2** Resolve HTTPS-backed modes through the verified artifact
-      acquisition boundary delivered by R2-05a, using the same closure model.
-- [x] **R2-04** Materialize, probe, publish, and optionally prewarm built-ins via
-  the real `toolbox_catalog.py` and `hermetic_environment.py` boundary. Remove
-  the lock-JSON-as-wheel bridge and tests that normalize it.
-  - [x] **R2-04a** Carry resolved built-in wheel closures through catalog
-    publication into the real hermetic builder and import probes.
-    - [x] **R2-04a1** Construct immutable signed-provenance template candidates
-      from resolved CAS closures and pass exact CAS paths through real build and
-      import probes without catalog publication.
-    - [x] **R2-04a2** Atomically commit the complete required receipt/catalog
-      batch and release candidate references on any pre-publication failure.
-  - [x] **R2-04b** Make required/optional prewarm and readiness use only real
-    materialization receipts through normal daemon startup.
-- [x] **R2-05** Implement revisioned source changes and both air-gap ingestion
-  paths. Prove missing built-in wheels prevent readiness without partial catalog
-  publication.
-  - [x] **R2-05a** Implement revisioned HTTPS index/artifact acquisition into the
-    verified content-addressed artifact store with bounds and redaction.
-    - [x] **R2-05a1** Fetch configured HTTPS PEP metadata and selected wheels
-      with exact credential, redirect, signature, digest, target, and byte/time
-      bounds, then atomically index verified objects in the shared CAS.
-    - [x] **R2-05a2** Discover a bounded transitive candidate set and feed its
-      verified CAS paths through the exact current-target closure resolver and
-      normal setup publication boundary.
-  - [x] **R2-05b** Implement configured read-only signed air-gap ZIP ingestion
-    with strict manifest, signature, path, tag, digest, and closure checks.
-    - [x] **R2-05b1** Implement the Ed25519-verified strict ZIP importer and
-      atomically indexed content-addressed artifact store.
-    - [x] **R2-05b2** Discover configured read-only bundles and feed verified
-      store artifacts into built-in resolution without exposing source paths.
-  - [x] **R2-05c** Implement authenticated begin/chunk/commit/cancel upload into
-    staged storage with bounded, expiring, idempotent commit.
-    - [x] **R2-05c1** Add process-safe staged begin/chunk/cancel state with exact
-      source/config binding, declared size/digest, chunk bounds, expiry, and no
-      trusted-store visibility.
-    - [x] **R2-05c2** Commit a complete staged archive through a durable
-      administrator-owned artifact-import operation, verify/import it through
-      the signed-bundle CAS boundary, and make identical commit idempotent.
-- [x] **R2-06** Run/recover built-in realization as a system-owned hosted
-  operation with resolution, acquisition-byte, verification, build, probe, and
-  prewarm progress while the control plane remains available and toolbox
-  readiness remains false.
-  - [x] **R2-06a** Add the system-owned hosted execution kind and phase/progress
-    contract for built-in realization while readiness remains false.
-  - [x] **R2-06b** Recover or terminally reconcile interrupted realization after
-    restart and expose its canonical status without a parallel operation record.
-
-### R3 - Multi-tool planning and consumer confirmation
-
-- [x] **R3-01** Extend `bundle_models.py`, `definition_planner.py`, and
-  `toolbox_plans.py` with exact complete resolutions, package diffs, bounded
-  alternatives, source/config pins, and affected-tool dependency edges.
-  - [x] **R3-01a** Add strict immutable environment-offer, exact-artifact,
-    package-mutation, alternative, dependency-edge, and complete pin models;
-    persist and roundtrip them without arbitrary mappings.
-  - [x] **R3-01b** Deterministically derive tool classifications, exact package
-    mutations, complete dependency edges, policy preference, removal-only
-    offers, and three-choice truncation from already verified exact candidates.
-  - [x] **R3-01c** Populate the builder from the configured-source exact
-    resolver and active definition without manufactured or unverified inputs.
-- [x] **R3-02** Convert planning to a new hosted execution kind, route generic
-  `op-start`/`op-status`/`op-cancel` to its canonical hosted record, and make
-  duplicate request IDs return current status instead of waiting. Terminal
-  result contains the immutable plan and bounded alternatives; no
-  `operations.json` mirror is written.
-- [x] **R3-03** Add the durable confirmation/acquisition operation and receipt
-  repository in `toolbox_runtime.py`, `daemon/local_ipc.py`,
-  `engine_host_channel.py`, and `engine_host_cli.py`.
-- [x] **R3-04** Implement accepted, declined, skipped, preserved-active-update,
-  explicit-removal, shared-environment, and namespace-conflict semantics exactly
-  as specified above. Remove the old apply-original-definition behavior.
-  - [x] **R3-04a** Implement a pure, deterministic confirmation reducer that
-    accepts only offered choices and produces the pinned effective definition,
-    accepted/skipped/preserved/removed tools, and logical package mutations.
-  - [x] **R3-04b** Wire the reducer through durable confirmation/apply and remove
-    the original-definition apply payload and re-resolution path.
-- [x] **R3-05** Return sanitized source alternatives and exact direct/transitive
-  additions, removals, and transitions. Reject arbitrary URLs, paths, locks, and
-  install commands supplied by consumers.
-- [x] **R3-06** Prove multi-tool add/update/remove and idempotent plan/confirmation
-  recovery through the real authenticated daemon channel.
-- [x] **R3-07** Add `EngineHostChannel.watch_host_operation` over changed
-  `op-status` snapshots and optional bounded long polling. Prove human
-  confirmation/approval occurs between terminal operations without an open
-  request, callback lease, or in-memory workflow/proxy stream dependency.
-
-### R4 - Privileged approval and immutable apply
-
-- [x] **R4-01** Move approval minting behind distinct dependency-approver
-  authorization in `service/auth.py`, `service/policy.py`, daemon dispatch, and
-  channel/CLI surfaces. Remove ordinary-consumer approval minting.
-- [x] **R4-02** Bind approval to the confirmation receipt and exact complete
-  locks/artifacts/config/source/policy revisions; reject stale or mismatched
-  receipts before worker spawn.
-- [x] **R4-03** Pass accepted custom resolved inputs from the persisted plan
-  through `toolbox/orchestration.py` to the real hermetic builder. Remove the
-  template-only custom rejection.
-- [x] **R4-04** Atomically publish the confirmed effective definition and return
-  accepted/skipped/removed tools plus logical package mutations in durable apply
-  results.
-- [x] **R4-05** Prove denied, missing, incompatible, corrupt, and air-gapped
-  artifacts leave the previous active definition unchanged.
-
-### R5 - Removal, retention, and administrator environments
-
-- [x] **R5-01** Recompute complete closure after tool/package removal, reuse
-  unaffected immutable environments, release references after publication, and
-  prove custom-to-built-in contraction.
-- [x] **R5-02** Implement revisioned retention/GC config and the exact-digest
-  non-built-in environment removal hosted operation with active/candidate/plan/
-  receipt/operation reference checks and progress.
-- [x] **R5-03** Add administrator construction of a named template from an exact
-  base revision plus imports/package requirements using the same resolver,
-  sources, builder, probes, and immutable publication path.
-- [x] **R5-04** Keep publication inactive until explicit activation; support
-  prewarm, replace, deprecate, and revoke as final APIs. Remove superseded raw
-  publication payloads and commands rather than preserve both designs.
-- [x] **R5-05** Convert mutating GC, repair, and reconcile to hosted operations.
-  Keep reference/consistency/review APIs as bounded reads and prove duplicate
-  requests and cancellation never block the caller.
-
-### R6 - Restart-safe consumer healing
-
-- [x] **R6-01** Normalize manifest identities across plan and persisted state;
-  classify missing/mismatched registrations as runtime repair even when the
-  semantic definition is unchanged.
-- [x] **R6-02** Give candidates unique runtime IDs, forbid implicit registration
-  replacement, and compare the prior runtime-binding digest atomically. Two
-  healers must yield one repair and one already-healthy/conflict result.
-- [x] **R6-03** Keep repair out of semantic rollout history while preserving
-  durable operation status. Startup validates state but does not restore workers;
-  consumer reapply safely reconstructs them.
-- [x] **R6-04** Add OS-native parent-death/process containment, correct orphan
-  scans, and cleanup of worker IPC/spec/candidate artifacts.
-- [x] **R6-05** Test graceful restart, abrupt death, identical reapply,
-  concurrent healers, and failures immediately before and after route
-  publication on every advertised host.
-- [x] **R6-06** Remove `wait_for_terminal` from duplicate toolbox execution
-  attach, make hosted cancellation acknowledge immediately while teardown is
-  reflected through durable progress, and split `toolbox_describe` into a
-  bounded persisted/cached read plus an explicit live-refresh operation through
-  `op-start`.
-
-### R7 - Breaking-change handoff and acceptance
-
-- [x] **R7-00 production-launcher delivery correction** Expose all five strict
-  `EngineHostDaemon` toolbox inputs through foreground, detached, CLI, relay,
-  and local channel-bootstrap production paths. Keep credentials out of process
-  arguments by using a short-lived secured file for detached direct inputs,
-  delete that file after readiness/failure, and document the consumer launch
-  contract before renewing the dependent adoption request.
-- [x] **R7-01** For every removed/replaced API, populate the breaking-change
-  handoff before its implementation commit and obtain dependent-provided
-  Windows adoption evidence; never modify the dependent project. Consumers are
-  currently required to test only on their available Windows host and record
-  its exact target; the parent owns every non-Windows/native-matrix result.
-- [x] **R7-02** Add one no-double end-to-end suite covering configured daemon
-  startup, built-ins, source alternatives, confirmation decline/skip, approval,
-  custom add/remove, restart healing, environment removal, and GC.
-- [x] **R7-03** Run focused parent tests, native target suites, and complete
-  parent regression. Dependents run their own migration tests and report pins.
-  - [x] **R7-03a** Produce one clean post-fix parent regression with unique
-    durable request/state identities, unconditional worker cleanup, and no
-    timeout-only synchronization failure.
-  - [x] **R7-03b** Record the Windows x64 result, use WSL2 for the in-scope Linux
-    x64 boundary, and complete parent-owned code/workflow review for Windows
-    ARM64, Linux ARM64, and macOS ARM64 paths. Native Linux-host and ARM
-    real-test receipts are out of scope; do not label reviewed-only targets as
-    passed.
-  - [x] **R7-03c** Accept the dependent maintainer's Windows-only migration
-    command/result and exact Windows target in the R7-01 adoption receipt. Do
-    not require a consumer to supply Linux or macOS evidence.
-- [x] **R7-04** Reconcile plan, status, contracts, setup docs, worker
-  architecture, and breaking-change handoff with actual code; remove obsolete
-  tests/docs/code and commit the audit separately.
-
-### R8 - Test determinism and performance
-
-R8 optimizes the Windows x64 Poetry lane. WSL2 is a functional Linux x64
-compatibility lane with observational performance recording, not a standalone
-development environment or a performance-optimization target. It must optimize
-test construction and orchestration without replacing any required real-daemon,
-real-worker, native-extension, restart, containment, or cleanup boundary with a
-double.
-
-- [x] **R8-01** Use `misc/hosting_test_lanes.py` from the Windows x64 checkout
-  to record repeatable reference baselines
-  with `--durations`. Publish separate fast/process/native counts, durations,
-  medians, and budgets over three runs. WSL must record one functional run and
-  its duration using a Linux Poetry environment and isolated Linux daemon state;
-  its source checkout may remain Windows-mounted while its environment and
-  mutable state use native WSL storage. A WSL result is the in-scope
-  Linux x64 lane and does not imply a native Linux-host or ARM receipt.
-- [x] **R8-02** Remove remaining fixed durable request IDs, shared mutable state,
-  teardown leaks, fixed sleeps, and timeout-only readiness from process tests.
-  Replace machine-specific elapsed-time assertions (including the current
-  200ms cancellation threshold exposed by WSL2/DrvFS) with ordering/events plus
-  a generous deadlock bound. Require three consecutive clean process-lane runs
-  before completion.
-- [x] **R8-03** Cache immutable signed-wheel, bundle, and hermetic seed fixtures
-  at session scope while giving every test independent mutable CAS, operation,
-  catalog, environment-reference, worker, IPC, and result state.
-- [x] **R8-04** Split default fast, serial process, Windows native, and WSL2
-  Linux x64 functional lanes while retaining the five declared target workflow
-  definitions. Retain at least one serial real-process lifecycle test for every
-  in-scope production boundary and publish per-lane counts and durations.
-- [x] **R8-05** Enable parallel execution on Windows x64.
-  Prove worker-safe state roots, ports, named pipes, process registries, and
-  teardown before enabling it on Windows. WSL parallelism and performance
-  optimization are out of scope. Native Linux-host and ARM receipts are not
-  prerequisites because they are out of scope. A 30% median reduction from the recorded Windows
-  full-suite reference is the optimization target, not permission to weaken
-  assertions or skip boundaries.
-
-## Acceptance criteria
-
-- [x] Normal daemon setup constructs and probes required built-ins for only its
-  current target from the configured source mode.
-- [x] Missing exact wheels stop air-gapped setup with stable bounded diagnostics.
-- [x] Online HTTPS acquisition and signed air-gap ZIP import verify into the same
-  content-addressed wheel store; environments install only pinned cached wheels.
-- [x] One definition can add, update, and remove multiple tools; its plan offers
-  bounded exact package/source alternatives and complete package notifications.
-- [x] Consumer confirmation can decline packages; the receipt identifies every
-  skipped affected tool, preserves skipped active updates, and applies explicit
-  removals without ambiguity.
-- [x] Privileged approval is distinct from consumer confirmation and binds only
-  accepted exact locks and artifacts.
-- [x] Package/source/config changes invalidate stale receipts but never mutate an
-  active environment.
-- [x] Removal releases references only after publication; non-built-in deletion
-  cannot remove referenced or built-in environments.
-- [x] Windows x64 passes native setup, wheel, sandbox, worker, restart, and
-  cleanup tests; WSL2 is the execution environment for all in-scope Linux x64
-  work; Windows ARM64, Linux ARM64, and macOS ARM64 implementations and workflow
-  commands have recorded review without a false pass claim.
-- [x] Identical reapply after restart heals missing runtime state without a new
-  semantic revision, state corruption, leaked workers, or healer conflict.
-- [x] Normal consumers cannot publish templates, choose arbitrary sources/URLs,
-  upload artifacts, supply filesystem/interpreter paths, or install packages.
-- [x] Every potentially long plan/setup/confirm/apply/admin/maintenance call
-  submitted through `op-start` returns canonical durable status promptly,
-  exposes `op-status`/watch progress, recovers by request ID, and never waits on
-  human input, duplicate attach, or cancellation teardown.
-- [ ] Superseded compatibility code and documentation are removed, and every
-  dependent action is recorded in the breaking-change handoff with independent
-  Windows adoption evidence.
-
-## Out-of-scope native receipt register
-
-The project does not manufacture or wait for these external receipts. They are
-out of scope for corrective-plan completion and must not be represented as
-passes:
-
-- Native Linux-host x64/ARM64 target, wheel, sandbox, restart, and cleanup
-  receipts. WSL2 Linux x64 is the in-scope Linux execution lane.
-- Windows ARM64 native target, wheel, sandbox, restart, and cleanup receipt.
-- macOS ARM64 native target, wheel, sandbox, restart, and cleanup receipt.
+# Unified hosting configuration and package/environment cutover plan
+
+Status: active breaking-change plan
+
+This plan supersedes the completed toolbox-specific access plan. It defines the
+clean cut to one host-owned configuration file and one worker-neutral package
+and environment subsystem. Compatibility readers, legacy fallbacks, dual command
+names, and automatic migration of old environments are intentionally out of
+scope.
+
+## 1. Outcome
+
+After this plan is complete:
+
+- the top-level MP13 configuration owns the physical root map and the logical
+  `@hosting`, `@packages`, and `@environments` labels;
+- `<config root>/hosting/hosting_config.json` is the only authoritative hosting
+  configuration file;
+- key material, audit logs, runtime state, caches, and built environments remain
+  separate records or data, not additional configuration authorities;
+- daemon startup receives the top-level configuration location and resolves the
+  hosting configuration locally;
+- authenticated control-channel roles authorize package, environment, toolbox,
+  and worker administration;
+- the daemon computes SHA-256 identities from bytes received at package ingress;
+- package acquisition, locking, environment construction, reuse, verification,
+  references, and garbage collection are shared by toolboxes and other worker
+  kinds;
+- toolbox definition and execution APIs remain toolbox-specific, while package
+  upload and environment lifecycle APIs become generic; and
+- removed configuration fields, commands, state formats, and directory layouts
+  fail fast under a new daemon contract version.
+
+## 2. Ownership and repository boundary
+
+This repository owns the daemon, hosting client/channel, CLI, setup library,
+configuration contracts, and package/environment implementation.
+
+The dependent project is inspection-only during this work. Do not edit it from
+this plan. Record its exact breaking adoption work in
+[`HOSTING_CLIENT_BREAKING_CHANGES.md`](HOSTING_CLIENT_BREAKING_CHANGES.md),
+including command names, request and response shapes, readiness codes, contract
+versions, and removal dates. Acceptance requires a dependent-team receipt that
+the recorded cutover was adopted.
+
+Use [`hosting_status.md`](hosting_status.md) as the execution ledger. Every
+completed slice records its plan IDs, minimum expertise, production boundary,
+tests, negative-path proof, and any dependent handoff change.
+
+This plan, `hosting_status.md`, and `HOSTING_CLIENT_BREAKING_CHANGES.md` are
+transient delivery records. Permanent contracts, operator guides, architecture
+documents, source comments, and tests must not link to them or treat their text
+as normative. A production slice copies the finalized behavior into its owning
+permanent document and tests that permanent contract directly.
+
+## 3. Locked design decisions
+
+### 3.1 One configuration authority
+
+The sole authoritative hosting configuration is:
+
+```text
+<config root>/hosting/hosting_config.json
+```
+
+It replaces `access_control.json`, the short-lived toolbox launcher JSON, and
+the five toolbox startup mappings. It contains static control, package, and
+environment policy. It does not contain mutable runtime records or individual
+toolbox definitions.
+
+The phrase "one configuration file" does not mean "one hosting file." The
+following remain separate because they are secrets, logs, or mutable records:
+
+```text
+<hosting root>/
+  keyring/                 # access-restricted authentication material
+  audit/                   # append-oriented audit records
+  state/                   # mutable control and operation state
+  scratch/                 # incomplete uploads/builds; safe to reap by policy
+
+<packages root>/           # immutable content-addressed package artifacts/locks
+<environments root>/       # immutable/reusable built environments and receipts
+```
+
+### 3.2 Logical paths first
+
+Extend the existing top-level `category_dirs` path model rather than creating a
+second physical-roots system. Add these root keys and anchors:
+
+```json
+{
+  "category_dirs": {
+    "hosting_root_dir": "@home/.mp13-llm/hosting",
+    "packages_root_dir": "@home/.mp13-llm/packages",
+    "environments_root_dir": "@home/.mp13-llm/environments"
+  }
+}
+```
+
+The corresponding labels are `@hosting`, `@packages`, and `@environments`.
+Normal values in `hosting_config.json` use logical references such as
+`@packages/artifacts` and `@environments/python`; the daemon resolves them on
+the host. Do not make absolute paths the mainstream wire or file contract.
+
+Root definitions may use stable top-level anchors such as `@home`, `@config`,
+or `@temp`. Do not base persistent daemon roots on `@project`, because the
+working directory differs between direct, service, and SSH-relay launches.
+
+`hosting_config.py` and `hosting_setup_api.py` own the hosting-specific local
+operator experience for viewing and customizing these three roots. They must
+update the top-level configuration through the shared MP13 configuration/path
+library rather than directly inventing another root file. Root relocation is a
+host-local administrative operation and is not exposed through the remote
+control channel. The project-root `hosting_config.py` remains a thin executable
+entry point; configuration behavior belongs in the importable hosting library.
+
+### 3.3 Configuration shape
+
+Freeze a strict `hosting.configuration.v3` contract before implementation. Its
+normative structure is:
+
+```json
+{
+  "contract": "hosting.configuration.v3",
+  "control": {
+    "authentication": {},
+    "roles": {},
+    "session_policy": {},
+    "audit": {}
+  },
+  "package_management": {
+    "artifact_root": "@packages/artifacts",
+    "lock_root": "@packages/locks",
+    "sources": {},
+    "credentials": {},
+    "dependency_policy": {},
+    "verification": {
+      "hash_algorithm": "sha256"
+    }
+  },
+  "environment_management": {
+    "environment_root": "@environments",
+    "scratch_root": "@hosting/scratch",
+    "retention": {},
+    "cache": {}
+  }
+}
+```
+
+The final schema may add explicitly frozen fields, but must not restore the five
+startup maps or embed per-toolbox definitions. Credentials are host-local,
+access-restricted configuration values or references to the host keyring. Never
+place credential values in process arguments, logs, remote status, or receipts.
+
+### 3.4 Authority and integrity
+
+An authenticated control-channel role is the authority to create or change
+packages, environments, tools, and toolboxes. A public-key login and a password
+login granting the same role have the same administrative authority.
+
+Publisher signatures are not mandatory in the baseline. Remove mandatory
+`toolbox_trust_public_keys`, `trust_key_ids`, and signed-manifest requirements.
+An external publisher verifier may be introduced later as an optional policy
+plugin, but it must not be required by the core package/environment contract.
+
+For every uploaded or acquired artifact, the daemon must:
+
+1. authorize the requested operation from the server-side session role;
+2. stream bytes into host-controlled scratch storage with size and policy limits;
+3. compute SHA-256 itself from those bytes;
+4. atomically promote the completed artifact under its content identity;
+5. lock exact artifact identities and dependency decisions; and
+6. write an audit event and immutable receipt without secrets.
+
+A caller-supplied hash is only an expectation checked against the daemon result;
+it is never accepted as proof of the bytes actually stored.
+
+### 3.5 Shared package and environment model
+
+Use worker-neutral contracts and implementation names:
+
+- `PackageSource`
+- `PackagePolicy`
+- `EnvironmentTemplate`
+- `EnvironmentRequest`
+- `EnvironmentLock`
+- `EnvironmentReceipt`
+- `EnvironmentReference`
+- `EnvironmentManager`
+
+Every reference has `consumer_kind`, `consumer_id`, and `revision`. Toolboxes
+are one consumer kind, not the owner of the subsystem. Toolbox-specific code
+continues to own toolbox definition planning, confirmation, approval,
+application, materialization, and execution.
+
+### 3.6 Static policy versus dynamic consumers
+
+Daemon startup reads and validates host-local authentication, package-source,
+credential, dependency, retention, and root policy. In this clean cut, changes
+to that static policy become effective after a deliberate daemon restart; do
+not add an implicit file watcher or a remote configuration editor.
+
+After startup, authorized consumers create and revise tools/toolboxes, upload
+packages, manage environment templates, and request environments through the
+control channel without restarting the daemon. Those operations write versioned
+state and immutable content under the configured roots; they do not rewrite
+`hosting_config.json`. Pin the active configuration revision into plans and
+operations so a restart onto changed policy makes stale work explicit.
+
+### 3.7 Breaking-cut rules
+
+- Bump the daemon/control contract major version.
+- Reject old configuration contracts and old state records with a precise
+  operator error.
+- Remove old command names instead of translating them.
+- Remove old constructor parameters, CLI flags, channel settings, environment
+  manager aliases, and directory fallbacks.
+- Rebuild environments under the new content-addressed roots. Do not search or
+  reuse `toolbox_venvs`, `runtime_envs`, or `toolbox_environment_cache`.
+- Keep no `access_control.json` fallback.
+- Do not implement dual-read, dual-write, or legacy import code.
+
+## 4. Public API cutover
+
+Freeze the complete request/response schemas in R0. The minimum command mapping
+is:
+
+| Removed command family | Replacement | Required generic identity |
+|---|---|---|
+| `toolbox-artifact-upload-*` | `package-artifact-upload-*` | artifact/upload ID plus authorized session |
+| `toolbox-template-*` | `environment-template-*` | template ID plus supported worker/runtime kinds |
+| `toolbox-environment-remove` | `environment-remove` | environment identity and reference checks |
+
+The following stay toolbox-specific because they operate on toolbox semantics:
+
+- `toolbox-get-definition`
+- `toolbox-plan-definition`
+- `toolbox-confirm-definition-plan`
+- `toolbox-approve-confirmed-definition-plan`
+- `toolbox-apply-definition`
+- `toolbox-execute`
+- toolbox describe, consistency, gate, reconcile, repair, review, and archive
+  operations whose payloads are explicitly toolbox state
+
+Any generic package or environment request originating from a toolbox includes
+`consumer_kind="toolbox"`, its stable `consumer_id`, and its definition
+`revision`. Future worker adapters use the same requests with their own kind.
+
+Replace toolbox-specific configuration readiness codes with frozen generic
+package/environment codes. R0 must specify the exact mapping for at least:
+
+- configuration missing, invalid, or unsupported contract;
+- package source or credential unavailable;
+- package policy rejection or artifact hash mismatch;
+- environment template unavailable or environment build failed; and
+- referenced environment busy, retained, or not removable.
+
+## 5. Code navigation map
+
+Use these seams as starting points; search call sites before changing a contract.
+
+| Concern | Start here | Navigation instruction |
+|---|---|---|
+| Top-level roots and labels | `src/mp13_engine/mp13_config_paths.py` | Extend `DEFAULT_CATEGORY_DIRS`, `CATEGORY_ROOT_KEYS`, `_split_anchor`, `PathResolver._anchor_base`, and `resolve_config_paths` together. |
+| Top-level config UI | `src/app/config.py` | Add fields and displayed anchors through the existing section/field model; do not create a second path editor. |
+| Other config UI | `src/app/mp13chat.py` | Remove or redirect any duplicate path-editing flow so one shared library owns validation and persistence. |
+| Path documentation | `CONFIG.md` | Document label resolution, allowed root anchors, containment rules, and host-local relocation. |
+| Hosting config entry point | `hosting_config.py` | Keep this as a thin proxy to the importable implementation; do not place configuration logic in the repository-root script. |
+| Hosting setup API | `src/hosting/hosting_setup_api.py` | Evolve `LocalHostingSetupRequest`, plan/apply/inspect/status/reset, and return both logical and local resolved paths where authorized. |
+| Hosting setup implementation | `src/hosting/hosting_config_cli.py` | Replace `_hosting_root`, `_default_paths`, `_resolve_paths`, `_write_json`, and directory setup with the shared resolver and strict repository. |
+| Setup contract docs | `src/hosting/HOSTING_CONFIG_SCRIPT.md` | Replace the `access_control.json` output layout and document the one-file authority plus record/data directories. |
+| Static service configuration | `src/hosting/service/host_service.py` | Replace the five toolbox constructor maps with one normalized configuration object assembled before service construction. |
+| Default control path | `src/hosting/service/constants.py` | Remove the hardcoded `access_control.json` authority and derive paths from resolved configuration. |
+| Launcher configuration | `src/hosting/daemon/toolbox_launch_config.py` | Delete this module after callers use the top-level config location. Do not retain a compatibility wrapper. |
+| Foreground/background startup | `src/hosting/daemon/foreground.py`, `src/hosting/daemon/background.py` | Remove the five mappings, ephemeral launcher file, and `--toolbox-config-file`; accept the top-level config location only. |
+| Transport/demo bootstrap | `src/hosting/transport_bootstrap_api.py`, `src/app/hosted_chat_demo.py` | Replace derived `access_control.json` paths and forward the top-level config location through the same bootstrap contract. |
+| Local daemon and dispatch | `src/hosting/daemon/local_ipc.py` | Load normalized configuration once, rename generic commands, authorize server-side, and expose sanitized status. |
+| Client startup forwarding | `src/hosting/engine_host_channel.py` | Remove `_daemon_toolbox_launch_kwargs` and old settings; pass only the top-level config location to locally owned bootstrap. |
+| Client CLI forwarding | `src/hosting/engine_host_cli.py` | Remove `engine_host_toolbox_config_file` and old flags/help. Add only the agreed top-level config option if needed. |
+| Package source model | `src/hosting/toolbox/host_project_config.py` | Extract generic source/config types and remove toolbox ownership and mandatory signing fields. |
+| Dependency policy | `src/hosting/toolbox/dependency_policy.py` | Move policy into the generic package subsystem without changing enforcement semantics accidentally. |
+| Artifact stores and upload services | `src/hosting/service/toolbox_artifact_store.py`, `src/hosting/service/toolbox_artifact_uploads.py`, `src/hosting/service/toolbox_artifact_upload_service.py` | Extract generic ingress/storage services, daemon hashing, operation kinds, and secret-free receipts before renaming public commands. |
+| Catalog/config resolution | `src/hosting/service/toolbox_catalog.py`, `src/hosting/service/toolbox_definition_resolution.py`, `src/hosting/service/toolbox_host_config_state.py` | Keep toolbox definition semantics but replace host-project configuration and trust-key assumptions with package locks and the active configuration revision. |
+| Environment manager | `src/hosting/toolbox/environment.py` | Replace `ToolboxEnvironmentManager` and the `RuntimeEnvironmentManager` compatibility subclass with one neutral manager. |
+| Hermetic builder | `src/hosting/toolbox/hermetic_environment.py` | Rename toolbox contracts, use resolved generic roots, and emit generic locks/receipts/references. |
+| Runtime consumers | `src/hosting/sandbox/runtime_base.py`, `src/hosting/sandbox/python_runtime.py`, `src/hosting/sandbox/js_runtime.py` | Preserve neutral runtime identity concepts and adapt each worker/runtime through the generic manager. |
+| Serialized environment identity | `src/hosting/toolbox/bundle_models.py`, `src/hosting/sandbox/toolbox_runtime.py` | Remove legacy `environment_root_kind` defaults and carry generic environment identities/references instead of directory-kind routing. |
+| Toolbox orchestration | `src/hosting/toolbox/orchestration.py`, `src/hosting/toolbox/staging.py` | Translate toolbox plans into exact package locks and environment requests. |
+| Service materialization/runtime | `src/hosting/service/toolbox_materialization.py`, `src/hosting/service/toolbox_runtime.py`, `src/hosting/service/proxy.py` | Keep toolbox behavior while replacing environment ownership and old command/config assumptions. |
+| Hosting state/health | `src/hosting/service/state.py` | Replace `access_control.json` existence checks with unified configuration health and keep mutable state separate from configuration. |
+| Existing contract/docs | `src/hosting/HOSTED_TOOLBOX_CONTRACT.md`, `src/hosting/HOSTING_ACCESS.md`, `src/hosting/ENGINE_HOST_CLI.md`, `src/hosting/sandbox/SANDBOX_ARCHITECTURE.md` | Remove launcher maps, mandatory signing, old roots, and compatibility statements when their owning implementation slice lands. |
+
+Before editing, use `rg` to find every import, constructor call, command string,
+readiness code, legacy directory, and serialized contract named by the work item.
+The table identifies entry points, not the complete change radius.
+
+### 5.1 Permanent documentation cutover
+
+Update permanent documentation with the production slice that makes the
+behavior true. Do not update it early to describe planned behavior, and do not
+add backlinks to the transient delivery records.
+
+| Permanent document | Owning work | Required final content |
+|---|---|---|
+| `CONFIG.md` | R2 | Top-level root keys/labels, resolution, containment, and host-local customization. |
+| `src/hosting/HOSTING_CONFIG_SCRIPT.md` | R2–R3 | One configuration authority, logical/resolved status, safe local apply/recovery, and record/data layout. |
+| `src/hosting/HOSTING_ACCESS.md` | R3, R5–R6, R9 | Authentication/role authority, credential handling, package ingress hashing, generic operations, audit, and redaction. |
+| `src/hosting/HOSTED_TOOLBOX_CONTRACT.md` | R5–R7 | Toolbox planning/execution over generic package locks, environment requests/references, and retained toolbox APIs. |
+| `src/hosting/ENGINE_HOST_CLI.md` | R4, R9 | Single startup configuration input and new generic package/environment commands; no removed flags. |
+| `src/hosting/sandbox/SANDBOX_ARCHITECTURE.md` | R6–R8 | Worker-neutral environment ownership, content keys, runtime adapters, references, retention, and cleanup. |
+
+R1.5 must discover additional permanent READMEs, examples, generated help, or
+API references and assign each to an owning production slice.
+
+## 6. Priority and expertise sequence
+
+The sequence is deliberately monotonic. Do not interleave a lower-expertise
+slice after a higher-expertise block has begun. A slice touching mixed work is
+classified at the highest expertise it requires.
+
+| Continuous block | Priority | Minimum expertise | Work items | Exit condition |
+|---|---:|---|---|---|
+| A — contract freeze | P0 | average | R0.1–R0.7 | All breaking contracts and removals are explicit and internally consistent. |
+| B — handoff and inventory | P0 | medium | R1.1–R1.5 | Implementers and dependent consumers have exact navigation and adoption instructions. |
+| C — implementation and acceptance | P0–P2 | high | R2.1–R9.8 | Clean-cut code, tests, docs, receipts, and consumer adoption are complete. |
+
+Priority is handled inside the continuous high block: complete all P0 items,
+then P1, then P2. Do not move a convenient P2 cleanup ahead of a P0 contract or
+security dependency merely to make smaller commits.
+
+## 7. Slice and evidence discipline
+
+Each implementation commit is a declared slice.
+
+1. Select one or more tightly coupled, consecutive plan IDs with the same
+   minimum expertise.
+2. Record the slice ID, priority, expertise, production boundary, expected
+   removals, tests, and negative paths in `hosting_status.md`.
+3. Inspect all callers and serialized forms before changing the boundary.
+4. Change production code, tests, documentation, handoff, status evidence, and
+   this plan's checkboxes in the same slice when they are part of one contract.
+5. Mark an item complete only after its proof commands pass. Leave failed or
+   partially implemented items unchecked.
+6. End a slice when the required expertise changes.
+7. Use a concise commit subject describing the completed behavior, not the
+   files touched.
+
+For removals, evidence must include an `rg` zero-result check over production,
+tests, and docs. For security boundaries, include at least one denial test and
+one proof that secrets or host-only paths are absent from remote output.
+
+## 8. Work items
+
+### Block A — contract freeze (`average`, P0)
+
+#### R0.1 Freeze file ownership and directory layout
+
+- [ ] Specify `hosting.configuration.v3` as the only static hosting authority.
+- [ ] Classify each path as configuration, secret material, audit, mutable
+  state, scratch, immutable package content, or built environment content.
+- [ ] State which process may write each class. The daemon reads static config;
+  only the local hosting setup/config library writes it.
+- [ ] Record the exact old files and directories that become invalid.
+
+Proof: the contract and layout are stated consistently in this plan,
+`HOSTING_CONFIG_SCRIPT.md`, and `HOSTING_CLIENT_BREAKING_CHANGES.md`.
+
+#### R0.2 Freeze root-label semantics
+
+- [ ] Define `hosting_root_dir`, `packages_root_dir`, and
+  `environments_root_dir` in the existing top-level `category_dirs` contract.
+- [ ] Define `@hosting`, `@packages`, and `@environments`, including allowed
+  nesting, normalization, containment, and cycle rejection.
+- [ ] Define which stable anchors may appear in root definitions and prohibit
+  persistent roots based on `@project`.
+- [ ] Define the authorized local status shape containing logical and resolved
+  paths and the sanitized remote status shape.
+
+Proof: table-driven examples cover Windows and POSIX syntax, traversal,
+unknown labels, cycles, and roots outside an allowed containment policy.
+
+#### R0.3 Freeze authority and artifact identity
+
+- [ ] Define the minimum role for source management, credential management,
+  package upload, environment template changes, environment removal, and GC.
+- [ ] Define daemon-computed SHA-256 as the canonical artifact identity.
+- [ ] Define caller-supplied hashes as optional expectations only.
+- [ ] Remove publisher-key and signed-manifest requirements from the baseline
+  contract; name the extension point for a future optional verifier.
+- [ ] Define audit fields without tokens, passwords, credential values, or
+  unrestricted local paths.
+
+Proof: the authorization matrix includes positive and negative cases for both
+password and public-key sessions that grant the same role.
+
+#### R0.4 Freeze generic package/environment contracts
+
+- [ ] Specify every neutral type listed in section 3.5 and its serialized
+  contract/version.
+- [ ] Require `consumer_kind`, `consumer_id`, and `revision` on references.
+- [ ] Define immutable package locks, environment locks, build receipts,
+  reference lifecycle, and content-address keys.
+- [ ] Define restart, retry, cancellation, incomplete-build cleanup, and
+  concurrent-build behavior.
+
+Proof: examples show one toolbox consumer and at least one non-toolbox worker
+consumer resolving the same package and environment contracts.
+
+#### R0.5 Freeze command and readiness cutover
+
+- [ ] Enumerate every retained, renamed, and removed control command.
+- [ ] Specify exact request, success, error, cached-result, and status payloads.
+- [ ] Specify the replacement for every `toolbox_configuration_*` readiness
+  code and any dependent UI state derived from it.
+- [ ] State the new daemon contract major and rejection response for an old
+  client or command.
+
+Proof: a machine-readable or table-driven command manifest has no aliases and
+every removed command has exactly one disposition.
+
+#### R0.6 Freeze clean-cut state behavior
+
+- [ ] Inventory old configuration, operation, upload, template, environment,
+  reference, and receipt contract identifiers.
+- [ ] Specify fail-fast behavior for each old format.
+- [ ] Require environment rebuild under the generic roots and prohibit legacy
+  discovery or reuse.
+- [ ] Define operator cleanup instructions separately from daemon behavior.
+
+Proof: no item says "fallback," "try old," "migrate automatically," or
+"translate" as an implementation requirement.
+
+#### R0.7 Freeze host-local root customization
+
+- [ ] Define plan/apply/inspect/status/reset payloads for changing the three
+  top-level roots through the hosting setup library.
+- [ ] Define preflight checks for permissions, collisions, free space,
+  non-empty destinations, daemon activity, and cross-volume moves.
+- [ ] Use a local journal and idempotent recovery for a change spanning the
+  top-level configuration and hosting configuration. Do not claim a
+  cross-filesystem atomic rename.
+- [ ] Prohibit remote control-channel root relocation.
+
+Proof: interruption points and recovery outcomes are enumerated before code is
+changed.
+
+### Block B — handoff and inventory (`medium`, P0)
+
+#### R1.1 Produce the exact dependent-client handoff
+
+- [ ] Update `HOSTING_CLIENT_BREAKING_CHANGES.md` with the command manifest,
+  payloads, readiness mapping, version negotiation, and old-name removals.
+- [ ] Include client session metadata requirements: cached authentication must
+  preserve token, role, auth method, scope, and key ID without repeating the
+  handshake.
+- [ ] Give dependent implementers stable navigation/search terms rather than
+  relying only on current line numbers.
+
+Proof: another engineer can implement the client cut without reading daemon
+internals or inferring a payload.
+
+#### R1.2 Inventory the production change radius
+
+- [ ] Search all production callers of `toolbox_host_project_configuration`,
+  `toolbox_artifact_sources`, `toolbox_trust_public_keys`,
+  `toolbox_source_credentials`, `toolbox_dependency_policy`,
+  `--toolbox-config-file`, and `engine_host_toolbox_config_file`.
+- [ ] Search imports and instantiations of toolbox-specific package policy,
+  environment managers, builders, receipts, references, and legacy paths.
+- [ ] Search command strings, dispatch tables, capability declarations,
+  readiness codes, audit actions, and operation kinds.
+- [ ] Record the file list and ownership per R2–R9 in `hosting_status.md`.
+
+Proof: the inventory includes indirect re-exports and documentation examples,
+not only class definitions.
+
+#### R1.3 Inventory tests and fixtures
+
+- [ ] Assign existing unit, integration, daemon, channel, CLI, setup, toolbox,
+  sandbox, workflow, and native-platform tests to R2–R9.
+- [ ] List fixtures serialized under removed contracts and decide whether each
+  becomes a new fixture or a deliberate rejection fixture.
+- [ ] Identify tests that accidentally pass because of default home-directory
+  state and make their roots explicit.
+
+Proof: every production boundary in R2–R9 has a named proof location and at
+least one negative-path test target.
+
+#### R1.4 Inventory the dependent repository without editing it
+
+- [ ] Locate direct command strings, readiness codes, authentication result
+  narrowing, and package/environment response assumptions.
+- [ ] Record exact files and stable symbols in the breaking-change handoff.
+- [ ] Identify owner and adoption evidence required for final acceptance.
+
+Proof: the inspection records all known affected dependent surfaces while the
+dependent worktree remains unchanged.
+
+#### R1.5 Prepare the documentation cutover map
+
+- [ ] Assign all hosting startup, configuration, security, toolbox, and worker
+  documentation to an implementation work item.
+- [ ] List examples that expose credentials, absolute mainstream paths, old
+  flags, mandatory signing, or toolbox-owned environments.
+- [ ] Define the final `rg` removal patterns used by R9.
+- [ ] Remove permanent-document backlinks and tests that treat this plan,
+  `hosting_status.md`, or `HOSTING_CLIENT_BREAKING_CHANGES.md` as normative.
+
+Proof: no known user-facing document is left without an owning work item.
+
+### Block C — implementation and acceptance (`high`)
+
+#### R2 — Extend the shared path/configuration foundation (`high`, P0)
+
+##### R2.1 Add and resolve the three top-level roots
+
+- [ ] Extend `DEFAULT_CATEGORY_DIRS`, `CATEGORY_ROOT_KEYS`, anchor parsing, and
+  `PathResolver` in `src/mp13_engine/mp13_config_paths.py` as one contract.
+- [ ] Reject unknown labels, cycles, traversal escapes, invalid root types, and
+  ambiguous self-reference.
+- [ ] Preserve logical values during load/save; resolve only at an explicit
+  host boundary.
+
+Proof: table-driven resolver tests cover default/custom roots, nested labels,
+Windows/POSIX forms, normalization, cycles, and traversal.
+
+##### R2.2 Give hosting setup ownership of root customization
+
+- [ ] Add the three root fields to the shared config model/UI in
+  `src/app/config.py`.
+- [ ] Make `hosting_setup_api.py` expose hosting-focused plan/apply/inspect/
+  status/reset operations that call the shared writer.
+- [ ] Remove or redirect duplicate editing in `src/app/mp13chat.py`.
+- [ ] Return logical refs by default; return resolved paths only to a local
+  authorized operator surface.
+
+Proof: round-trip tests show both the general config UI and hosting setup use
+one validator and preserve unrelated top-level configuration.
+
+##### R2.3 Implement safe multi-file local apply
+
+- [ ] Add locked, atomic-per-file writes with restrictive permissions and
+  fsync/replace semantics appropriate to the platform.
+- [ ] Journal the two-authority update when both top-level roots and
+  `hosting_config.json` change; make retry/recovery idempotent.
+- [ ] Refuse active-daemon relocation and unsafe/non-empty destinations unless
+  the frozen local plan explicitly permits them.
+
+Proof: fault-injection tests interrupt every journal phase and recover to one
+declared state without losing unrelated configuration.
+
+#### R3 — Implement the unified hosting configuration (`high`, P0)
+
+##### R3.1 Add strict models and repository
+
+- [ ] Implement `hosting.configuration.v3` models for `control`,
+  `package_management`, and `environment_management`.
+- [ ] Reject unknown security-sensitive keys, wrong types, unresolved labels,
+  unsupported versions, and credential-policy conflicts.
+- [ ] Make one repository exclusively responsible for locked reads and local
+  setup writes of `hosting_config.json`.
+
+Proof: schema/model tests cover valid minimal/full files and each rejection
+class without leaking rejected secret values.
+
+##### R3.2 Replace `access_control.json`
+
+- [ ] Move static authentication, role, session, and audit policy under
+  `control` while keeping keyring/audit/state records separate.
+- [ ] Change service constants and setup defaults to resolve the new file.
+- [ ] Remove every reader, writer, fixture, and document that treats
+  `access_control.json` as an authority.
+
+Proof: clean startup succeeds with only `hosting_config.json`; startup fails
+precisely when only the old file exists; `rg` finds no production fallback.
+
+##### R3.3 Add sanitized inspection and health
+
+- [ ] Report contract version, logical root refs, configuration health, source
+  availability, and environment subsystem health.
+- [ ] Restrict local resolved paths to local administrative inspection.
+- [ ] Redact credential values, token material, key material, sensitive query
+  strings, and unrestricted host paths from remote status and errors.
+
+Proof: snapshot tests use sentinel secrets and local paths and assert they do
+not appear in remote status, logs, audit messages, or exception strings.
+
+#### R4 — Cut daemon startup to the single configuration path (`high`, P0)
+
+##### R4.1 Replace startup inputs
+
+- [ ] Make foreground, background, service, CLI, and locally owned channel
+  bootstrap accept only the top-level MP13 configuration location needed to
+  resolve `@hosting/hosting_config.json`.
+- [ ] Load and validate configuration before binding externally reachable
+  listeners or accepting control requests.
+- [ ] Pass one normalized immutable configuration object into `EngineHostService`.
+- [ ] Capture a stable configuration revision in long-running plans/operations;
+  reject their continuation after a restart under incompatible changed policy.
+
+Proof: direct, background, service, and SSH-relay-equivalent launch tests all
+resolve the same logical configuration without credential-bearing arguments.
+
+##### R4.2 Delete launcher configuration and five mappings
+
+- [ ] Remove the five `toolbox_*` constructor/settings mappings.
+- [ ] Delete `src/hosting/daemon/toolbox_launch_config.py`.
+- [ ] Remove `--toolbox-config-file`, `engine_host_toolbox_config_file`,
+  ephemeral launch JSON creation, conflict handling, help text, and fixtures.
+- [ ] Do not leave deprecated parameters or permissive `**kwargs` sinks.
+
+Proof: signature tests reject old arguments and `rg` returns zero relevant
+results in production, tests, and docs.
+
+##### R4.3 Generalize startup readiness
+
+- [ ] Separate control readiness from package/environment configuration health.
+- [ ] Emit the exact R0 readiness codes and contract version.
+- [ ] Keep authentication usable for authorized diagnosis when a non-control
+  package/environment subsystem is unhealthy, if the frozen policy permits it.
+
+Proof: readiness tests distinguish missing/invalid control, package, source,
+credential, template, and environment states.
+
+#### R5 — Build the generic package subsystem (`high`, P0)
+
+##### R5.1 Extract neutral package contracts
+
+- [ ] Move source and dependency policy models out of toolbox ownership into a
+  generic package module.
+- [ ] Rename public and serialized types to `PackageSource` and `PackagePolicy`.
+- [ ] Remove mandatory trust-key IDs and signed-manifest validation from the
+  base path while preserving an optional verifier interface.
+
+Proof: package model tests have no toolbox dependency and demonstrate the
+optional verifier is absent/disabled by default.
+
+##### R5.2 Implement authorized content-addressed ingress
+
+- [ ] Authorize begin/chunk/status/commit/cancel from the server-side session.
+- [ ] Bound size, chunk order, concurrency, timeout, and scratch allocation.
+- [ ] Compute SHA-256 during daemon-owned ingress, compare any caller
+  expectation, and atomically promote only a complete artifact.
+- [ ] Make retries idempotent and quarantine/remove incomplete or mismatched
+  uploads without making them resolvable.
+
+Proof: tests cover permission denial, disconnect, reordered/duplicate chunks,
+oversize input, expected-hash mismatch, concurrent commit, restart, and retry.
+
+##### R5.3 Implement sources, credentials, policy, and locks
+
+- [ ] Resolve source and credential configuration locally without serializing
+  secrets into operations or receipts.
+- [ ] Enforce source allowlists, dependency policy, platform/runtime targets,
+  and exact artifact selection before an environment build.
+- [ ] Persist immutable package locks containing daemon-computed identities and
+  reproducible source metadata stripped of secrets.
+
+Proof: resolution tests cover allowed/denied sources, missing credentials,
+dependency conflicts, deterministic lock output, and offline reuse.
+
+##### R5.4 Cut the public package commands
+
+- [ ] Replace `toolbox-artifact-upload-*` dispatch/channel/CLI/API surfaces with
+  `package-artifact-upload-*` and the frozen payloads.
+- [ ] Advertise only the new commands in capabilities/version negotiation.
+- [ ] Use generic operation/audit kinds and reject the old command family.
+
+Proof: no-double tests prove exactly one authorized ingress effect and old
+commands fail with the frozen version/unknown-command response.
+
+#### R6 — Build the generic environment subsystem (`high`, P0)
+
+##### R6.1 Replace toolbox-owned manager and builder types
+
+- [ ] Implement the neutral environment contracts from R0.
+- [ ] Replace `ToolboxEnvironmentManager`, the compatibility-only
+  `RuntimeEnvironmentManager` subclass, and hermetic toolbox names with one
+  `EnvironmentManager` and generic builders.
+- [ ] Keep runtime-specific mechanics behind adapters rather than in the shared
+  contract.
+
+Proof: imports and type tests show toolbox and non-toolbox consumers depend on
+the neutral interface; old aliases are absent.
+
+##### R6.2 Use generic roots and content keys
+
+- [ ] Store reusable environments under resolved `@environments` roots and
+  transient builds under `@hosting/scratch`.
+- [ ] Derive keys from runtime/builder identity, platform, exact package lock,
+  environment template revision, and relevant policy inputs.
+- [ ] Publish a receipt only after validation and atomic promotion.
+
+Proof: same inputs reuse one valid environment; changed package/template/
+runtime/platform inputs produce distinct identities; incomplete builds do not.
+
+##### R6.3 Add generic references and concurrency control
+
+- [ ] Store references with `consumer_kind`, `consumer_id`, and `revision`.
+- [ ] Serialize builders per environment key while allowing unrelated builds.
+- [ ] Prevent removal/GC of referenced or active environments and make release
+  idempotent.
+
+Proof: concurrent toolbox and non-toolbox tests cover build coalescing,
+reference acquisition/release, active execution, removal denial, and restart.
+
+##### R6.4 Cut generic template and environment commands
+
+- [ ] Replace `toolbox-template-*` with `environment-template-*`.
+- [ ] Replace `toolbox-environment-remove` with `environment-remove`.
+- [ ] Generalize operation kinds, audit events, receipts, dispatch, channel,
+  CLI, status, and capability declarations.
+
+Proof: old commands and serialized toolbox environment kinds are rejected and
+new commands preserve role checks and no-double semantics.
+
+##### R6.5 Remove legacy roots and fallback behavior
+
+- [ ] Remove discovery/use of `toolbox_venvs`, `runtime_envs`, and
+  `toolbox_environment_cache`.
+- [ ] Remove legacy receipt/reference readers and compatibility aliases.
+- [ ] Provide explicit local operator cleanup instructions; do not delete old
+  data automatically as a side effect of daemon startup.
+
+Proof: a fixture containing only legacy directories cannot affect resolution,
+reuse, references, GC, or execution.
+
+#### R7 — Adopt the shared subsystem in toolbox flows (`high`, P1)
+
+##### R7.1 Translate toolbox plans into generic requests
+
+- [ ] Make toolbox definition planning resolve exact package locks and an
+  `EnvironmentRequest` through the generic subsystem.
+- [ ] Carry package/environment identities through confirmation, approval, and
+  apply so approved bytes cannot change between stages.
+- [ ] Attach/release the toolbox reference transactionally with definition
+  revision activation.
+
+Proof: mutation-between-plan-and-apply, stale approval, restart, retry, and
+concurrent revision tests cannot execute unapproved bytes or leak references.
+
+##### R7.2 Adapt materialization and execution
+
+- [ ] Make materialization consume an immutable environment receipt/reference
+  rather than constructing a toolbox-owned venv.
+- [ ] Preserve sandbox, proxy, tool exposure, runtime selection, and execution
+  constraints while changing environment ownership.
+- [ ] Keep toolbox logical commands and response semantics frozen in R0.
+
+Proof: end-to-end toolbox tests cover definition through execution for cached
+and newly built environments with no duplicate build or execution effect.
+
+##### R7.3 Adapt maintenance operations
+
+- [ ] Update toolbox consistency, gate, reconcile, repair, review snapshot,
+  references, GC, and archive behavior to call generic package/environment
+  operations where appropriate.
+- [ ] Keep toolbox-only state and generic shared state in separately versioned
+  repositories with explicit cross-references.
+
+Proof: maintenance tests cannot remove shared content still referenced by a
+toolbox or another worker kind.
+
+#### R8 — Complete worker-neutral state and operations (`high`, P1)
+
+##### R8.1 Version repositories and reject old state
+
+- [ ] Version generic package, environment template, lock, receipt, reference,
+  upload, and operation repositories.
+- [ ] Reject old toolbox-owned serialized records with the R0 operator message.
+- [ ] Ensure repository writes are locked, atomic, bounded, and crash-recoverable.
+
+Proof: corruption, truncation, unsupported-version, interrupted-write, and
+concurrent-writer tests preserve the last valid state or fail closed.
+
+##### R8.2 Adopt the shared manager in existing worker runtimes
+
+- [ ] Integrate the existing Python workflow helper and JavaScript/Node workflow
+  runtime with `EnvironmentManager` without adding their mechanics to the
+  shared manager.
+- [ ] Use stable `workflow_python_helper` and `workflow_js_node` consumer kinds
+  (or the exact R0 replacements) with consumer ID and revision.
+- [ ] Exercise source resolution, package lock, build/reuse, references,
+  execution handoff, and release for both worker kinds.
+
+Proof: cross-consumer tests demonstrate shared reuse where inputs match and
+independent retention where toolbox, Python helper, and Node references differ.
+
+##### R8.3 Harden maintenance and resource controls
+
+- [ ] Apply quotas and bounded listing/pagination to package/environment state.
+- [ ] Make GC mark from all consumer references before sweeping and re-check
+  activity under lock before deletion.
+- [ ] Make repair observational by default and explicitly authorized for any
+  mutation.
+
+Proof: stress and adversarial tests cover large state, concurrent create/GC,
+active executions, stale scratch, and partial artifacts without broad deletion.
+
+#### R9 — Finish public surfaces, acceptance, and handoff (`high`, P2)
+
+##### R9.1 Complete channel, CLI, and capability surfaces
+
+- [ ] Align every public method signature, CLI option, help example, capability,
+  request, response, and error with the R0 manifest.
+- [ ] Preserve complete authentication results through fresh and cached paths:
+  token, role, auth method, scope, and key ID.
+- [ ] Remove annotations or conversions that narrow structured results to a
+  token string.
+
+Proof: channel/API contract tests compare fresh and cached session metadata and
+exercise an admin-only call without another handshake.
+
+##### R9.2 Run cross-boundary security acceptance
+
+- [ ] Prove lower roles cannot manage sources, credentials, packages,
+  templates, environments, references, or GC.
+- [ ] Prove equal roles granted by password and public key receive equal policy.
+- [ ] Prove caller hashes cannot substitute for daemon-computed hashes.
+- [ ] Prove secrets and restricted local paths are absent from arguments,
+  process inspection fixtures, logs, audit, receipts, errors, and remote status.
+
+Proof: record the exact security suite and negative-path results in
+`hosting_status.md`.
+
+##### R9.3 Run lifecycle and no-double acceptance
+
+- [ ] Exercise direct, background, service, and relay-equivalent startup.
+- [ ] Exercise package upload, source resolution, environment build/reuse,
+  template replacement, reference release, removal, repair, and GC across
+  disconnect/retry/restart boundaries.
+- [ ] Exercise toolbox and second-worker flows concurrently.
+- [ ] Prove one authorized logical request causes at most one durable mutation
+  or execution effect.
+
+Proof: integration tests include stable operation IDs and receipt identities
+that demonstrate idempotence rather than relying only on response counts.
+
+##### R9.4 Remove all legacy surfaces
+
+- [ ] Run the R1 removal searches over production, tests, docs, and examples.
+- [ ] Remove old fields, commands, aliases, readiness codes, contract IDs,
+  filenames, directory fallbacks, and mandatory-signing language.
+- [ ] Inspect remaining matches individually and document any historical-only
+  occurrence that is intentionally retained.
+
+Proof: `rg` zero-result evidence is recorded for all prohibited runtime and API
+terms.
+
+##### R9.5 Update operator and developer documentation
+
+- [ ] Update `CONFIG.md`, `HOSTING_CONFIG_SCRIPT.md`, startup/CLI docs, security
+  model, package/environment lifecycle, toolbox docs, and worker integration
+  guidance.
+- [ ] Show logical refs as the normal configuration form and clearly separate
+  configuration, secrets, audit, state, scratch, packages, and environments.
+- [ ] Document explicit cleanup/rebuild of legacy environments without adding
+  fallback code.
+- [ ] Verify permanent documents contain no links to or normative dependency on
+  the three transient delivery records.
+
+Proof: all executable examples are run or covered by doc tests and contain no
+credential values in command arguments.
+
+##### R9.6 Complete dependent adoption
+
+- [ ] Deliver the final `HOSTING_CLIENT_BREAKING_CHANGES.md` to the dependent
+  team and record owner/receipt.
+- [ ] Validate the dependent client preserves structured authentication
+  metadata and adopts the new commands/readiness codes/version.
+- [ ] Do not close this item based only on a daemon-side compatibility shim.
+
+Proof: record the dependent revision/test evidence in `hosting_status.md` while
+keeping this repository's ownership boundary intact.
+
+##### R9.7 Run the full repository matrix
+
+- [ ] Run focused unit and integration suites for each R2–R8 boundary.
+- [ ] Run the repository's required aggregate test, lint, type, and platform
+  lanes, including native lanes where the affected runtime requires them.
+- [ ] Record skipped lanes with an owner and blocking reason; a skipped required
+  lane is not acceptance.
+
+Proof: commands, environment, results, and relevant artifact paths are recorded
+in `hosting_status.md`.
+
+##### R9.8 Close the plan
+
+- [ ] Confirm every checkbox is backed by evidence and every failed item remains
+  open.
+- [ ] Confirm public docs, handoff, capability version, and configuration schema
+  agree exactly.
+- [ ] Confirm no unplanned compatibility or fallback code was introduced.
+- [ ] Change this plan status to complete only after R9.6 and R9.7 pass.
+
+## 9. Final acceptance criteria
+
+- [ ] One top-level path map owns `@hosting`, `@packages`, and `@environments`.
+- [ ] One `hosting_config.json` owns all static hosting/control/package/
+  environment configuration.
+- [ ] The hosting setup library safely customizes roots and exclusively writes
+  hosting configuration; the daemon only reads it.
+- [ ] Daemon startup accepts no toolbox mappings or credential-bearing launcher
+  file/arguments.
+- [ ] Server-side roles authorize all mutations and daemon-computed SHA-256
+  identifies stored artifacts.
+- [ ] Mandatory publisher signing is absent from the baseline.
+- [ ] Toolboxes and at least one other worker kind use the same neutral package
+  and environment contracts.
+- [ ] Generic commands replace toolbox-owned upload/template/environment
+  lifecycle commands without aliases.
+- [ ] Old configuration, state, environment roots, and clients fail fast under
+  the new major contract.
+- [ ] Remote responses, logs, audit, and receipts expose neither secrets nor
+  unrestricted host-local paths.
+- [ ] Retry, restart, and concurrency tests prove no duplicate durable or
+  execution effects.
+- [ ] The dependent consumer has adopted the exact breaking handoff.
+- [ ] Full required test/platform evidence is recorded in `hosting_status.md`.
+- [ ] Permanent docs describe shipped behavior and do not reference transient
+  plan, status, or breaking-change ledgers.
+
+## 10. Explicitly out of scope
+
+- compatibility readers, shims, aliases, dual commands, or automatic legacy
+  environment reuse/migration;
+- editing the dependent repository from this plan;
+- distributing publisher private keys or requiring publisher signatures in the
+  baseline;
+- remote control-channel relocation of host roots;
+- embedding individual toolbox definitions in `hosting_config.json`;
+- accepting caller-supplied hashes without independently hashing received bytes;
+- exposing credential values through CLI arguments or remote inspection; and
+- claiming transactionality across filesystems without a journaled recovery
+  protocol.

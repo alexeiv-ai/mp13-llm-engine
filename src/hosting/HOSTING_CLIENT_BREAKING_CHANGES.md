@@ -1,595 +1,277 @@
-# Hosting client breaking changes
+# Unified hosting client breaking changes
 
-Status: migration required before corrective hosting rollout (2026-08-10)
+Status: reset for the unified hosting configuration and package/environment cut
 
-This handoff supersedes the consumed `HOSTED-TOOLBOX-DEFINITION` migration.
-The prior adoption remains recorded below, but it does not authorize adoption
-of the replacements in this document.
+This is the active handoff for the breaking plan in
+[`hosting_access_plan.md`](hosting_access_plan.md). The previous toolbox rollout
+handoff and adoption receipts are historical and remain available in Git. They
+do not demonstrate adoption of this cut.
 
-Normative behavior is defined by:
+The product is unreleased. Parent implementation removes the old surface in the
+same slices that add its replacement. There is no compatibility adapter,
+deprecated alias, dual-read period, or automatic legacy environment migration.
 
-- [Hosting Access §11.6](HOSTING_ACCESS.md#116-durable-hosted-operation-and-capability-contract)
-- [Hosted Toolbox Definition Contract](HOSTED_TOOLBOX_CONTRACT.md)
-- [Toolbox Worker](sandbox/TOOLBOX_WORKER.md)
+## 1. Handoff gate
 
-The parent product is unreleased. These replacements remove the old paths in
-the same implementation slices; there is no compatibility adapter, alias, or
-deprecation period. Dependent repositories must be migrated by their own
-maintainers and must not be edited from this repository.
+Do not begin a client-visible parent implementation slice until its exact
+request, response, error, capability, and version contract is frozen here.
+Directional names in this reset are not permission to infer missing payloads.
 
-## Adoption gate and pins
+- [ ] Record the new daemon/control contract major version.
+- [ ] Publish a complete retained/renamed/removed command manifest.
+- [ ] Publish exact request and response schemas for every renamed command.
+- [ ] Publish generic readiness codes and the old-to-new disposition table.
+- [ ] Publish startup/configuration argument signatures.
+- [ ] Publish operation kinds, selectors, progress phases, and receipts.
+- [ ] Publish state/receipt contract versions and old-version rejection errors.
+- [ ] Record the parent implementation pin.
+- [ ] Record each dependent owner, revision, test receipt, and adoption status.
 
-- Last adopted parent baseline: `83b35e20604c8f0c2fbe27467980b6a49385d918`
-- Last adopted `mp13-docs` commit: `125d20f232bf5b755d18c1b23bc1e4b8929edf21`
-- Corrective parent implementation pin: `d689bda`.
-- Production-launcher completion pin: `48ff1f1`.
-- Dependent adoption receipt: supplied against parent `af6b01636620e79bbcb7e4257a630b1eb72a544a`
-  from dependent revision `06fc0d3f7df...` on Windows64 with CPython 3.12.7.
-  Reported migration results are 71 + 8 + 28 passed, plus 12 parent tests
-  passed, covering all nine required behaviors. The consumer project identifier
-  and full 40-character dependent commit are intentionally not required.
-  Consumer Linux and macOS testing is not required.
+## 2. Ownership and rollout
 
-Rollout order is fixed:
+The parent repository owns daemon, channel, CLI, setup, configuration, package,
+and environment contracts. Dependent maintainers own their repository changes.
+Parent work may inspect dependent code but must not modify it.
 
-1. Commit this handoff before the first client-visible parent implementation.
-2. Land the parent target/configuration and operation replacements, then record
-   their exact parent pin here.
-3. Dependent maintainers update their code, configuration, tests, and docs
-   against that pin and supply an adoption receipt.
-4. Keep this file populated until every listed dependent has confirmed
-   adoption. Only then may the handoff be reset.
+Rollout order:
 
-## Removed target and host-configuration contract
+1. Complete R0 contract freeze and R1 handoff/inventory in the parent.
+2. Land a coherent parent breaking slice and record its exact pin here.
+3. Dependent maintainers update code, configuration, tests, and documentation
+   against that pin.
+4. The dependent supplies a revision and test receipt.
+5. Parent acceptance verifies the receipt and records it here.
+6. Keep this file populated until all named consumers adopt the new major
+   contract.
 
-The following configuration fields and behaviors are removed:
+## 3. Configuration and startup cut
 
-- the `toolbox_environment_catalog` setup/readiness projection name; use
-  `toolbox_host_project` for sanitized effective configuration and
-  `toolbox_readiness` for built-in readiness;
-- `resource` and the shipped realized-catalog resource contract;
-- `hosting.toolbox.shipped_templates`,
-  `initialize_shipped_toolbox_templates`, and automatic runtime fallback to
-  packaged realized locks;
-- `required_target`, including the literals `cp312-win_amd64` and
-  `cp312-manylinux_2_28_x86_64` as administrator-selected build targets;
-- `required_template_ids` tied to shipped realized lock resources;
-- `artifact_source_ids` and `offline_preseed_source_id` as source references
-  without strict source definitions and a source-set revision;
-- the assumption that a missing/non-Windows target is Linux x64;
-- treating shipped lock JSON as if it were an installable wheel artifact; and
-- cross-target environment construction.
+### Removed configuration authorities
 
-The daemon now detects exactly one current-host identity from the running
-CPython interpreter and ordered `packaging.tags.sys_tags()`. Internal target
-identity contains the Python ABI, operating system, architecture, platform
-baseline, and compatible wheel tags. Supported families are CPython 3.12 on
-Windows x64/ARM64, Linux glibc x64/ARM64, and macOS ARM64. Administrators do not
-select a different build target. A wheel incompatible with the detected target
-is rejected before download or construction.
+- `access_control.json`
+- the short-lived toolbox launcher JSON
+- direct startup/control settings named:
+  - `toolbox_host_project_configuration`
+  - `toolbox_artifact_sources`
+  - `toolbox_trust_public_keys`
+  - `toolbox_source_credentials`
+  - `toolbox_dependency_policy`
+- `--toolbox-config-file`
+- `engine_host_toolbox_config_file`
+- mandatory `trust_key_ids`, signed manifests, and publisher public-key maps in
+  the baseline package path
 
-Remove configurations shaped like:
+### Replacement direction
+
+The one authoritative static hosting configuration is:
+
+```text
+<config root>/hosting/hosting_config.json
+```
+
+The top-level MP13 configuration owns `hosting_root_dir`, `packages_root_dir`,
+and `environments_root_dir`, exposed as `@hosting`, `@packages`, and
+`@environments`. Hosting configuration uses logical references; clients must
+not manufacture daemon-local absolute paths.
+
+Daemon startup receives only the top-level MP13 configuration location needed
+to resolve the hosting configuration locally. The exact Python parameter, CLI
+flag, and control-setting names remain gated by R0.5 and must be inserted here
+before implementation.
+
+Static authentication, source, credential, dependency, retention, and root
+policy is host-local and becomes active after deliberate daemon restart.
+Toolboxes, packages, templates, and environments remain dynamic control-channel
+operations after startup and do not rewrite `hosting_config.json`.
+
+### Dependent removals
+
+- [ ] Stop constructing or forwarding any of the five toolbox mappings.
+- [ ] Stop creating launcher JSON files.
+- [ ] Remove the old CLI/control-setting names and conflict branching.
+- [ ] Stop reading `access_control.json` as readiness or configured-state truth.
+- [ ] Do not expose credentials or host paths in arguments, logs, status, or UI.
+- [ ] If the dependent owns local daemon bootstrap, adopt the exact new
+  top-level configuration argument after R0.5 freezes it.
+
+## 4. Authorization and artifact identity
+
+Authenticated server-side role and effective scope authorize package,
+environment, toolbox, and worker administration. Password and public-key
+sessions with the same effective role/scope have the same authority.
+
+The daemon computes SHA-256 from bytes received into host-controlled scratch
+storage. A client-provided hash is an optional expected value only. Clients
+must not treat their own hash, a URL, a filename, or a publisher signature as
+proof that the daemon stored those bytes.
+
+Dependent behavior:
+
+- [ ] Use daemon-returned package identities and immutable locks.
+- [ ] Treat role denial, policy denial, and expected-hash mismatch as distinct
+  bounded errors.
+- [ ] Remove mandatory publisher-signing-key provisioning from the mainstream
+  setup flow.
+- [ ] Never send a private publisher key, environment directory, install
+  command, or credential value through the control channel.
+
+## 5. Authentication result propagation
+
+Fresh and cached public-key authentication paths return an equivalent complete
+session result. Do not narrow this mapping to a token string:
 
 ```json
 {
-  "resource": "hosting.resources.toolbox_templates.catalog.v1.json",
-  "trusted_signing_key_ids": ["parent-release-toolbox-v1"],
-  "required_template_ids": ["builtin-data", "builtin-web"],
-  "required_target": "cp312-win_amd64",
-  "prewarm_required": true,
-  "artifact_source_ids": ["parent-release-resources"],
-  "offline_preseed_source_id": null,
-  "cache_grace_seconds": 604800,
-  "build_timeout_seconds": 1800
+  "status": "ok",
+  "token": "opaque-session-token",
+  "role": "admin",
+  "auth_method": "public_key",
+  "scope": "control",
+  "key_id": "registered-key-id",
+  "reused": false
 }
 ```
 
-Replace them with the strict revisioned host-owned configuration model. Its
-exact top-level/nested field shape is:
-
-```json
-{
-  "builtins": [
-    {
-      "template_id": "builtin-data",
-      "imports": ["numpy"],
-      "package_requirements": ["numpy"],
-      "sandbox_policy": "compute-only",
-      "required": true,
-      "prewarm": true,
-      "provenance": "parent-release"
-    }
-  ],
-  "sources": [
-    {
-      "source_id": "approved-index",
-      "kind": "https_index",
-      "origin": "https://packages.example.invalid/simple/",
-      "credential_ref": "host-secret:approved-index",
-      "allowed_package_namespaces": ["*"],
-      "priority": 100,
-      "trust_key_ids": ["packages-2026"],
-      "maximum_download_bytes": 536870912
-    }
-  ],
-  "resolution": {
-    "mode": "online",
-    "timeout_seconds": 60,
-    "maximum_bytes": 536870912,
-    "maximum_artifacts": 256,
-    "allowed_redirect_origins": ["https://packages.example.invalid"],
-    "wheel_only": true
-  },
-  "retention": {
-    "artifact_cache_grace_seconds": 604800,
-    "maximum_cache_bytes": 10737418240,
-    "maximum_cache_artifacts": 4096,
-    "protected_digests": [],
-    "remove_unreferenced_custom_revisions_on_apply": false
-  }
-}
-```
-
-The implementing schema is strict: dependents must use the exact field names
-published by the implementing parent pin and must not copy the example as an
-independent schema. Source credentials and filesystem paths remain daemon-owned.
-Air-gapped packages arrive only from a configured read-only store or the
-authenticated signed-bundle administrator upload lifecycle.
-
-The accepted bundle is a canonical Ed25519-signed ZIP containing only
-`manifest.json`, `signature.json`, and declared wheels under `wheels/`.
-Directories, links, traversal, undeclared entries, source distributions,
-incompatible tags, digest/metadata mismatches, and incomplete dependency
-closures are rejected before the content-addressed store index changes.
-The daemon trust-key binding is an exact map from every configured key ID to
-its unpadded base64url raw 32-byte Ed25519 public key. Raw wheel files in a
-read-only source root are ignored; only verified direct-child signed ZIPs feed
-normal resolution.
-Built-in candidate provenance must be covered by exactly one verified source
-bundle. The host binds its signed manifest to configured intent and the exact
-resolved closure, then builds/probes through verified CAS paths before any
-catalog or public receipt mutation.
-The complete configured built-in set becomes visible together: all candidate
-receipts are committed in one receipt-store replacement, followed by one
-catalog activation replacement. An ordinary publication failure rolls back
-new receipts/references; identical retry is idempotent.
-
-The artifact-store state contract changes to
-`hosting.toolbox.artifact_store.v2` and adds a separate `https_manifests`
-collection that references the same immutable CAS objects as signed air-gap
-bundles. Hosts must not reuse or edit a v1 index in place; reacquire/reimport
-artifacts under the configured source revision.
-
-HTTPS package sources now require signed PEP 503 HTML or PEP 691 JSON. The exact response bytes
-are authenticated by `X-MP13-Signing-Key-Id` and the unpadded-base64url
-Ed25519 `X-MP13-Signature`; every selected file also requires a SHA-256 and
-exact byte size; HTML anchors use the `sha256` fragment and `data-size`.
-Administrator wiring supplies an exact daemon-owned map from
-each configured `credential_ref` to its Authorization value. Clients and
-status projections must never return that map, forward it across an unapproved
-redirect, or parse network/parser text. Stable bounded failures cover invalid
-credentials, requests, redirects, metadata/signatures, artifact identity, and
-bounds.
-
-Administrator setup logic must change as follows:
-
-- replace `EngineHostService(toolbox_environment_catalog=...,
-  toolbox_sandbox_policies=...)` construction with normal
-  `start_daemon_background(toolbox_host_project_configuration=...,
-  toolbox_artifact_sources=..., toolbox_trust_public_keys=...,
-  toolbox_source_credentials=..., toolbox_dependency_policy=...)`
-  production startup (or the equivalent `run_daemon_foreground` call);
-- when launching through the CLI/SSH relay, place those same five mapping fields
-  in a host-local, access-restricted JSON file and pass
-  `--toolbox-config-file <path>`; never place credential values in command-line
-  arguments;
-- when local bootstrap is owned by `EngineHostControlChannel`, provide the five
-  mappings in its control settings or provide
-  `engine_host_toolbox_config_file`; do not combine both forms;
-- stop generating `required_target`; verify the daemon-reported detected target;
-- define built-in intent and ordered sources instead of realized locks;
-- treat configuration application as revision creation, not in-place mutation;
-- wait for the system-owned setup operation while toolbox readiness is false;
-- handle a missing compatible exact wheel as a stable not-ready result; and
-- never upload a venv, source distribution, install script, arbitrary index URL,
-  or consumer filesystem path.
-
-Built-in realization is no longer a synchronous administrator action. The
-canonical hosted operation has execution kind `toolbox_setup`, selector
-`host_scope: toolbox-host`, receipt namespace `toolbox_setup:toolbox-host`, and
-system owner `system:toolbox-setup`. Its fingerprint binds the configuration
-revision, source-set revision, and detected target. Start returns immediately;
-same-request retries attach to the existing operation, and recovery uses the
-generic hosted-operation status/result/request-recovery surface.
-
-Clients must render only the fixed setup phases `resolution`, `acquisition`,
-`artifact_verification`, `environment_build`, `import_probe`, `prewarm`, and
-`publication`. Acquisition progress counts verified artifact bytes. The setup
-operation is not cancellable, and clients must not synthesize a cancellation or
-a second actor-owned operation. Continue reporting toolbox readiness as false
-until terminal success reports `toolbox_setup_ready` after complete atomic
-receipt/catalog publication. Terminal failures carry stable bounded codes and
-must not be interpreted by parsing their summaries.
-
-Normal daemon construction now dispatches or attaches to this operation and
-does not wait for source scanning, resolution, build, or probes. Hosting setup
-responses expose its sanitized canonical status as `toolbox_setup_operation`.
-After restart, an interrupted-before-dispatch record resumes once on the same
-operation ID. An interrupted-after-dispatch record is reconciled as success
-only from a durable complete-publication checkpoint plus current real receipts;
-otherwise that same record fails with
-`toolbox_setup_interrupted_after_dispatch`. Clients must not create a retry
-record or infer success from an active catalog entry alone.
-
-Online setup does not pass an index URL or credential to pip. It discovers a
-bounded transitive candidate set from signed project metadata, verifies each
-wheel into CAS, and invokes the same offline exact resolver used for air-gap
-content. Multiple signed project documents become one deterministic
-`https_metadata_set` provenance identity. Administrator status may show its
-logical source IDs and signing-key IDs, but never Authorization values, signed
-query data, response bodies, or network/parser exception text.
-
-Configuration revision transitions invalidate unconsumed definition plans and
-materialization receipts for non-active template revisions. Consumers must
-re-plan after a change. Active catalog revisions and already published toolbox
-environments remain pinned; absence of configuration after restart does not
-fall back to the persisted prior revision.
-
-An absent, partial, invalid, or incorrectly bound configuration no longer
-silently uses shipped defaults and does not take down the general control
-plane. Branch on `toolbox_readiness.status == "unavailable"` and the stable
-codes `toolbox_configuration_missing`, `toolbox_configuration_incomplete`,
-`toolbox_configuration_invalid`, or `toolbox_source_binding_invalid`; do not
-parse the bounded summary.
-
-For read-only air-gap stores, every wheel must be a direct child of the bound
-source root. Built-in resolution is offline and wheel-only, verifies the exact
-transitive closure against the detected target and configured bounds, and
-publishes nothing if any required intent reports
-`required_template_wheel_missing`, `required_template_resolution_invalid`, or
-`required_template_resolution_bounds_exceeded`.
-
-Administrator upload transport is begin/chunk/commit/cancel, not a path or
-whole archive field. Begin declares the logical air-gap source, total bytes,
-archive SHA-256, and idempotency request ID; the host returns an opaque
-`upload_id` bound to the current config/source-set/target and authenticated
-administrator. Chunks are contiguous zero-based unpadded-base64url pieces of at
-most 1 MiB decoded. Identical begin/chunk retries attach, while changed values
-conflict. Open uploads expire after 15 minutes; cancel is synchronous and
-idempotent. Staging is untrusted and invisible to the CAS until the separate
-durable commit succeeds. Clients must never submit or display a daemon path.
-
-The exact admin-only commands are `toolbox-artifact-upload-begin`,
-`toolbox-artifact-upload-chunk`, `toolbox-artifact-upload-status`,
-`toolbox-artifact-upload-cancel`, and `toolbox-artifact-upload-commit`.
-Commit takes only the opaque `upload_id` plus a stable commit `request_id` and
-returns a generic durable operation status immediately. Its execution kind is
-`toolbox_artifact_import`, selector kind is `upload_id`, and fixed
-non-cancellable phases are `validation`, `artifact_verification`,
-`publication`, and `cleanup`. Poll/watch the canonical operation until
-`artifact_upload_committed`; an identical lost-response retry attaches to the
-same operation, while a changed commit request conflicts. After restart,
-recover that operation rather than beginning or committing a replacement
-upload. An interrupted-after-dispatch import succeeds only when its durable
-upload result already proves commit; otherwise the same record fails with
-`artifact_upload_interrupted_after_dispatch`.
-
-## Removed toolbox mutation commands and fields
-
-The following current surface is removed:
-
-- raw top-level long calls to `toolbox-plan-definition` and
-  `toolbox-apply-definition`;
-- `toolbox-approve-definition-plan` on the ordinary toolbox-consumer route;
-- `toolbox_apply_definition(definition=...)` and the wire-level apply
-  `definition` field;
-- apply-time re-resolution of the submitted definition;
-- approval bound only to `plan_id` and a custom-delta digest;
-- synchronous client waiting during plan/apply, duplicate attachment,
-  cancellation teardown, or a human decision; and
-- the daemon's separate 200-snapshot `operations.json` operation mirror for
-  these commands.
-
-The replacement semantic sequence is:
-
-1. `toolbox-get-definition` — bounded synchronous read.
-2. `toolbox-plan-definition` — durable operation submitted through `op-start`.
-3. `toolbox-confirm-definition-plan` — durable confirmation/acquisition
-   operation submitted through `op-start`.
-4. `toolbox-approve-confirmed-definition-plan` — bounded synchronous operation,
-   callable only by a dependency approver when policy requires it.
-5. `toolbox-apply-definition` — durable operation submitted through `op-start`.
-
-High-level channel helpers remain the preferred entry points, but plan,
-confirmation, and apply helpers return durable operation status rather than a
-terminal plan/result. Raw dispatch of a command classified as long fails; it
-must be wrapped by `op-start`.
-
-## Exact replacement request sequence
-
-First read the active definition:
-
-```json
-{
-  "toolbox_id": "toolbox-demo",
-  "operator_details": false
-}
-```
-
-Submit planning once with a stable request ID in the command payload:
-
-```json
-{
-  "command": "toolbox-plan-definition",
-  "payload": {
-    "request_id": "plan-2026-08-10-001",
-    "definition": {
-      "contract": "hosting.toolbox.definition",
-      "toolbox_id": "toolbox-demo",
-      "expected_revision": null,
-      "auto_requests": [],
-      "manual_requests": []
-    },
-    "operator_details": false,
-    "ttl_ms": 900000
-  }
-}
-```
-
-The immediate response is a durable operation snapshot containing an opaque
-`operation_id`. Poll `op-status`, or use the channel watch helper, until the
-operation is terminal. Read the immutable plan and bounded alternatives from
-the terminal result; do not keep the planning request open.
-
-Confirm one offered alternative for every offered environment and accept or
-decline its package group:
-
-```json
-{
-  "command": "toolbox-confirm-definition-plan",
-  "payload": {
-    "request_id": "confirm-2026-08-10-001",
-    "plan_id": "opaque-plan-id",
-    "environment_choices": [
-      {
-        "environment_id": "offered-environment-id",
-        "alternative_id": "offered-alternative-id",
-        "accept_package_changes": true
-      }
-    ]
-  }
-}
-```
-
-Observe that operation independently. Its terminal result supplies an opaque
-`confirmation_ref`, accepted tool keys, skipped tool keys and stable reasons,
-explicit removals, exact package mutations, and whether privileged approval is
-required. A client cannot provide a version, URL, source, lock, digest, path, or
-install command in this request.
-
-When required, a separately authenticated dependency approver submits:
-
-```json
-{
-  "confirmation_ref": "opaque-confirmation-ref"
-}
-```
-
-to `toolbox-approve-confirmed-definition-plan`. The returned opaque
-`dependency_approval_ref` binds the confirmation, exact locks/artifacts, and all
-configuration/source/policy revisions.
-
-Finally submit apply without another definition copy:
-
-```json
-{
-  "command": "toolbox-apply-definition",
-  "payload": {
-    "request_id": "apply-2026-08-10-001",
-    "plan_id": "opaque-plan-id",
-    "confirmation_ref": "opaque-confirmation-ref",
-    "dependency_approval_ref": "opaque-approval-ref"
-  }
-}
-```
-
-Omit `dependency_approval_ref` only when the confirmation receipt states that
-approval is not required. Apply publishes exactly the confirmed effective
-definition and never reinterprets the original request.
-
-## Removed template publication and synchronous maintenance surfaces
-
-The raw `toolbox-template-publish` command and its caller-supplied `template`,
-`artifact_references`, `manifest_signature`, and `activate` fields are removed.
-Administrators no longer publish pre-resolved or pre-signed catalog entries.
-The replacement construction command is `toolbox-template-construct`, submitted
-through `op-start` with this payload:
-
-```json
-{
-  "command": "toolbox-template-construct",
-  "payload": {
-    "request_id": "template-construct-2026-08-10-001",
-    "template_id": "team-analysis",
-    "base_template_digest": "sha256:<exact-base-revision>",
-    "imports": ["pandas"],
-    "package_requirements": ["pandas==2.3.1"]
-  }
-}
-```
-
-The daemon resolves only through configured sources for the current host,
-retains the exact base closure, verifies the complete artifact closure, builds
-and probes it, and publishes the resulting immutable revision as `inactive`.
-The durable execution kind is `toolbox_template_construct`; retrying the same
-request attaches to the canonical operation. A changed payload using the same
-request ID conflicts.
-
-Activation is a separate bounded administrator decision. Use
-`toolbox-template-activate` with `template_id` and exact `template_digest` when
-there is no active revision. Use `toolbox-template-replace` with `template_id`,
-`expected_active_digest`, and `replacement_digest` for compare-and-swap
-replacement. `toolbox-template-deprecate`, `toolbox-template-revoke`, and
-`toolbox-template-prewarm` remain final exact-revision APIs. Clients must not
-retain the old combined publish-and-activate flow.
-
-The synchronous mutation results from `toolbox-gc`, `toolbox-repair`, and
-`toolbox-reconcile` are also removed. Submit each command through `op-start`
-with a stable `request_id`; repair and reconcile additionally accept
-`toolbox_ids`, `only_inconsistent`, and `details`. Their immediate response is
-canonical `toolbox_maintenance` operation status with the `host_scope` selector
-`toolbox-host`. Poll/watch the terminal result for the former GC, repair, or
-reconcile result body. Duplicate requests return the same operation, and
-cancellation acknowledges without waiting for filesystem traversal, worker
-retirement, or cleanup to finish.
-
-## Restart-safe toolbox execution changes
-
-R6 removes the remaining synchronous duplicate/teardown assumptions. A duplicate
-`toolbox-execute` request with the same stable `execution_request_id` returns the
-current durable operation snapshot immediately; it does not wait for the first
-worker call to finish. `hosted-operation-cancel` acknowledges a live toolbox
-cancellation immediately and clients must continue watching durable cancellation
-progress while worker teardown and optional repair complete.
-
-`toolbox-describe` is now a bounded persisted/registration read. It does not
-contact a worker or refresh a stale live inventory. Clients that need a live
-worker description submit `toolbox-describe-refresh` through `op-start` with a
-stable `request_id`, then poll/watch the returned
-`toolbox_describe_refresh` operation and read its terminal description result.
-
-## Retry, watch, confirmation, and recovery logic
-
-Dependents must make these control-flow changes:
-
-- generate a stable printable `request_id` before every plan, confirmation, and
-  apply submission and persist it before sending;
-- after a lost response, resubmit the identical command/payload or resolve the
-  canonical durable operation by request ID; never create a replacement ID;
-- treat duplicate submission as a status lookup, not permission to wait for or
-  launch a second worker;
-- poll/watch changed `op-status` snapshots and fetch the terminal result from
-  the canonical hosted-operation repository;
-- perform package review and human approval only between terminal operations;
-- on daemon restart, recover by request ID/operation ID rather than an in-memory
-  callback, workflow stream, proxy stream, or open request;
-- treat cancellation as `cancel_requested` acknowledgement and continue
-  observing durable teardown progress; and
-- replan after any target, active definition, catalog, host-config, source-set,
-  dependency-policy, artifact, or expiry pin becomes stale.
-
-Confirmation branching must preserve the specified semantics: declining a
-required package skips affected new tools; a skipped update preserves its
-active version; explicit removals proceed; and an incomplete shared environment
-skips all affected accepted tools with `shared_environment_incomplete`.
-
-## Stable behavior and error changes
-
-Remove client branches that assume planning returns a terminal plan directly,
-that approval is consumer-callable, or that apply accepts the original
-definition. Add handling for the implementing contract's stable codes covering:
-
-- operation submission required for raw long commands;
-- stale target/config/source/policy/artifact/expiry pins;
-- missing or incompatible exact wheels;
-- invalid/unoffered confirmation choices;
-- `shared_environment_incomplete` and namespace conflicts;
-- dependency-approver authorization failure;
-- cancellation requested versus terminal cancellation; and
-- toolbox setup not ready while built-ins are being realized or cannot be
-  realized.
-
-Exact spellings not already frozen above must be copied from the implementing
-parent contract and pin before dependent adoption; clients must not infer codes
-from exception text.
-
-## Dependent code, configuration, tests, and documentation
-
-Authentication helper return contract: `EngineHostControlChannel.ensure_public_key_session()`
-and `authenticate_client_with_key()` now return a result mapping rather than a bare token
-string. Consumers must read `result["token"]`; `key_id`, `auth_method`, `role`, and
-`scope` are present for both new and validated cached sessions, and `reused` identifies
-whether the public-key handshake was skipped.
-
-Daemon RBAC key projection contract: authenticated `auth-upsert-key` responses
-and every `auth-list-keys` row include `public_key`. For `public_key` identities
-this is the exact currently registered SSH public key, including after
-replacement; for shared-secret identities it is an empty string. Secret values
-and `secret_hash` are never projected. Setup clients may verify a replacement
-by comparing the upsert result and subsequent list row with the requested public
-key; they must continue authenticating these endpoints after first-key
-bootstrap.
-
-Remove:
-
-- target-selection configuration and x64/Linux fallback logic;
-- shipped catalog/lock-resource fixtures and lock-JSON-as-wheel normalization;
-- direct synchronous plan/apply invocations and terminal return assumptions;
-- raw template publication payloads and publish-time activation;
-- synchronous GC/repair/reconcile invocation and terminal return assumptions;
-- calls to `toolbox-approve-definition-plan` as a consumer;
-- apply payload construction containing `definition`;
-- in-memory wait/callback logic spanning human confirmation or approval;
-- arbitrary package URL/path/archive/install-command inputs; and
-- tests and documentation for all of those paths.
-
-Add or change:
-
-- detected-target reporting and all five supported target-family fixtures;
-- strict built-in/source/mode/retention configuration owned by administrators;
-- online and air-gap missing-wheel/not-ready handling;
-- durable plan/confirm/apply submission, retry, status/watch, restart recovery,
-  and immediate cancellation acknowledgement;
-- durable template construction and maintenance submission/recovery, plus
-  explicit exact-revision template activation/replacement;
-- a distinct dependency-approver credential/role path;
-- confirmation UI/logic for alternatives, exact direct/transitive mutations,
-  accept/decline choices, skips, preserved active updates, and removals;
-- apply construction from `plan_id` plus receipts only; and
-- migration tests pinned to the exact parent implementation commit.
-
-Required Windows dependent evidence must cover at least: detected native target, strict
-configuration rejection, lost-response retry, daemon restart, no request held
-during a human decision, partial decline/skip, separate approver authority,
-apply without a definition copy, and stale-pin recovery.
-
-## R7 adoption evidence record
-
-Parent-side replacement inventory and migration payloads are complete in this
-document. The parent acceptance suite is
-`tests/test_hosting_r7_acceptance.py`; it uses normal daemon construction,
-signed current-target source ingestion, the real resolver/materializer, durable
-consumer and approver dispatch, real worker execution, removal, restart healing,
-environment-removal safety, maintenance, and request-ID terminal recovery.
-
-Dependent adoption is an external release gate and is not inferred from parent
-tests. Each dependent maintainer must provide a receipt with all of these exact
-fields before R7-01 can close:
-
-```json
-{
-  "dependent_commit": "consumer-reported-revision-or-abbreviated-pin",
-  "parent_pin": "40-lowercase-hex-or-release-pin",
-  "consumer_test_platform": "windows-target-reported-by-dependent",
-  "migration_test_command": "maintainer-run command",
-  "migration_test_result": "passed count/duration",
-  "covered_behaviors": [
-    "detected_target",
-    "strict_configuration_rejection",
-    "lost_response_retry",
-    "daemon_restart",
-    "human_decision_without_open_request",
-    "partial_decline_skip",
-    "distinct_dependency_approver",
-    "apply_without_definition_copy",
-    "stale_pin_recovery"
-  ]
-}
-```
-
-Current dependent receipt status: **supplied**. The dependent reported revision
-`06fc0d3f7df...` against parent
-`af6b01636620e79bbcb7e4257a630b1eb72a544a` on Windows64 with CPython 3.12.7:
-71 + 8 + 28 migration tests and 12 parent tests passed, covering every behavior
-listed above. Consumer identity and a full dependent hash are not acceptance
-fields. Non-Windows consumer evidence is not required.
+`reused` changes on cached reuse; token expiry/binding fields may also be
+present. The authorization metadata contract is otherwise equivalent without a
+second handshake. Tokens remain secret even though this structured result is
+returned to the trusted local caller.
+
+Parent navigation:
+
+- `src/hosting/client_realm_api.py::authenticate_client_with_key`
+- `src/hosting/engine_host_channel.py::ensure_public_key_session`
+
+Dependent navigation:
+
+- `src/backend/platform/hosting/hosting_admin.py::ensure_public_key_session`
+
+Dependent adoption must prove that an admin-only call succeeds from the
+returned/cached role-bearing session without an extra handshake or a separate
+role-probing workaround.
+
+## 6. Package and environment API cut
+
+### Renamed command families
+
+| Removed | Replacement | Exact payload status |
+|---|---|---|
+| `toolbox-artifact-upload-begin` | `package-artifact-upload-begin` | Pending R0.5 |
+| `toolbox-artifact-upload-chunk` | `package-artifact-upload-chunk` | Pending R0.5 |
+| `toolbox-artifact-upload-status` | `package-artifact-upload-status` | Pending R0.5 |
+| `toolbox-artifact-upload-cancel` | `package-artifact-upload-cancel` | Pending R0.5 |
+| `toolbox-artifact-upload-commit` | `package-artifact-upload-commit` | Pending R0.5 |
+| `toolbox-template-*` | `environment-template-*` | Pending R0.5 |
+| `toolbox-environment-remove` | `environment-remove` | Pending R0.5 |
+
+There are no old-name aliases. Generic package/environment requests and
+references carry `consumer_kind`, `consumer_id`, and `revision` where frozen by
+R0.4/R0.5.
+
+### Retained toolbox command family
+
+These names remain toolbox-specific because their payloads describe toolbox
+semantics:
+
+- `toolbox-get-definition`
+- `toolbox-plan-definition`
+- `toolbox-confirm-definition-plan`
+- `toolbox-approve-confirmed-definition-plan`
+- `toolbox-apply-definition`
+- `toolbox-execute`
+- toolbox describe, consistency, gate, reconcile, repair, review, references,
+  GC, and archive commands whose exact disposition is recorded by R0.5
+
+Retaining a name does not guarantee that every nested package/environment
+field remains unchanged. R0.5 must publish any nested identity, receipt,
+operation, or readiness changes before the owning parent slice begins.
+
+### Removed environment ownership
+
+- `ToolboxEnvironmentManager`
+- the compatibility `RuntimeEnvironmentManager` subclass
+- toolbox-specific environment receipt/reference contracts selected by a
+  directory kind
+- `toolbox_venvs`
+- `runtime_envs`
+- `toolbox_environment_cache`
+
+The replacement is the worker-neutral `EnvironmentManager` with
+`EnvironmentRequest`, `EnvironmentLock`, `EnvironmentReceipt`, and
+`EnvironmentReference`. Old environments are rebuilt; they are not discovered
+or reused by the new daemon.
+
+## 7. Readiness and capability cut
+
+The following current readiness family is removed:
+
+- `toolbox_configuration_missing`
+- `toolbox_configuration_incomplete`
+- `toolbox_configuration_invalid`
+- `toolbox_source_binding_invalid`
+
+R0.5 must replace this section with an exact mapping covering:
+
+- unsupported/missing/invalid hosting configuration;
+- unavailable package source or credential;
+- dependency-policy rejection or artifact hash mismatch;
+- unavailable template or failed environment build; and
+- referenced/busy/retained environment removal denial.
+
+Clients branch only on frozen codes and capability/contract versions. They must
+not parse summaries or translate old readiness codes locally.
+
+Known dependent navigation:
+
+- `src/backend/platform/capabilities/parent_truth.py`
+- `src/backend/platform/toolboxes/definition_coordinator.py`
+- `src/ui/web/static/js/features/chat/CapabilityToolsPanel.js`
+- `tests/backend_infra/test_parent_toolbox_truth.py`
+
+## 8. Dynamic lifecycle behavior
+
+After daemon startup, an authorized client can create or revise toolbox
+definitions, upload packages, manage environment templates, and construct/reuse
+environments without restarting the daemon. These operations use versioned
+state and immutable content under host-configured roots.
+
+Plans and operations pin the active hosting configuration revision. A restart
+under changed static policy makes incompatible pending work stale; clients
+must re-plan rather than silently continuing under new policy.
+
+The exact durable operation kinds, selectors, phases, retry rules, cancellation
+rules, and receipts for renamed generic commands are pending R0.4/R0.5.
+
+## 9. State and local data cut
+
+- Old configuration and serialized package/environment contracts fail fast.
+- Old environment directories are ignored by resolution, reuse, references,
+  removal, and GC.
+- Operator cleanup is explicit and local; daemon startup does not broadly
+  delete legacy data.
+- Keyring, audit, mutable state, scratch, immutable packages, and environments
+  remain separate records/data even though static configuration has one
+  authority.
+
+R0.6 must add the exact old contract identifiers, new contract identifiers,
+and stable rejection errors here before their implementation slice begins.
+
+## 10. Adoption receipt
+
+| Field | Required value | Current value |
+|---|---|---|
+| Parent contract major | Exact version | Pending R0.5 |
+| Parent implementation pin | Full commit | Pending |
+| Dependent owner | Team/person | Pending |
+| Dependent revision | Full commit | Pending |
+| Configuration/startup tests | Commands and result | Pending |
+| Authentication metadata tests | Fresh, cached, admin-only result | Pending |
+| Package command tests | New commands; old commands rejected | Pending |
+| Environment command tests | New commands; old commands rejected | Pending |
+| Readiness/capability tests | Exact new codes/version | Pending |
+| Toolbox lifecycle tests | Plan through execute/retry/restart | Pending |
+| Non-toolbox worker tests | Python helper and Node adoption | Pending |
+| Secret/path redaction tests | Arguments/logs/status/errors/receipts | Pending |
+
+The receipt is complete only when all rows identify reproducible evidence.
+Prior toolbox-rollout receipts do not fill these rows.

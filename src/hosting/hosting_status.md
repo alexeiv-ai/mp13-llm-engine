@@ -1,418 +1,230 @@
-# Hosting toolbox corrective status
+# Unified hosting cutover status
 
 Last updated: 2026-08-11
 
-## Overall status
+Status: active; contract freeze not started
 
-Status: Active corrective work
+This is the fresh execution ledger for
+[`hosting_access_plan.md`](hosting_access_plan.md). The prior toolbox corrective
+ledger and its test transcript remain available in Git history. Their completed
+work may be useful implementation foundation, but it is not evidence that the
+new unified configuration, generic APIs, state cut, or dependent adoption is
+complete.
 
-The complete-definition migration remains adopted, but the environment/template
-implementation is not accepted as complete. A post-acceptance audit found that
-tests proved isolated planner and builder components without proving the real
-daemon/control-channel bridge. The corrected plan now also requires an explicit
-multi-tool package-confirmation protocol and removes all superseded compatibility
-paths because the product is unreleased. The corrective scope is defined in
-[hosting_access_plan.md](hosting_access_plan.md).
+## 1. Current gate
 
-## Retained completed baseline
+Current continuous block: A — contract freeze (`average`, P0)
 
-The following foundations remain implemented and are not reopened wholesale:
+Active slice: none
 
-- complete toolbox definition read/plan/approval/durable-apply APIs;
-- canonical definition, profile, environment, manifest, and lock identities;
-- source import analysis and reviewed import/distribution mapping;
-- strict immutable plans, approval bindings, and digest-validated toolbox state;
-- non-inheriting hermetic environment builder primitives with exact wheel,
-  receipt, import-probe, quarantine, reference, and GC behavior;
-- candidate rollout and atomic complete route publication;
-- removal of version-1 toolbox mutation/environment APIs;
-- dependent adoption of the complete-definition protocol.
+Implementation is gated on R0.1–R0.7 and the exact client-visible portions of
+[`HOSTING_CLIENT_BREAKING_CHANGES.md`](HOSTING_CLIENT_BREAKING_CHANGES.md).
+This is a planned sequencing gate, not a technical blocker.
 
-Release/adoption pins retained for traceability:
+## 2. Progress ledger
 
-- parent release adopted by the dependent:
-  `83b35e20604c8f0c2fbe27467980b6a49385d918`;
-- `mp13-docs` adoption commit:
-  `125d20f232bf5b755d18c1b23bc1e4b8929edf21`;
-- breaking-change handoff reset commit: `99b79e0`;
-- stale Python-node fallback removal commit: `3752118`.
+| Work | Priority | Expertise | Status | Evidence |
+|---|---:|---|---|---|
+| R0.1 File ownership/layout | P0 | average | Not started | — |
+| R0.2 Root-label semantics | P0 | average | Not started | — |
+| R0.3 Authority/artifact identity | P0 | average | Not started | — |
+| R0.4 Generic contracts | P0 | average | Not started | — |
+| R0.5 Commands/readiness/version | P0 | average | Not started | — |
+| R0.6 Clean-cut state behavior | P0 | average | Not started | — |
+| R0.7 Host-local root customization | P0 | average | Not started | — |
+| R1.1 Exact dependent handoff | P0 | medium | Not started | — |
+| R1.2 Production inventory | P0 | medium | Not started | — |
+| R1.3 Tests/fixtures inventory | P0 | medium | Not started | — |
+| R1.4 Dependent read-only inventory | P0 | medium | Not started | — |
+| R1.5 Documentation cutover map | P0 | medium | Not started | — |
+| R2 Shared paths/config foundation | P0 | high | Not started | — |
+| R3 Unified hosting configuration | P0 | high | Not started | — |
+| R4 Single-path daemon startup | P0 | high | Not started | — |
+| R5 Generic package subsystem | P0 | high | Not started | — |
+| R6 Generic environment subsystem | P0 | high | Not started | — |
+| R7 Toolbox adoption | P1 | high | Not started | — |
+| R8 Worker-neutral state/operations | P1 | high | Not started | — |
+| R9 Public surfaces/acceptance/handoff | P2 | high | Not started | — |
 
-## Remaining external and out-of-scope evidence
+Do not mark a row complete merely because an older toolbox-specific
+implementation exists. Record proof against the new contract and exact plan
+checkboxes.
 
-The corrective implementation gaps above are closed by R1 through R7 parent
-work. The dependent Windows adoption receipt has been supplied. WSL2 is the
-execution environment for all in-scope Linux x64 work; separate native Linux-host and ARM receipts are out
-of scope rather than blockers for current corrective work:
+## 3. Locked direction
 
-1. The dependent reported revision `06fc0d3f7df...` against parent
-   `af6b01636620e79bbcb7e4257a630b1eb72a544a` on Windows64 with CPython 3.12.7.
-   Its 71 + 8 + 28 migration tests and 12 parent tests passed with all nine
-   required behaviors covered. Consumer identity and a full dependent hash are
-   not receipt requirements. Consumer Linux/macOS testing is not required.
-2. WSL2 Linux x64 runs use a Linux Poetry environment and cover the in-scope
-   Linux target/tag, wheel, AF_UNIX/path, parent-death, cleanup, restart, and
-   process lanes. Native Linux-host x64/ARM64, Windows ARM64, and macOS ARM64
-   receipts are external and explicitly out of scope. Reviewed-only targets are
-   not reported as passed.
+The current plan has locked these architectural boundaries; R0 turns them into
+exact implementable contracts:
 
-## Progress ledger
+- one static authority at `<config root>/hosting/hosting_config.json`;
+- top-level `category_dirs` roots and `@hosting`, `@packages`, and
+  `@environments` labels;
+- host-local setup/config library writes static configuration; daemon reads it;
+- static policy is activated by deliberate restart;
+- dynamic package, template, environment, tool, and toolbox management remains
+  available through the control channel after startup;
+- authenticated server-side role/effective scope authorizes mutations;
+- daemon-computed SHA-256 identifies received artifacts;
+- mandatory publisher signing is absent from the baseline;
+- one worker-neutral package/environment subsystem serves toolbox, Python
+  workflow helper, and JavaScript/Node worker consumers; and
+- clean major-version cut with no compatibility readers, aliases, or legacy
+  environment reuse.
 
-Only corrective work is tracked here. The former phase-by-phase historical test
-transcript was intentionally removed because it obscured current truth.
+## 4. Provisional inventory
 
-| Work group | Status | Outcome/evidence |
-| --- | --- | --- |
-| R0 Corrective contract baseline | Complete | R0-01/R0-03 established the corrective plan and handoff. R0-02 was closed by the separately committed R7 contract/worker/documentation audit and its passing contract/removal checks. |
-| R1 Canonical current-host target | Complete; external native receipts out of scope | R1-01/R1-02 add the canonical CPython 3.12 detector and use it across configuration, policy, catalog/cache, hermetic construction, orchestration, runtime, and model-runtime validation. Five target families are strict; configured cross-target construction and incompatible pinned wheels fail before build. R1-03 wires the five-runner workflow, passes Windows x64, assigns all in-scope Linux x64 execution to WSL2, and records code/workflow review for Windows ARM64, Linux ARM64, and macOS ARM64 without claiming passes. Separate native Linux-host and ARM receipts are out of scope. |
-| R2 Revisioned hosting configuration and built-ins | Complete | R2-01a removes the shipped-catalog-only parser and service arguments. Strict built-in/source/resolution/retention models compute config/source-set revisions, reject target selection and invalid mode/source combinations, and redact credentials/paths. Service readiness uses `toolbox_host_project` plus `toolbox_readiness`; the handoff and normative contract were updated in-slice. Host-config: 7 passed in 2.50s; docs: 10 passed in 0.13s; shipped-template integration: 6 passed in 1.52s; removed-schema audit passed. R2-01b atomically persists revision history; changes invalidate unconsumed plans and non-active receipts while active catalog/environment-reference state remains unchanged. Focused config/plan/receipt/docs: 34 passed in 3.22s. R2-02a wires strict config, logical source bindings, policy, and detected target through normal `EngineHostDaemon` into the real hermetic materializer. R2-02b keeps the control plane available with stable unavailable diagnostics and zero catalog publication for absent/partial/invalid setup. Combined daemon/config/docs boundary: 23 passed in 2.68s; `git diff --check` passed. R2-03a removes packaged realized catalog/lock resources, their initializer and runtime fallback; config now carries intent only, while planner/service tests publish explicit test-only realized fixtures. Focused migration: 62 passed in 8.45s. R2-03b1 adds bounded deterministic read-only air-gap closure resolution and stable path-redacted failure results; focused resolver/daemon/config: 13 passed in 15.48s. R2-05b1 adds canonical raw-Ed25519 bundle verification, adversarial ZIP/wheel/closure validation, and atomic content-addressed indexing. Focused signed-bundle/resolver/config/docs matrix: 29 passed in 13.40s; Poetry lock/check and `git diff --check` passed (existing Poetry deprecation warnings only). |
-| R3 Multi-tool planning and consumer confirmation | Complete | Durable planning and confirmation expose bounded exact alternatives, direct/transitive mutations, decline/skip/preserve/remove semantics, request recovery, and changed-snapshot watching. |
-| R4 Privileged approval and immutable apply | Complete | Dependency approval is a distinct authority bound to the confirmation and exact artifacts; apply consumes only immutable plan/confirmation/approval receipts and atomically publishes the confirmed effective definition. |
-| R5 Removal, retention, and administrator environments | Complete | R5-01 through R5-05 are complete. Explicit tool removal contracts shared profiles after atomic publication; exact environment deletion is reference-safe; administrator construction publishes inactive verified revisions with explicit lifecycle transitions; mutating maintenance is canonical, durable, idempotent, cancellable before mutation, and restart-recoverable. |
-| R6 Restart-safe consumer healing | Complete | R6-01 through R6-06 are implemented. Manifest digests are normalized at plan/state/registration boundaries; concrete toolbox candidates use unique runtime IDs and immutable binding digests; duplicate registrations are rejected instead of replaced; recovery reports missing/mismatched runtime bindings for explicit reapply; Linux workers request native parent-death termination, Windows retains job containment, and retirement removes bounded worker spec/scratch artifacts. Duplicate toolbox execution attaches return the current durable snapshot immediately, cancellation acknowledges before asynchronous teardown, and `toolbox-describe-refresh` is a separate durable operation while `toolbox-describe` is bounded to persisted registration state. Poetry-based focused rollout/atomic/sandbox/operation and state archive tests passed. |
-| R7 Breaking-change handoff and acceptance | Complete | The parent handoff inventory and receipt schema are populated. The dependent reported revision `06fc0d3f7df...` against parent `af6b01636620e79bbcb7e4257a630b1eb72a544a` on Windows64 CPython 3.12.7, with 71 + 8 + 28 migration tests and 12 parent tests passing across all nine required behaviors. The production-launcher delivery correction exposes and transports all five strict toolbox inputs through foreground, detached, CLI, relay, and local channel bootstrap without placing credentials in process arguments. Authenticated RBAC key upsert/list responses now project the exact registered public key without secret material, closing the consumer setup blocker. The real-daemon no-double suite covers signed configured setup, decline/skip, distinct approval, custom add/execute/remove, environment-removal safety, restart healing, GC, and request recovery. Windows x64, WSL2 Linux x64, and unavailable-platform code review satisfy the current parent scope; out-of-scope native receipts are not labeled passes. The final Windows repository regression passed 1,239 with two intentional skips. |
-| R8 Test determinism and performance | Complete | R8-01 through R8-05 are complete. Windows fast-lane serial evidence is 970/970 at a 389.586s median; four-worker work-stealing is 970/970 at a 105.093s median (73.0% lower), with a post-cache qualification at 97.668s. The serial process boundary remains separate and passed 260 with one Linux-only skip in 250.281s; prior three-run process evidence has a 231.84s median. The Windows native lane selected 12 and completed three runs with 11 passed/one intentional skip at a 6.035s median. The mounted-source/native-environment WSL process lane passed 261 with one collection-level skip in 718.079s; that timing is observational and carries no WSL budget claim. The final serial full lane passed 1,239 with two intentional skips in 599.207s, within its 720s budget. |
+This is navigation input only. R1.2–R1.5 must replace it with an exhaustive,
+owned inventory before implementation.
 
-R7 production-launcher correction evidence: the foreground, detached, CLI,
-relay, channel-bootstrap, contract, and final-doc suite passed 105 tests in
-5.85s under Poetry on Windows x64; compilation, `poetry check`, and
-`git diff --check` passed.
-A real Poetry detached-launch probe transported all five inputs, reached the
-configured toolbox setup path, returned the expected missing-wheel degraded
-code rather than missing/incomplete configuration, and shut down cleanly.
-Implementation commit: `48ff1f1` (`hosting: expose toolbox inputs through
-launchers`).
+### Configuration and startup seams
 
-R2 evidence continuation: R2-05b2 binds the exact daemon public-key set,
-discovers direct signed bundles, and resolves only rehashed CAS objects with
-bounded degraded diagnostics. The expanded signed-ingress/daemon/config/docs
-matrix passed 45 tests in 17.92s; `git diff --check` passed.
-R2-04a1 constructs single-bundle signed-provenance candidates and passes exact
-verified CAS paths through the real hermetic install/lock/import-probe boundary
-without catalog or public receipt mutation. The focused success/corruption/
-runtime-artifact/ambiguous-evidence/probe-failure matrix passed 19 tests in
-33.92s. The expanded artifact/hermetic/prewarm/docs suite passed 48 tests in
-138.19s; `git diff --check` passed.
-R2-04a2 atomically replaces the complete receipt set and complete active
-catalog set, with rollback of newly inserted receipts/references on ordinary
-failure and idempotent restart/retry. It also fixes physical environment reuse
-across logical templates by comparing only physical receipt identity and
-rerunning each template's import probes. The expanded catalog/prewarm/hermetic/
-docs suite passed 61 tests in 171.78s; `git diff --check` passed.
-R2-06a adds the strict system-owned `toolbox_setup` hosted execution kind with
-the sole `host_scope: toolbox-host` selector, canonical
-config/source-set/target fingerprint, immediate duplicate attachment, fixed
-non-cancellable progress phases, verified-byte acquisition units, and bounded
-terminal success/failure. Toolbox readiness becomes ready only after complete
-atomic publication. The operation/repository/artifact-store/docs suite passed
-80 tests in 84.23s; `git diff --check` passed.
-R2-04b/R2-06b moves verified bundle ingestion and exact built-in resolution
-behind the automatically dispatched canonical setup worker, so normal daemon
-construction does not wait for source I/O or hermetic builds. Configured
-readiness is gated on the canonical operation and real active receipts. Restart
-redispatches an interrupted-before-dispatch record once on its original ID;
-interrupted-after-dispatch succeeds only from a durable committed-publication
-checkpoint plus current receipts and otherwise terminally fails on that same
-record. The focused daemon/artifact/config/restart suite passed 41 tests in
-98.24s. The expanded operation-repository/service/daemon/artifact/config/docs
-suite passed 107 tests in 101.56s; `git diff --check` passed.
-R2-05a1 adds redirect-controlled signed PEP 691 metadata fetch, exact
-daemon-owned Authorization binding, streamed byte/time bounds, and verified
-wheel download into artifact-store v2. Signed HTTPS manifests and signed
-air-gap bundles share immutable CAS objects but retain distinct evidence; any
-signature, redirect, size, digest, tag, namespace, or metadata failure leaves
-the index unchanged. The HTTPS/store suite passed 31 tests; compile and
-`git diff --check` passed. The expanded HTTPS/store/config/docs suite passed 47
-tests in 97.91s.
-R2-05a2/R2-03b2 adds bounded transitive candidate discovery from signed wheel
-metadata, exact daemon credential wiring, offline-only pip resolution over
-verified CAS paths, deterministic aggregate HTTPS evidence, and normal
-nonblocking daemon build/probe/publication. Missing transitive content remains
-not-ready with zero catalog publication. Online and air-gap fixtures with the
-same logical source and wheel bytes produce identical lock/artifact digests.
-The expanded online/air-gap/resolver/hermetic/config/docs suite passed 72 tests
-in 224.43s; the final PEP 503/691 acquisition matrix passed 10 tests in
-17.85s. Compile and `git diff --check` passed.
-The final shared HTTPS/signed-bundle store regression passed 35 tests in
-112.37s after bounding each signed project alternative set and source-scoping
-HTTPS manifest identities.
-R2-05c1 adds process-safe untrusted upload staging with exact
-owner/request/source/config/source-set/target/size/digest identity, idempotent
-begin and chunk retry, contiguous 1 MiB chunk bounds, restart continuation,
-15-minute expiry, synchronous idempotent cancel, and zero trusted-store
-visibility. The focused upload/compile/docs boundary passed 5 tests in 1.52s;
-the expanded upload/docs suite passed 15 tests in 1.44s; `git diff --check`
-passed.
-R2-05c2 adds five admin-only upload commands and one durable non-cancellable
-`toolbox_artifact_import` operation per complete upload. The worker rehashes the
-declared archive, verifies/imports the signed current-target closure through the
-atomic CAS boundary, removes successful staging, and reconciles restart from a
-durable committed checkpoint without a parallel operation. The focused
-operation/upload boundary passed 35 tests; expanded validation is recorded in
-the slice commit. The expanded operation-repository/service, daemon-startup,
-auth-role, shared artifact-store, upload, and contract-doc suite passed 150
-tests in 113.22s.
+- `src/mp13_engine/mp13_config_paths.py`
+- `src/app/config.py`
+- `src/app/mp13chat.py`
+- `hosting_config.py`
+- `src/hosting/hosting_config_cli.py`
+- `src/hosting/hosting_setup_api.py`
+- `src/hosting/transport_bootstrap_api.py`
+- `src/hosting/daemon/foreground.py`
+- `src/hosting/daemon/background.py`
+- `src/hosting/daemon/local_ipc.py`
+- `src/hosting/daemon/toolbox_launch_config.py`
+- `src/hosting/engine_host_channel.py`
+- `src/hosting/engine_host_cli.py`
+- `src/hosting/service/host_service.py`
+- `src/hosting/service/constants.py`
+- `src/hosting/service/state.py`
 
-## Active implementation slice
+### Package/environment/toolbox seams
 
-Completed slice: R7 acceptance and Windows-only R8 test optimization with a
-functional, observationally timed WSL2 lane. The consumer receipt is complete.
-WSL2 covers all in-scope Linux x64 execution. Separate native Linux-host and ARM
-receipts are out of scope with explicit no-pass labeling; no consumer Linux or
-macOS result is required.
+- `src/hosting/toolbox/host_project_config.py`
+- `src/hosting/toolbox/dependency_policy.py`
+- `src/hosting/toolbox/environment.py`
+- `src/hosting/toolbox/hermetic_environment.py`
+- `src/hosting/toolbox/bundle_models.py`
+- `src/hosting/service/toolbox_artifact_store.py`
+- `src/hosting/service/toolbox_artifact_uploads.py`
+- `src/hosting/service/toolbox_artifact_upload_service.py`
+- `src/hosting/service/toolbox_catalog.py`
+- `src/hosting/service/toolbox_definition_resolution.py`
+- `src/hosting/service/toolbox_host_config_state.py`
+- `src/hosting/service/toolbox_materialization.py`
+- `src/hosting/service/toolbox_runtime.py`
+- `src/hosting/sandbox/runtime_base.py`
+- `src/hosting/sandbox/python_runtime.py`
+- `src/hosting/sandbox/js_runtime.py`
+- `src/hosting/sandbox/toolbox_runtime.py`
 
-R8-02 evidence: the Poetry lane runner selected 259 process tests from 1,233
-collected tests and completed three consecutive serial runs in 232.44s,
-231.84s, and 230.94s (231.84s median), with all 259 tests passing in every run
-and each run inside the 360s budget. The intermittent worker startup failure
-was traced to URL-safe authentication tokens beginning with `-`: a separate
-argv value was parsed as an option, so both node launchers now use
-`--auth-token=<value>`. A real-process regression forces that token shape for
-both Python and JavaScript workers. IPC startup now distinguishes readiness,
-early exit, and timeout; process-test teardown closes both node registries.
-The ordered workflow-helper module passed 116/116 in 131.59s, and the focused
-runtime/startup suite passed 43/43 in 26.63s.
+### Known dependent seams (inspection only)
 
-Current WSL2 R8-01 uses the Windows-mounted source checkout (`v9fs`) with the
-Python environment, cache, temporary files, pytest state, daemon state, IPC,
-and generated environments on native Linux storage. Packages may be downloaded
-directly into that native environment; copying from Windows is not required.
-The focused launcher/toolbox/R7 matrix passed 12/12 in 62.50s after fixing the
-Linux task-scoped parent-death lifecycle. A process-lane observation selected
-261 tests and completed in 610.961s with 260 passed, one skipped, and one
-active-process metric sampling race; that exact failure passed alone in 7.13s.
-After replacing two five-second startup assumptions with explicit running-state
-readiness and bounded teardown assertions, the final process lane passed all
-261 selected tests with one collection-level skip in 718.079s. This timing is
-observational and no WSL performance budget or parallelism is claimed.
+- `src/backend/platform/hosting/hosting_admin.py`
+- `src/backend/platform/capabilities/parent_truth.py`
+- `src/backend/platform/toolboxes/definition_coordinator.py`
+- `src/ui/web/static/js/features/chat/CapabilityToolsPanel.js`
+- `tests/backend_infra/test_parent_toolbox_truth.py`
 
-Windows R8 evidence uses Poetry's project environment on CPython 3.12.7. The
-serial fast lane passed 970/970 in 396.564s, 388.727s, and 389.586s (389.586s
-median). Four work-stealing workers passed the same 970 tests in 105.078s,
-106.666s, and 105.093s (105.093s median), a 73.0% median reduction; immutable
-wheel/bundle bytes and a session venv seed then produced a 97.668s clean
-qualification while one real venv construction and cross-process publication
-boundary remain. Fast, serial process, and native lanes remain distinct. Their
-conservative median sum is 342.97s versus the recorded 562.56s full-suite
-reference, a 39.0% reduction without removing production boundaries. The lock
-adds only `pytest-xdist` and `execnet`; the existing CUDA/Triton environment
-remains torch 2.9.1+cu126, CUDA 12.6 available, and triton-windows 3.5.1.post24.
+## 5. Required removal searches
 
-Unavailable-platform review evidence: target aliases normalize AMD64/x86_64
-to x64 and ARM64/aarch64 to arm64; current-host tags come from ordered
-`packaging.tags.sys_tags()`; incompatible pinned wheels fail before build; the
-workflow maps all five declared runner/architecture families; Windows selects
-AF_PIPE and `Scripts`, POSIX selects AF_UNIX and `bin`; Linux requests
-`PR_SET_PDEATHSIG`; macOS relies on bounded orphan reconciliation where that
-Linux primitive is unavailable. Target/workflow focused checks passed and the
-native lane collects 12 tests from the repository. These are code-path and
-collection results only for Windows ARM64, Linux ARM64, and macOS ARM64 and are
-not reported as passes. WSL2 Ubuntu x64 is the in-scope Linux execution lane;
-its existing target/restart result is 13/13. Separate native Linux-host and ARM
-receipts are out of scope.
+Record zero-result evidence in the owning completion slice for runtime/API
+occurrences of:
 
-R7 parent evidence: `tests/test_hosting_r7_acceptance.py` constructs a normal
-configured daemon over a signed current-target source and the real hermetic
-materializer. It proves durable duplicate plan/execution attachment, package
-decline/skip, separate dependency approval, exact apply, real worker execution,
-custom add/remove, referenced-environment removal safety, restart healing with
-the same semantic revision, maintenance, and request-ID terminal recovery. The
-suite exposed and fixed restart cleanup treating an already-absent old worker as
-a post-publication error. `.github/workflows/hosting-native-targets.yml` now runs
-the R6/R7 sandbox, worker, restart, and cleanup boundary on all five declared
-runner families. Local Poetry evidence and the complete regression result are
-recorded here: the focused R7/R6/rollout/contract matrix passed 47 tests in
-72.57s; the contract/removal/public-guarantee docs matrix passed 22 tests in
-6.86s; compile, `git diff --check`, and the local Windows x64 native-extension
-probe passed. Two complete Poetry regressions collected 1,221 tests. The first
-reached 1,219 passed and one skipped with one workflow-JS subprocess startup
-timeout that passed alone in 2.12s. The timed run reached 1,218 passed and one
-skipped with two workflow-Python timing/isolation failures; fixed durable
-request IDs and unconditional registry cleanup reduced their combined rerun to
-two passes in 4.57s. Separate native Linux-host and ARM receipts are out of
-scope without a pass claim; the dependent Windows adoption receipt remains the
-external R7 acceptance item.
+```text
+toolbox_host_project_configuration
+toolbox_artifact_sources
+toolbox_trust_public_keys
+toolbox_source_credentials
+toolbox_dependency_policy
+--toolbox-config-file
+engine_host_toolbox_config_file
+access_control.json
+ToolboxEnvironmentManager
+RuntimeEnvironmentManager
+toolbox_venvs
+runtime_envs
+toolbox_environment_cache
+toolbox-artifact-upload-
+toolbox-template-
+toolbox-environment-remove
+toolbox_configuration_missing
+toolbox_configuration_incomplete
+toolbox_configuration_invalid
+toolbox_source_binding_invalid
+```
 
-R7 commits: client handoff `eb3c631`; restart-safe runtime, native-workflow
-wiring, and real-daemon acceptance `d689bda`; the reconciled documentation and
-surface audit are committed separately. The measured full-suite hotspot list
-is led by the real R7 lifecycle (67.47s), workflow-node environment/process
-tests (21.34-32.51s), hermetic builders (11.82-23.73s), and artifact-store
-construction (12.92-15.90s). A follow-up optimization should cache immutable
-wheel/seed fixtures and replace polling/fixed joins with explicit worker events
-while retaining one serial real-process case per production boundary.
+Historical migration documents may retain a match only when the final R9 audit
+identifies it explicitly as non-runtime history.
 
-Completed R6 evidence: R6-01/R6-02 add canonical manifest normalization,
-runtime-binding digests, unique concrete candidate IDs, and fail-closed
-registration replacement protection. R6-03 recovery validates the persisted
-binding against the registration and reports `runtime_repair_required` without
-creating a worker or rewriting semantic rollout history. R6-04 adds Linux
-`PR_SET_PDEATHSIG`, preserves Windows job-object containment, and cleans
-bounded toolbox worker spec/scratch artifacts during retirement. R6-05 covers
-the existing restart/atomic-routing boundaries plus the Poetry live-worker
-smoke path. R6-06 removes synchronous duplicate attach waiting, acknowledges
-active cancellation before background teardown, and adds the durable
-`toolbox-describe-refresh` operation. The focused R6 rollout/atomic/sandbox
-and operation checks passed through `poetry run`; the complete
-`test_hosting_toolbox_state_v2.py` state/archive coverage also passed.
+## 6. Active slice record
 
-Completed slice evidence: R5-05 (`high`) converts mutating GC, repair, and
-reconcile into canonical `toolbox_maintenance` operations selected by the
-`toolbox-host` scope. High-level channel/CLI helpers submit through `op-start`;
-raw long dispatch is rejected. Stable request IDs deduplicate and recover the
-same operation, including one safe replay after an interrupted dispatch.
-Validation is cancellable; recovery/repair/GC/cleanup are durable
-non-cancellable mutation checkpoints, so cancellation returns immediately and
-never races a filesystem or worker mutation. Reference, consistency, and review
-remain bounded reads. The focused maintenance/operation/auth/contract matrix
-passed 125 tests in 18.08s. The combined R5 removal, construction, lifecycle,
-maintenance, transport, repository, and exact physical builder matrix passed
-191 tests in 78.28s. Compile and `git diff --check` passed. The client handoff
-for the synchronous-to-hosted replacement was committed first in `2bd22ce`.
+Populate this section before changing production code.
 
-Completed slice evidence: R5-03/R5-04 (`high`) remove the raw caller-supplied
-template/artifact/signature publication surface. Administrator construction is
-one canonical `toolbox_template_construct` operation selected by the new
-logical template ID and pinned to an exact non-revoked base digest, config/source
-revisions, and current target. It retains the exact base distribution pins,
-resolves only configured sources, verifies signed artifacts, uses the real
-hermetic builder and complete import probes, commits the exact receipt, and
-publishes an immutable inactive revision. Separate exact activate and
-compare-and-swap replace operations prevent implicit active replacement;
-deprecate, revoke, and prewarm remain final exact-revision APIs. The focused
-catalog, prewarm, shared resolver, definition resolution/config/transport,
-removed-surface, operation/auth, contract, and real signed-artifact/materializer
-matrix passed 148 tests in 60.84s. Compile and `git diff --check` passed. The
-breaking-change handoff was committed first in `2bd22ce`.
-Remaining profiles are resolved from only their post-removal requirements, so a
-custom requests/urllib3 closure contracts to the exact built-in closure when
-those requirements disappear. Exact profiles reuse their engine, environment,
-and actual builder reference. Replaced/removed references survive the atomic
-publication boundary and are released afterward, including while an old worker
-finishes draining; physical deletion remains separate and grace-period guarded.
-Active state now requires its complete profile-reference set, and resolved
-assignments declare the materialization reference explicitly. The
-planner/resolution, real hermetic reference-index, maintenance, atomic-routing,
-state, and contract matrix passed 51 tests in 126.94s. The expanded surrounding
-definition, rollout, catalog, transport, maintenance, and public-guarantee suite
-passed 92 tests in 40.08s; final model/atomic/state/docs validation passed 32
-tests in 7.34s. Compile and `git diff --check` passed. No public API was removed
-or replaced, so the existing breaking-change handoff already covers this
-explicit-removal behavior and required no new migration entry.
+```text
+Slice ID:
+Plan IDs:
+Priority:
+Minimum expertise:
+Owner:
+Production boundary:
+Expected removals:
+Dependent handoff impact:
+Positive tests:
+Negative/security tests:
+Native/platform lanes:
+Status: Active | Blocked | Complete
+```
 
-Completed slice evidence: R5-02 (`average`) adds the revision-bound,
-administrator-only `toolbox_environment_remove` durable operation with an exact
-`environment_digest` selector. It checks active profiles, candidate
-registrations, unexpired plans and confirmations, active operations, built-in
-references, protected retention digests, and builder references before any
-physical deletion. The builder performs one exact locked removal and reports
-`removed`/`already_absent`; GC now carries the revisioned retention policy and
-protected digests. Operation progress is strict and durable through validation,
-reference check, removal, and cleanup. The R5-02 maintenance/operation/auth/
-transport/contract suite passed 96 tests in 10.76s; exact physical builder
-removal passed 1 test in 13.70s; the earlier R5-01 boundary and surrounding
-regression remain recorded above. Compile and `git diff --check` passed. No
-public API was removed or replaced, so no breaking-change handoff update was
-required.
+Only one slice may be active. Consecutive plan IDs may share a slice when they
+are tightly coupled and require the same expertise. A change in expertise ends
+the slice.
 
-Completed slice evidence: R3 and R4 are complete. R4-03/R4-04/R4-05
-(`high`) carry the selected exact verified CAS closure from confirmation through
-orchestration into the real offline hermetic builder. Active custom state keeps
-the exact resolved input for later comparisons. Apply builds/stages/warms
-before one atomic effective-definition publication, returns confirmed tool and
-package outcomes, and cleans candidate registrations/references on failure.
-The real builder/air-gap/corrupt-artifact/atomic-routing matrix passed 45 tests
-in 128.36s. The expanded authenticated daemon, definition service/transport,
-public guarantees, app migration, auth, operation, state, rollout, and atomic
-routing suite passed 140 tests in 48.75s; compile and `git diff --check` passed.
-Repository-wide validation reached 1189 passed and 3 skipped in 562.56s; two
-pre-existing workflow-helper timing tests failed in that suite order, while
-their immediate isolated reruns passed (the stream case in the two-test rerun
-and the capacity-shrink case alone in 3.96s). The preceding repository-wide run
-reached 1190 passed and 3 skipped with only the now-corrected stale contract
-signature assertion; the contract-doc suite then passed 10 tests in 0.09s.
+## 7. Evidence log
 
-Completed slice evidence: R4-01/R4-02 (`average`) are complete. The ordinary
-consumer approval command and hosted-reference helper are removed. A distinct
-dependency-approver role and `toolbox-approve-confirmed-definition-plan`
-surface mint approval only after confirmation. The durable approval binds the
-confirmation owner/authority, approving actor, confirmation-ref digest,
-effective definition, selected exact locks/artifacts digest, complete plan-pin
-digest, expiry, and first apply request. Focused service, authenticated role,
-channel/daemon/CLI transport validation passed 13 tests in 5.57s. The expanded
-auth-role, service, transport, and operation-repository suite passed 78 tests
-in 19.47s; compile and `git diff --check` passed.
+### DOC-RESET — planning ledger reset
 
-Completed slice evidence: R3-04b/R3-05 (`average`) are complete. Apply now accepts
-only `plan_id`, the actor-bound immutable `confirmation_ref`, and a request ID;
-the caller-supplied definition and apply-time re-resolution path are removed.
-Complete runnable bundle inputs survive restart inside the immutable plan and
-confirmation records, while consumer choices remain limited to offered IDs and
-one boolean. Durable results carry accepted/skipped/preserved/removed tools and
-logical package mutations. The focused plan repository, definition matrix,
-service, and transport suite passed 32 tests in 9.00s; compile and
-`git diff --check` passed.
+- Date: 2026-08-11
+- Scope: documentation only; no production behavior changed
+- Files:
+  - `src/hosting/hosting_access_plan.md`
+  - `src/hosting/HOSTING_CLIENT_BREAKING_CHANGES.md`
+  - `src/hosting/hosting_status.md`
+  - `tests/test_hosted_toolbox_contract_docs.py`
+- Outcome: superseded completed ledgers replaced with the unified cutover plan,
+  active dependent handoff, and fresh all-open status ledger; permanent contract
+  tests no longer read the transient handoff
+- Validation: permanent-to-transient inbound-reference audit returned zero;
+  Markdown structure checks and `git diff --check` passed;
+  `poetry run pytest -q tests/test_hosted_toolbox_contract_docs.py` passed 9/9
+- Plan completion credited: none
 
-Completed slice evidence: R3-02/R3-03/R3-07 (`high`) are complete. Planning and
-confirmation/acquisition now use canonical hosted execution kinds and the
-shared operation repository; identical request IDs return current status and
-one deterministic immutable confirmation receipt. Daemon `op-*` routes these
-families without `operations.json`, raw long-command dispatch fails closed,
-and the channel watch emits changed snapshots until a bounded timeout or
-terminal state. The focused service/operation/transport/config suite passed 43
-tests in 5.37s. The expanded daemon startup/ACL/auth, CLI, transport,
-operation-repository, and apply-operation suite passed 179 tests in 27.23s;
-compile and `git diff --check` passed.
+Append one concise entry per completed slice. Include exact commands, counts,
+durations where useful, negative-path results, commit pin, and dependent receipt
+impact. Do not paste an unstructured full test transcript.
 
-Completed slice evidence: R3-01c (`high`) is complete. Definition planning now
-resolves exact wheel-only candidates from configured verified CAS sources,
-reconstructs the active template closure from verified catalog references, and
-persists the complete v2 plan with target/config/source/policy pins. Sanitized
-source-set alternatives expose exact template/direct/transitive artifacts
-without credentials, signed queries, filesystem paths, or installed-
-environment discovery. The focused configured resolver, definition service,
-host-config transition, planner matrix, and repository suite passed 31 tests
-in 9.91s; `git diff --check` passed.
+## 8. Blockers and external evidence
 
-Completed slice evidence: R3-01a added the strict v2 complete-plan record and
-process-safe immutable repository. Focused planner/repository/model/service/
-contract validation passed 43 tests in 5.69s; `git diff --check` passed.
+Current blockers: none recorded
 
-Completed slice evidence: R3-04a added strict offered artifact, package
-mutation, alternative, environment, dependency-edge, and pin models plus the
-pure deterministic confirmation reducer. It accepts only complete offered
-choices, implements decline/skip, preserved active updates, explicit removal
-and shared-environment propagation, reconstructs the exact effective
-definition, and revalidates namespace conflicts before any worker. Focused
-validation passed 37 planner/model/repository/contract tests in 3.10s;
-`git diff --check` passed.
+External evidence required before final completion:
 
-## Status update rules
+- dependent revision and adoption receipt for the new major contract;
+- required native/platform lane results identified by R1.3/R9.7; and
+- proof that remote output and process arguments contain no sentinel secrets or
+  unrestricted host-local paths.
 
-1. Record active slice IDs, required expertise, boundary, and tests before
-   changing code.
-2. Commit one coherent slice at a time; never mix expertise labels in a commit.
-3. Switching expertise requires validated checkbox/status updates, a commit, and
-   a clean worktree before the next slice begins.
-4. Check completed plan items/subitems in the same slice commit after the real
-   production boundary passes; test doubles
-   may supplement but never replace the boundary test.
-5. Split oversized items into ordered verifiable sub-checkboxes before
-   implementation; never use a later bulk commit to mark prior work complete.
-6. Record concise test results and the commit subject after completion.
-7. Keep failures and partial work visible as Active or Blocked with boxes
-   unchecked.
-8. Put durable behavior in the contracts, not in this ledger.
-9. Populate `HOSTING_CLIENT_BREAKING_CHANGES.md` before releasing any required
-   consumer or administrator migration.
-10. Never edit a dependent project; record all dependent work in the handoff and
-   accept adoption/test evidence produced by that project.
-11. Remove superseded code, tests, commands, and documentation in the same slice;
-   do not add compatibility adapters or deprecated aliases.
+An unavailable external lane is recorded as not run with an owner and reason;
+it is not reported as a pass.
 
-## Documentation correction
+## 9. Status update rules
 
-This reset supersedes the previous claim that phases 0-7 and the acceptance
-audit were wholly complete. It does not invalidate the retained foundation or
-the dependent's completed definition-protocol migration. It corrects the false
-conclusion that shipped-template setup, custom package materialization, and
-restart-safe healing had been proven end to end.
+1. Record an active slice before changing production code.
+2. Keep one coherent slice per commit and use the highest expertise touched.
+3. Update production code, tests, docs, handoff, status, and plan checkboxes in
+   the same slice when they form one contract.
+4. Mark a plan item complete only after its named proof passes.
+5. Keep failures and partial work visible with checkboxes open.
+6. Record removal `rg` results for every clean-cut boundary.
+7. Include denial and redaction tests for authorization/security boundaries.
+8. Never edit the dependent repository; record its team-supplied evidence.
+9. Do not infer adoption from a parent compatibility shim.
+10. Do not restore old fallbacks, aliases, dual commands, or migration readers.
+11. Do not link permanent docs to transient plan/status/handoff records or test
+    those records as normative contracts.
