@@ -15,6 +15,8 @@ def hosting_configuration(
     endpoint_mode: str = "exclusive",
     lifecycle: dict | None = None,
     claims: dict | None = None,
+    traffic_policy: dict | None = None,
+    engine_traffic_policies: dict | None = None,
 ):
     root = Path(root).resolve()
     _, resolver = resolve_config_paths(
@@ -37,6 +39,10 @@ def hosting_configuration(
             "audit": {},
             "lifecycle": dict(lifecycle or {}),
             "claims": dict(claims or {}),
+            "traffic": {
+                "default_policy": dict(traffic_policy or {}),
+                "engine_policies": dict(engine_traffic_policies or {}),
+            },
         },
         "package_management": {
             "artifact_root": "@packages/artifacts", "lock_root": "@packages/locks",
@@ -62,6 +68,8 @@ def write_hosting_configuration(
     endpoint_mode: str = "exclusive",
     lifecycle: dict | None = None,
     claims: dict | None = None,
+    traffic_policy: dict | None = None,
+    engine_traffic_policies: dict | None = None,
 ) -> Path:
     root = Path(root).resolve()
     config = root / "mp13_config.json"
@@ -78,6 +86,8 @@ def write_hosting_configuration(
         endpoint_mode=endpoint_mode,
         lifecycle=lifecycle,
         claims=claims,
+        traffic_policy=traffic_policy,
+        engine_traffic_policies=engine_traffic_policies,
     )
     def plain(value):
         if isinstance(value, Mapping):

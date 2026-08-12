@@ -554,6 +554,7 @@ class StateMixin:
         audit = dict(static.get("audit") or {})
         lifecycle = dict(static.get("lifecycle") or {})
         claims = dict(static.get("claims") or {})
+        traffic = dict(static.get("traffic") or {})
         default = dict(self._default_control_payload()["control_config"])
         lifecycle_profile = str(lifecycle.pop("profile", default["lifecycle_profile"]))
         default.update(
@@ -572,6 +573,11 @@ class StateMixin:
                 "claim_acl_policy": {
                     "owner_ttl_seconds": max(10, min(int(claims.get("owner_ttl_seconds", 120)), 24 * 3600)),
                     "audit_event_limit": max(20, min(int(claims.get("audit_event_limit", 200)), 2000)),
+                },
+                "traffic_policy": self._normalize_traffic_policy(dict(traffic.get("default_policy") or {})),
+                "engine_traffic_policies": {
+                    str(engine_id): self._normalize_traffic_policy(dict(policy or {}))
+                    for engine_id, policy in dict(traffic.get("engine_policies") or {}).items()
                 },
             }
         )

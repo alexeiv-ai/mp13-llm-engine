@@ -751,6 +751,24 @@ the slice.
 - Remaining: production removal of the legacy control-config command/method and
   migration of other fixtures/docs remain open under R9.1/R9.4
 
+### CODE/TEST-R3.1H — static traffic policy and security fixture cut
+
+- Date: 2026-08-12
+- Plan IDs: R3.1/R3.2 and R9.2/R9.4 (partial); P0/P2; high expertise
+- Outcome: strict v3 control configuration now owns default and per-engine
+  traffic policy; policy types and unknown fields are rejected before startup,
+  and service security acceptance no longer edits mutable control state
+- Removal proof: `tests/test_hosting_service_security.py` contains zero
+  `set_control_config`, `control_state_file`, or `access_control.json` matches
+- Proof: `python -m pytest tests/test_hosting_configuration_v3.py
+  tests/test_hosting_service_security.py -q --maxfail=30` passed 53 tests,
+  covering auth/session/challenge redaction and denials, SSH binding, config and
+  engine allowlists, discovery/process validation, default/per-engine traffic
+  policy, proxy bounds, metrics, and strict traffic-policy rejection
+- Aggregate checkpoint before this slice: 693 passed and 120 failed at the
+  bounded `--maxfail=120` stop; remaining failures were concentrated in legacy
+  toolbox repositories/startup fixtures plus service/list-config constructors
+
 Append one concise entry per completed slice. Include exact commands, counts,
 durations where useful, negative-path results, commit pin, and dependent receipt
 impact. Do not paste an unstructured full test transcript.

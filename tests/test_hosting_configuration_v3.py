@@ -74,6 +74,10 @@ def test_full_configuration_and_sanitized_inspection(tmp_path: Path) -> None:
             "owner_disconnect_shutdown": False,
         },
         "claims": {"owner_ttl_seconds": 120, "audit_event_limit": 200},
+        "traffic": {
+            "default_policy": {"allowed_methods": ["GET"], "allowed_path_prefixes": ["/health"]},
+            "engine_policies": {"worker-a": {"max_response_bytes": 2048}},
+        },
     }
     payload["package_management"]["credentials"] = {"private-index": "SENTINEL_SECRET"}
     payload["package_management"]["sources"] = {
@@ -121,6 +125,10 @@ def test_full_configuration_and_sanitized_inspection(tmp_path: Path) -> None:
         ),
         (
             lambda value: value["control"].update(claims={"owner_ttl_seconds": "SENTINEL_SECRET"}),
+            "hosting_configuration_type_invalid",
+        ),
+        (
+            lambda value: value["control"].update(traffic={"default_policy": {"allowed_methods": "GET"}}),
             "hosting_configuration_type_invalid",
         ),
     ],

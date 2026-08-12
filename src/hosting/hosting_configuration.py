@@ -144,7 +144,7 @@ def parse_hosting_configuration(payload: Mapping[str, Any], resolver: PathResolv
     control = _mapping(data.get("control"), "control")
     _exact_keys(
         control,
-        {"authentication", "roles", "session_policy", "audit", "lifecycle", "claims"},
+        {"authentication", "roles", "session_policy", "audit", "lifecycle", "claims", "traffic"},
         "control",
     )
     authentication = _mapping(control.get("authentication"), "control.authentication")
@@ -203,6 +203,25 @@ def parse_hosting_configuration(payload: Mapping[str, Any], resolver: PathResolv
     _exact_keys(claims, {"owner_ttl_seconds", "audit_event_limit"}, "control.claims")
     for key in claims:
         _optional_int(claims, key, "control.claims", minimum=1)
+    traffic = _mapping(control.get("traffic", {}), "control.traffic")
+    _exact_keys(traffic, {"default_policy", "engine_policies"}, "control.traffic")
+    traffic_fields = {
+        "allowed_methods", "allowed_path_prefixes", "request_header_allowlist",
+        "response_header_allowlist", "allow_authorization_header",
+        "max_request_bytes", "max_response_bytes",
+    }
+    policies = {"default": _mapping(traffic.get("default_policy", {}), "control.traffic.default_policy")}
+    engine_policies = _mapping(traffic.get("engine_policies", {}), "control.traffic.engine_policies")
+    policies.update({str(key): _mapping(value, f"control.traffic.engine_policies.{key}") for key, value in engine_policies.items()})
+    for policy_id, policy in policies.items():
+        field = "control.traffic.default_policy" if policy_id == "default" else f"control.traffic.engine_policies.{policy_id}"
+        _exact_keys(policy, traffic_fields, field)
+        for key in ("allowed_methods", "allowed_path_prefixes", "request_header_allowlist", "response_header_allowlist"):
+            if key in policy and (not isinstance(policy[key], list) or any(not isinstance(item, str) for item in policy[key])):
+                raise HostingConfigurationError("hosting_configuration_type_invalid", f"{field}.{key}")
+        _optional_bool(policy, "allow_authorization_header", field)
+        _optional_int(policy, "max_request_bytes", field, minimum=1)
+        _optional_int(policy, "max_response_bytes", field, minimum=1)
 
     package = _mapping(data.get("package_management"), "package_management")
     _exact_keys(package, {"artifact_root", "lock_root", "sources", "credentials", "dependency_policy", "verification"}, "package_management")

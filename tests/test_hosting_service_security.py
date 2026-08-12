@@ -8,12 +8,26 @@ from pathlib import Path
 import pytest
 
 from hosting.service.host_service import EngineHostService
+from tests.hosting_v3_fixtures import hosting_configuration
 
 
-def _make_service(tmp_path: Path) -> EngineHostService:
+def _make_service(
+    tmp_path: Path,
+    *,
+    require_auth: bool = False,
+    endpoint_mode: str = "exclusive",
+    traffic_policy: dict | None = None,
+    engine_traffic_policies: dict | None = None,
+) -> EngineHostService:
     return EngineHostService(
         engines_state_file=tmp_path / "managed_engines.json",
-        control_state_file=tmp_path / "access_control.json",
+        hosting_configuration=hosting_configuration(
+            tmp_path,
+            require_auth=require_auth,
+            endpoint_mode=endpoint_mode,
+            traffic_policy=traffic_policy,
+            engine_traffic_policies=engine_traffic_policies,
+        ),
     )
 
 
@@ -123,12 +137,12 @@ def _install_ipc_http_stub(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_auth_bootstrap_and_session_enforcement(tmp_path: Path) -> None:
-    svc = _make_service(tmp_path)
+    svc = _make_service(tmp_path, require_auth=True)
 
     # Bootstrap admin key and require auth.
     upsert = svc.auth_upsert_key(key_id="mgmt1", key_secret="secret1", role="admin")
     assert upsert["key_id"] == "mgmt1"
-    cfg = svc.set_control_config(require_auth=True)
+    cfg = svc.get_control_config()
     assert cfg["require_auth"] is True
 
     with pytest.raises(PermissionError):
@@ -140,13 +154,8 @@ def test_auth_bootstrap_and_session_enforcement(tmp_path: Path) -> None:
 
 
 def test_reset_hosting_access_clears_only_auth_state(tmp_path: Path) -> None:
-    svc = _make_service(tmp_path)
+    svc = _make_service(tmp_path, require_auth=True, endpoint_mode="shared")
     svc.auth_upsert_key(key_id="mgmt1", key_secret="secret1", role="admin")
-    svc.set_control_config(
-        require_auth=True,
-        access_profile={"connectivity_mode": "local_only"},
-        endpoint_mode_default="shared",
-    )
     issued = svc.auth_issue_session(key_id="mgmt1", key_secret="secret1", scope="control", ttl_seconds=300)
     assert str(issued.get("token") or "")
 
@@ -802,14 +811,13 @@ def test_discover_running_prunes_old_registration_with_missing_ipc_endpoint(
 
 
 def test_traffic_scope_engine_allowlist_enforced(tmp_path: Path) -> None:
-    svc = _make_service(tmp_path)
+    svc = _make_service(tmp_path, require_auth=True)
     svc.auth_upsert_key(
         key_id="traffic1",
         key_secret="secret1",
         role="model_user",
         allowed_engines=["worker_a"],
     )
-    svc.set_control_config(require_auth=True)
 
     issued = svc.auth_issue_session(
         key_id="traffic1",
@@ -869,20 +877,15 @@ def test_engine_shutdown_terminates_process_tree(
 
 
 def test_proxy_request_policy_and_metrics_ring_buffer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    svc = _make_service(tmp_path)
+    svc = _make_service(
+        tmp_path,
+        traffic_policy={"allowed_methods": ["GET"], "allowed_path_prefixes": ["/health"]},
+    )
     _install_ipc_http_stub(monkeypatch)
     svc.register_spawned(
         engine_id="worker1",
         pid=os.getpid(),
         command=["python", "-m", "hosting.engine_worker_ipc"],
-    )
-
-    # Restrict to GET /health path.
-    svc.set_control_config(
-        traffic_policy={
-            "allowed_methods": ["GET"],
-            "allowed_path_prefixes": ["/health"],
-        }
     )
 
     with pytest.raises(PermissionError):
@@ -915,7 +918,13 @@ def test_proxy_request_policy_and_metrics_ring_buffer(tmp_path: Path, monkeypatc
 
 
 def test_per_engine_traffic_policy_override(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    svc = _make_service(tmp_path)
+    svc = _make_service(
+        tmp_path,
+        traffic_policy={"allowed_methods": ["GET"], "allowed_path_prefixes": ["/health"]},
+        engine_traffic_policies={
+            "worker2": {"allowed_methods": ["GET"], "allowed_path_prefixes": ["/other"]}
+        },
+    )
     _install_ipc_http_stub(monkeypatch)
     svc.register_spawned(
         engine_id="worker1",
@@ -927,19 +936,6 @@ def test_per_engine_traffic_policy_override(tmp_path: Path, monkeypatch: pytest.
         pid=os.getpid(),
         command=["python", "-m", "hosting.engine_worker_ipc"],
     )
-    svc.set_control_config(
-        traffic_policy={
-            "allowed_methods": ["GET"],
-            "allowed_path_prefixes": ["/health"],
-        },
-        engine_traffic_policies={
-            "worker2": {
-                "allowed_methods": ["GET"],
-                "allowed_path_prefixes": ["/other"],
-            }
-        },
-    )
-
     with pytest.raises(PermissionError):
         svc.proxy_request(engine_id="worker1", method="GET", path="/other")
 
@@ -979,9 +975,8 @@ def test_proxy_rpc_reports_clear_error_when_worker_ipc_missing(
 
 
 def test_auth_audit_sessions_and_tokens_redact_secrets(tmp_path: Path) -> None:
-    svc = _make_service(tmp_path)
+    svc = _make_service(tmp_path, require_auth=True)
     svc.auth_upsert_key(key_id="mgmt1", key_secret="secret1", role="admin")
-    svc.set_control_config(require_auth=True)
     issued = svc.auth_issue_session(
         key_id="mgmt1",
         key_secret="secret1",
@@ -1012,9 +1007,8 @@ def test_auth_audit_sessions_and_tokens_redact_secrets(tmp_path: Path) -> None:
 
 
 def test_auth_audit_commands_require_control_scope_when_auth_enabled(tmp_path: Path) -> None:
-    svc = _make_service(tmp_path)
+    svc = _make_service(tmp_path, require_auth=True)
     svc.auth_upsert_key(key_id="mgmt1", key_secret="secret1", role="admin")
-    svc.set_control_config(require_auth=True)
 
     with pytest.raises(PermissionError):
         svc.authorize_command("auth-list-sessions", {})
@@ -1033,9 +1027,8 @@ def test_auth_audit_commands_require_control_scope_when_auth_enabled(tmp_path: P
 
 
 def test_ssh_session_binding_enforced(tmp_path: Path) -> None:
-    svc = _make_service(tmp_path)
+    svc = _make_service(tmp_path, require_auth=True)
     svc.auth_upsert_key(key_id="mgmt1", key_secret="secret1", role="admin")
-    svc.set_control_config(require_auth=True)
     issued = svc.auth_issue_session(
         key_id="mgmt1",
         key_secret="secret1",
@@ -1070,10 +1063,9 @@ def test_ssh_session_binding_enforced(tmp_path: Path) -> None:
 
 
 def test_auth_list_sessions_filter_and_pagination(tmp_path: Path) -> None:
-    svc = _make_service(tmp_path)
+    svc = _make_service(tmp_path, require_auth=True)
     svc.auth_upsert_key(key_id="mgmt1", key_secret="secret1", role="admin")
     svc.auth_upsert_key(key_id="traffic1", key_secret="secret2", role="model_user", allowed_engines=["worker1"])
-    svc.set_control_config(require_auth=True)
     _ = svc.auth_issue_session(key_id="mgmt1", key_secret="secret1", scope="control", ttl_seconds=300)
     _ = svc.auth_issue_session(key_id="traffic1", key_secret="secret2", scope="traffic", engine_ids=["worker1"], ttl_seconds=300)
 
@@ -1117,14 +1109,13 @@ def test_auth_list_issued_tokens_filter_and_pagination(tmp_path: Path) -> None:
 
 
 def test_public_key_challenge_flow_issues_session(tmp_path: Path, monkeypatch) -> None:
-    svc = _make_service(tmp_path)
+    svc = _make_service(tmp_path, require_auth=True)
     svc.auth_upsert_key(
         key_id="admin-pub",
         role="admin",
         auth_method="public_key",
         public_key="ssh-ed25519 AAAATESTKEY comment",
     )
-    svc.set_control_config(require_auth=True)
 
     # Shared-secret issuance must be blocked for public_key auth_method.
     with pytest.raises(PermissionError):
@@ -1156,7 +1147,7 @@ def test_public_key_challenge_flow_issues_session(tmp_path: Path, monkeypatch) -
 
 
 def test_public_key_challenge_invalid_signature_denied(tmp_path: Path, monkeypatch) -> None:
-    svc = _make_service(tmp_path)
+    svc = _make_service(tmp_path, require_auth=True)
     svc.auth_upsert_key(
         key_id="traffic-pub",
         role="model_user",
@@ -1164,7 +1155,6 @@ def test_public_key_challenge_invalid_signature_denied(tmp_path: Path, monkeypat
         public_key="ssh-ed25519 AAAATESTKEY comment",
         allowed_engines=["worker1"],
     )
-    svc.set_control_config(require_auth=True)
     begin = svc.auth_begin_challenge(
         key_id="traffic-pub",
         scope="traffic",
@@ -1185,14 +1175,13 @@ def test_public_key_challenge_invalid_signature_denied(tmp_path: Path, monkeypat
 
 
 def test_challenge_telemetry_tracks_success_and_replay_suspected(tmp_path: Path, monkeypatch) -> None:
-    svc = _make_service(tmp_path)
+    svc = _make_service(tmp_path, require_auth=True)
     svc.auth_upsert_key(
         key_id="admin-pub",
         role="admin",
         auth_method="public_key",
         public_key="ssh-ed25519 AAAATESTKEY comment",
     )
-    svc.set_control_config(require_auth=True)
     begin = svc.auth_begin_challenge(key_id="admin-pub", scope="control", ttl_seconds=120)
     cid = str(begin.get("challenge_id") or "")
     monkeypatch.setattr(
@@ -1223,14 +1212,13 @@ def test_challenge_telemetry_tracks_success_and_replay_suspected(tmp_path: Path,
 
 
 def test_challenge_completion_enforces_ssh_binding(tmp_path: Path, monkeypatch) -> None:
-    svc = _make_service(tmp_path)
+    svc = _make_service(tmp_path, require_auth=True)
     svc.auth_upsert_key(
         key_id="admin-pub",
         role="admin",
         auth_method="public_key",
         public_key="ssh-ed25519 AAAATESTKEY comment",
     )
-    svc.set_control_config(require_auth=True)
     begin = svc.auth_begin_challenge(
         key_id="admin-pub",
         scope="control",

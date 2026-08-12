@@ -128,7 +128,8 @@ normative structure is:
     "session_policy": {},
     "audit": {},
     "lifecycle": {},
-    "claims": {}
+    "claims": {},
+    "traffic": {}
   },
   "package_management": {
     "artifact_root": "@packages/artifacts",

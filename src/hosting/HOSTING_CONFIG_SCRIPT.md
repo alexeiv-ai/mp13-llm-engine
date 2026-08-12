@@ -65,6 +65,10 @@ unrestricted host paths.
     "claims": {
       "owner_ttl_seconds": 120,
       "audit_event_limit": 200
+    },
+    "traffic": {
+      "default_policy": {},
+      "engine_policies": {}
     }
   },
   "package_management": {
