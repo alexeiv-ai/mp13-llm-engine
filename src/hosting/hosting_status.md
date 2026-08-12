@@ -53,7 +53,7 @@ and remaining permanent documents are migrated and the named proofs pass.
 | R5 Generic package subsystem | P0 | high | Complete | CODE-R5 |
 | R6 Generic environment subsystem | P0 | high | Active (foundation complete) | CODE-R6A |
 | R7 Toolbox adoption | P1 | high | Not started | — |
-| R8 Worker-neutral state/operations | P1 | high | Not started | — |
+| R8 Worker-neutral state/operations | P1 | high | Active (R8.1 complete) | CODE-R8A |
 | R9 Public surfaces/acceptance/handoff | P2 | high | Not started | — |
 
 Do not mark a row complete merely because an older toolbox-specific
@@ -426,6 +426,19 @@ the slice.
   remain concentrated in legacy configuration/startup/toolbox fixtures
 - Remaining in R6: remove the toolbox manager/builder aliases and legacy readers,
   then generalize the remaining toolbox-owned audit/receipt implementation
+
+### CODE-R8A — versioned and bounded neutral state
+
+- Date: 2026-08-11
+- Plan IDs: R8.1 and R8.3 (partial); P1; high expertise
+- Outcome: package/environment repositories use exact versioned contracts and
+  fail closed on prior or foreign state; writes are locked and atomic; template
+  and reference counts are bounded; reference listing is cursor-paginated;
+  environment removal and GC re-check builds, executions, references, and
+  retention under lock
+- Proof: 14 focused package/environment tests passed, including unsupported
+  state version, pagination, concurrent build/commit, active execution,
+  reference, and retention denial paths
 
 Append one concise entry per completed slice. Include exact commands, counts,
 durations where useful, negative-path results, commit pin, and dependent receipt

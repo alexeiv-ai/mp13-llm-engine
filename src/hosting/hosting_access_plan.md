@@ -766,10 +766,10 @@ toolbox or another worker kind.
 
 ##### R8.1 Version repositories and reject old state
 
-- [ ] Version generic package, environment template, lock, receipt, reference,
+- [x] Version generic package, environment template, lock, receipt, reference,
   upload, and operation repositories.
-- [ ] Reject old toolbox-owned serialized records with the R0 operator message.
-- [ ] Ensure repository writes are locked, atomic, bounded, and crash-recoverable.
+- [x] Reject old toolbox-owned serialized records with the R0 operator message.
+- [x] Ensure repository writes are locked, atomic, bounded, and crash-recoverable.
 
 Proof: corruption, truncation, unsupported-version, interrupted-write, and
 concurrent-writer tests preserve the last valid state or fail closed.
@@ -789,8 +789,8 @@ independent retention where toolbox, Python helper, and Node references differ.
 
 ##### R8.3 Harden maintenance and resource controls
 
-- [ ] Apply quotas and bounded listing/pagination to package/environment state.
-- [ ] Make GC mark from all consumer references before sweeping and re-check
+- [x] Apply quotas and bounded listing/pagination to package/environment state.
+- [x] Make GC mark from all consumer references before sweeping and re-check
   activity under lock before deletion.
 - [ ] Make repair observational by default and explicitly authorized for any
   mutation.

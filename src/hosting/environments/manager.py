@@ -35,6 +35,9 @@ class EnvironmentError(RuntimeError):
 
 
 class EnvironmentManager:
+    MAX_TEMPLATES = 4096
+    MAX_REFERENCES = 100_000
+    MAX_PAGE_SIZE = 500
     def __init__(
         self,
         *,
@@ -61,7 +64,7 @@ class EnvironmentManager:
 
     @staticmethod
     def _empty() -> dict[str, Any]:
-        return {"contract": "hosting.environment_state.v1", "templates": {}, "references": {}, "busy": {}}
+        return {"contract": "hosting.environment_state.v2", "templates": {}, "references": {}, "busy": {}, "active": {}}
 
     def _read(self) -> dict[str, Any]:
         if not self._state_path.exists():
@@ -70,10 +73,12 @@ class EnvironmentManager:
             value = json.loads(self._state_path.read_text(encoding="utf-8"))
         except (OSError, UnicodeError, json.JSONDecodeError) as exc:
             raise EnvironmentError("environment_state_invalid") from exc
-        if not isinstance(value, dict) or value.get("contract") != "hosting.environment_state.v1" or set(value) != {"contract", "templates", "references", "busy"}:
+        if not isinstance(value, dict) or value.get("contract") != "hosting.environment_state.v2" or set(value) != {"contract", "templates", "references", "busy", "active"}:
             raise EnvironmentError("environment_state_invalid")
-        if any(not isinstance(value[key], dict) for key in ("templates", "references", "busy")):
+        if any(not isinstance(value[key], dict) for key in ("templates", "references", "busy", "active")):
             raise EnvironmentError("environment_state_invalid")
+        if len(value["templates"]) > self.MAX_TEMPLATES or len(value["references"]) > self.MAX_REFERENCES:
+            raise EnvironmentError("environment_state_limit_exceeded")
         return value
 
     def _write(self, value: Mapping[str, Any]) -> None:
@@ -147,6 +152,8 @@ class EnvironmentManager:
             value = template.to_dict()
             if existing is not None and existing != value:
                 raise EnvironmentError("environment_template_conflict")
+            if existing is None and len(state["templates"]) >= self.MAX_TEMPLATES:
+                raise EnvironmentError("environment_template_limit_exceeded")
             state["templates"][key] = value
             self._write(state)
             return value
@@ -279,6 +286,8 @@ class EnvironmentManager:
         existing = state["references"].get(reference_id)
         if isinstance(existing, dict) and existing.get("released_at_ms") is None:
             return dict(existing)
+        if existing is None and len(state["references"]) >= self.MAX_REFERENCES:
+            raise EnvironmentError("environment_reference_limit_exceeded")
         reference = EnvironmentReference(reference_id, environment_id, request.consumer_kind, request.consumer_id, request.revision, int(self.clock() * 1000), None).to_dict()
         state["references"][reference_id] = reference
         return reference
@@ -294,11 +303,44 @@ class EnvironmentManager:
                 self._write(state)
             return dict(row)
 
+    def list_references(self, *, cursor: str = "", limit: int = 100) -> dict[str, Any]:
+        page_size = max(1, min(int(limit), self.MAX_PAGE_SIZE))
+        with self._locked():
+            rows = sorted((dict(row) for row in self._read()["references"].values()), key=lambda row: row["reference_id"])
+        if cursor:
+            rows = [row for row in rows if row["reference_id"] > cursor]
+        page = rows[:page_size]
+        return {"references": page, "next_cursor": page[-1]["reference_id"] if len(rows) > page_size else None}
+
+    def execution_begin(self, *, environment_id: str, execution_id: str) -> dict[str, Any]:
+        with self._locked():
+            state = self._read()
+            digest = environment_id.split(":", 1)[1] if environment_id.startswith("sha256:") else ""
+            if not digest or not (self.root / "receipts" / f"{digest}.json").is_file():
+                raise EnvironmentError("environment_unavailable")
+            existing = state["active"].get(execution_id)
+            row = {"environment_id": environment_id, "execution_id": execution_id, "started_at_ms": int(self.clock() * 1000)}
+            if existing is not None and existing != row:
+                raise EnvironmentError("environment_execution_conflict")
+            state["active"][execution_id] = row
+            self._write(state)
+            return dict(row)
+
+    def execution_end(self, *, execution_id: str) -> dict[str, Any]:
+        with self._locked():
+            state = self._read()
+            row = state["active"].pop(execution_id, None)
+            if row is not None:
+                self._write(state)
+            return {"execution_id": execution_id, "state": "ended"}
+
     def remove(self, *, environment_id: str, force_retention: bool = False) -> dict[str, Any]:
         with self._locked():
             state = self._read()
             if environment_id in state["busy"]:
                 raise EnvironmentError("environment_busy")
+            if any(row.get("environment_id") == environment_id for row in state["active"].values()):
+                raise EnvironmentError("environment_active")
             if any(row.get("environment_id") == environment_id and row.get("released_at_ms") is None for row in state["references"].values()):
                 raise EnvironmentError("environment_referenced")
             released = [int(row.get("released_at_ms") or 0) for row in state["references"].values() if row.get("environment_id") == environment_id]
@@ -320,6 +362,6 @@ class EnvironmentManager:
                 self.remove(environment_id=environment_id)
                 removed.append(environment_id)
             except EnvironmentError as exc:
-                if exc.code not in {"environment_referenced", "environment_busy", "environment_retained"}:
+                if exc.code not in {"environment_referenced", "environment_busy", "environment_active", "environment_retained"}:
                     raise
         return {"removed_environment_ids": sorted(removed), "removed_count": len(removed)}

@@ -89,6 +89,15 @@ class EnvironmentApiMixin:
     def environment_reference_release(self, **payload: Any) -> Dict[str, Any]:
         return self._environment_manager.release(reference_id=str(payload.get("reference_id") or ""))
 
+    def environment_reference_list(self, **payload: Any) -> Dict[str, Any]:
+        return self._environment_manager.list_references(cursor=str(payload.get("cursor") or ""), limit=int(payload.get("limit") or 100))
+
+    def environment_execution_begin(self, **payload: Any) -> Dict[str, Any]:
+        return self._environment_manager.execution_begin(environment_id=str(payload.get("environment_id") or ""), execution_id=str(payload.get("execution_id") or ""))
+
+    def environment_execution_end(self, **payload: Any) -> Dict[str, Any]:
+        return self._environment_manager.execution_end(execution_id=str(payload.get("execution_id") or ""))
+
     def environment_remove(self, **payload: Any) -> Dict[str, Any]:
         return self._environment_manager.remove(environment_id=str(payload.get("environment_id") or ""))
 

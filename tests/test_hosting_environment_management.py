@@ -106,9 +106,30 @@ def test_references_busy_and_retention_guard_removal(tmp_path: Path) -> None:
     with pytest.raises(EnvironmentError, match="environment_referenced"):
         manager.remove(environment_id=environment_id)
     manager.release(reference_id=result["reference"]["reference_id"])
+    manager.execution_begin(environment_id=environment_id, execution_id="execution-1")
+    with pytest.raises(EnvironmentError, match="environment_active"):
+        manager.remove(environment_id=environment_id)
+    assert manager.execution_end(execution_id="execution-1")["state"] == "ended"
     with pytest.raises(EnvironmentError, match="environment_retained"):
         manager.remove(environment_id=environment_id)
     assert manager.remove(environment_id=environment_id, force_retention=True)["state"] == "removed"
+
+
+def test_state_version_rejection_and_reference_pagination(tmp_path: Path) -> None:
+    manager, _ = _manager(tmp_path)
+    for index in range(3):
+        manager.ensure(_request(request_id=f"r{index}", consumer_kind="worker", consumer_id=f"c{index}"))
+    first = manager.list_references(limit=2)
+    assert len(first["references"]) == 2
+    assert first["next_cursor"]
+    second = manager.list_references(cursor=first["next_cursor"], limit=2)
+    assert len(second["references"]) == 1
+    state_path = tmp_path / "environments" / "state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["contract"] = "hosting.environment_state.v1"
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    with pytest.raises(EnvironmentError, match="environment_state_invalid"):
+        manager.list_templates()
 
 
 def test_legacy_roots_and_incomplete_builds_are_not_discovered(tmp_path: Path) -> None:
