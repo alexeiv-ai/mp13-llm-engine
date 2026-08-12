@@ -733,6 +733,24 @@ the slice.
   still an internal R7 removal item and is not treated as completed by this
   public-surface migration
 
+### CODE/TEST-R3.1G — immutable auth and role acceptance cut
+
+- Date: 2026-08-12
+- Plan IDs: R3.1/R3.2 and R9.2/R9.3/R9.4 (partial); P0/P2; high expertise
+- Outcome: the v3 parser rejects unauthenticated shared endpoints; auth/role
+  acceptance now supplies authentication, connectivity, endpoint, and lifecycle
+  policy before service construction, activates policy changes through a new
+  service instance, and proves runtime state cannot override static authority
+- Removal proof: `tests/test_hosting_auth_roles.py` contains zero
+  `set_control_config`, `control_state_file`, or `access_control.json` matches
+- Proof: `python -m pytest tests/test_hosting_configuration_v3.py
+  tests/test_hosting_auth_roles.py tests/test_hosting_daemon_acl.py -q
+  --maxfail=30` passed 105 tests, including role denials, local/remote bootstrap
+  policy, SSH binding, pre-restart session rejection, lifecycle defaults,
+  static-over-runtime precedence, and daemon ACL behavior
+- Remaining: production removal of the legacy control-config command/method and
+  migration of other fixtures/docs remain open under R9.1/R9.4
+
 Append one concise entry per completed slice. Include exact commands, counts,
 durations where useful, negative-path results, commit pin, and dependent receipt
 impact. Do not paste an unstructured full test transcript.

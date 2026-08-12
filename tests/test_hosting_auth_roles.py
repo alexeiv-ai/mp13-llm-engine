@@ -13,13 +13,27 @@ import pytest
 from hosting.client_realm import FileSecretStore
 from hosting.service.host_service import EngineHostService
 from hosting.daemon import EngineHostDaemon
+from tests.hosting_v3_fixtures import hosting_configuration, write_hosting_configuration
 
 
-def _svc(tmpdir: str) -> EngineHostService:
+def _svc(
+    tmpdir: str,
+    *,
+    require_auth: bool = True,
+    connectivity_mode: str = "local_only",
+    endpoint_mode: str = "exclusive",
+    lifecycle: dict | None = None,
+) -> EngineHostService:
     root = Path(tmpdir)
     return EngineHostService(
         engines_state_file=root / "engines.json",
-        control_state_file=root / "control.json",
+        hosting_configuration=hosting_configuration(
+            root,
+            require_auth=require_auth,
+            connectivity_mode=connectivity_mode,
+            endpoint_mode=endpoint_mode,
+            lifecycle=lifecycle,
+        ),
     )
 
 
@@ -42,10 +56,6 @@ def test_diagnostic_user_denied_spawn_with_insufficient_role() -> None:
             key_secret="admin-secret",
             role="admin",
             auth_method="shared_secret",
-        )
-        svc.set_control_config(
-            require_auth=True,
-            access_profile={"connectivity_mode": "local_only"},
         )
         svc.auth_upsert_key(
             key_id="diag",
@@ -73,10 +83,6 @@ def test_diagnostic_user_toolbox_authority_is_observe_only() -> None:
             key_secret="diag-secret",
             role="diagnostic_user",
             auth_method="shared_secret",
-        )
-        svc.set_control_config(
-            require_auth=True,
-            access_profile={"connectivity_mode": "local_only"},
         )
         session = svc.auth_issue_session(
             key_id="diag",
@@ -149,10 +155,6 @@ def test_worker_user_can_manage_toolbox_sandbox_authority() -> None:
             role="worker_user",
             auth_method="shared_secret",
         )
-        svc.set_control_config(
-            require_auth=True,
-            access_profile={"connectivity_mode": "local_only"},
-        )
         session = svc.auth_issue_session(
             key_id="worker",
             key_secret="worker-secret",
@@ -216,10 +218,6 @@ def test_dependency_approver_has_only_the_distinct_approval_surface() -> None:
             role="dependency_approver",
             auth_method="shared_secret",
         )
-        svc.set_control_config(
-            require_auth=True,
-            access_profile={"connectivity_mode": "local_only"},
-        )
         token = str(svc.auth_issue_session(
             key_id="dependency-approver",
             key_secret="approver-secret",
@@ -246,10 +244,6 @@ def test_worker_user_denied_raw_spawn_but_allowed_workflow_js_facade() -> None:
             role="worker_user",
             auth_method="shared_secret",
         )
-        svc.set_control_config(
-            require_auth=True,
-            access_profile={"connectivity_mode": "local_only"},
-        )
         session = svc.auth_issue_session(
             key_id="worker",
             key_secret="worker-secret",
@@ -273,10 +267,6 @@ def test_config_editor_allowed_raw_spawn() -> None:
             auth_method="shared_secret",
             allowed_engines=["*"],
         )
-        svc.set_control_config(
-            require_auth=True,
-            access_profile={"connectivity_mode": "local_only"},
-        )
         session = svc.auth_issue_session(
             key_id="editor",
             key_secret="editor-secret",
@@ -289,37 +279,14 @@ def test_config_editor_allowed_raw_spawn() -> None:
 
 def test_require_auth_false_rejected_for_non_local_profile() -> None:
     with _workspace_tmpdir() as td:
-        svc = _svc(td)
-        svc.auth_upsert_key(
-            key_id="admin",
-            key_secret="admin-secret",
-            role="admin",
-            auth_method="shared_secret",
-        )
-        with pytest.raises(
-            PermissionError,
-            match="require_auth_false_only_supported_for_local_only_connectivity",
-        ):
-            svc.set_control_config(
-                require_auth=False,
-                access_profile={"connectivity_mode": "truly_remote"},
-            )
+        with pytest.raises(ValueError, match="hosting_configuration_policy_conflict"):
+            _svc(td, require_auth=False, connectivity_mode="truly_remote")
 
 
 def test_require_auth_false_rejected_when_profile_drifts_without_require_auth_field() -> None:
     with _workspace_tmpdir() as td:
-        svc = _svc(td)
-        svc.set_control_config(
-            require_auth=False,
-            access_profile={"connectivity_mode": "local_only"},
-        )
-        with pytest.raises(
-            PermissionError,
-            match="require_auth_false_only_supported_for_local_only_connectivity",
-        ):
-            svc.set_control_config(
-                access_profile={"connectivity_mode": "ssh_tunnel_only"},
-            )
+        with pytest.raises(ValueError, match="hosting_configuration_policy_conflict"):
+            _svc(td, require_auth=False, connectivity_mode="ssh_tunnel_only")
 
 
 def test_auth_status_reports_local_private_key_custody_metadata_only() -> None:
@@ -327,7 +294,9 @@ def test_auth_status_reports_local_private_key_custody_metadata_only() -> None:
         root = Path(td)
         svc = EngineHostService(
             engines_state_file=root / "engines.json",
-            control_state_file=root / "hosting" / "access_control.json",
+            hosting_configuration=hosting_configuration(
+                root, require_auth=True, connectivity_mode="ssh_tunnel_only"
+            ),
         )
         svc.auth_upsert_key(
             key_id="admin-main",
@@ -335,18 +304,14 @@ def test_auth_status_reports_local_private_key_custody_metadata_only() -> None:
             role="admin",
             auth_method="shared_secret",
         )
-        svc.set_control_config(
-            require_auth=True,
-            access_profile={"connectivity_mode": "ssh_tunnel_only"},
-        )
-        store = FileSecretStore(root / "hosting_client" / "default", realm="default")
+        store = FileSecretStore(svc.hosting_root.parent / "hosting_client" / "default", realm="default")
         store.put_secret(
             tag="rbac_private_key",
             payload="-----BEGIN OPENSSH PRIVATE KEY-----\nFAKE\n-----END OPENSSH PRIVATE KEY-----\n",
             secret_id="rbac-admin-main-private",
             metadata={"private_key_protection": "openssh_passphrase"},
         )
-        keys_file = root / "hosting" / "keyring" / "keys.json"
+        keys_file = svc.hosting_root / "keyring" / "keys.json"
         keys_file.parent.mkdir(parents=True, exist_ok=True)
         keys_file.write_text(
             json.dumps(
@@ -385,7 +350,7 @@ def test_auth_status_reports_local_private_key_custody_metadata_only() -> None:
         assert "private_key" not in row
 
 
-def test_authorize_command_rejects_unsafe_no_auth_runtime_config() -> None:
+def test_runtime_state_cannot_override_static_authentication_policy() -> None:
     with _workspace_tmpdir() as td:
         svc = _svc(td)
         svc.auth_upsert_key(
@@ -393,10 +358,6 @@ def test_authorize_command_rejects_unsafe_no_auth_runtime_config() -> None:
             key_secret="admin-secret",
             role="admin",
             auth_method="shared_secret",
-        )
-        svc.set_control_config(
-            require_auth=True,
-            access_profile={"connectivity_mode": "local_only"},
         )
         # Simulate unsafe manual control-state edit: auth disabled but remote profile.
         control = svc._read_control()  # noqa: SLF001
@@ -406,20 +367,14 @@ def test_authorize_command_rejects_unsafe_no_auth_runtime_config() -> None:
         control["control_config"] = cfg
         svc._write_control(control)  # noqa: SLF001
 
-        with pytest.raises(
-            PermissionError,
-            match="require_auth_false_only_supported_for_local_only_connectivity",
-        ):
+        assert svc.get_control_config()["require_auth"] is True
+        with pytest.raises(PermissionError, match="session_token_required"):
             svc.authorize_command("discover-running", {})
 
 
 def test_require_auth_false_rejects_session_and_challenge_issue_paths() -> None:
     with _workspace_tmpdir() as td:
-        svc = _svc(td)
-        svc.set_control_config(
-            require_auth=False,
-            access_profile={"connectivity_mode": "local_only"},
-        )
+        svc = _svc(td, require_auth=False)
         svc.auth_upsert_key(
             key_id="admin",
             key_secret="admin-secret",
@@ -450,59 +405,41 @@ def test_require_auth_false_rejects_session_and_challenge_issue_paths() -> None:
 def test_zero_key_bootstrap_allowed_for_local_only_require_auth_true() -> None:
     with _workspace_tmpdir() as td:
         svc = _svc(td)
-        svc.set_control_config(
-            require_auth=True,
-            access_profile={"connectivity_mode": "local_only"},
-        )
         svc.authorize_command("auth-upsert-key", {})
         svc.authorize_command("auth-status", {})
 
 
 def test_zero_key_bootstrap_rejected_for_remote_capable_require_auth_true() -> None:
     with _workspace_tmpdir() as td:
-        svc = _svc(td)
-        svc.set_control_config(
-            require_auth=True,
-            access_profile={"connectivity_mode": "ssh_tunnel_only"},
-        )
+        svc = _svc(td, connectivity_mode="ssh_tunnel_only")
         with pytest.raises(PermissionError, match="zero_key_bootstrap_local_only"):
             svc.authorize_command("auth-upsert-key", {})
         with pytest.raises(PermissionError, match="zero_key_bootstrap_local_only"):
             svc.authorize_command("auth-status", {})
 
 
-def test_require_auth_false_forces_exclusive_endpoint_mode_default() -> None:
+def test_require_auth_false_requires_exclusive_endpoint_mode_default() -> None:
     with _workspace_tmpdir() as td:
-        svc = _svc(td)
-        out = svc.set_control_config(
-            require_auth=False,
-            access_profile={"connectivity_mode": "local_only"},
-            endpoint_mode_default="shared",
-        )
+        with pytest.raises(ValueError, match="hosting_configuration_policy_conflict"):
+            _svc(td, require_auth=False, endpoint_mode="shared")
+        svc = _svc(td, require_auth=False, endpoint_mode="exclusive")
+        out = svc.get_control_config()
         assert bool(out.get("require_auth")) is False
         assert str(out.get("endpoint_mode_default") or "") == "exclusive"
         read_back = svc.get_control_config()
         assert str(read_back.get("endpoint_mode_default") or "") == "exclusive"
 
 
-def test_runtime_policy_assertion_rejects_no_auth_shared_endpoint_mode() -> None:
+def test_runtime_state_cannot_override_static_no_auth_endpoint_mode() -> None:
     with _workspace_tmpdir() as td:
-        svc = _svc(td)
-        svc.set_control_config(
-            require_auth=False,
-            access_profile={"connectivity_mode": "local_only"},
-            endpoint_mode_default="exclusive",
-        )
+        svc = _svc(td, require_auth=False, endpoint_mode="exclusive")
         control = svc._read_control()  # noqa: SLF001
         cfg = dict(control.get("control_config") or {})
         cfg["endpoint_mode_default"] = "shared"
         control["control_config"] = cfg
         svc._write_control(control)  # noqa: SLF001
-        with pytest.raises(
-            PermissionError,
-            match="require_auth_false_requires_exclusive_endpoint_mode",
-        ):
-            svc.assert_runtime_policy_safe()
+        svc.assert_runtime_policy_safe()
+        assert svc.get_control_config()["endpoint_mode_default"] == "exclusive"
 
 
 
@@ -518,7 +455,7 @@ def test_legacy_role_name_is_rejected_on_key_upsert() -> None:
             )
 
 
-def test_runtime_policy_assertion_rejects_unsafe_unauth_profile() -> None:
+def test_runtime_state_cannot_override_static_connectivity_profile() -> None:
     with _workspace_tmpdir() as td:
         svc = _svc(td)
         svc.auth_upsert_key(
@@ -527,27 +464,21 @@ def test_runtime_policy_assertion_rejects_unsafe_unauth_profile() -> None:
             role="admin",
             auth_method="shared_secret",
         )
-        svc.set_control_config(
-            require_auth=True,
-            access_profile={"connectivity_mode": "local_only"},
-        )
         control = svc._read_control()  # noqa: SLF001
         cfg = dict(control.get("control_config") or {})
         cfg["require_auth"] = False
         cfg["access_profile"] = {"connectivity_mode": "truly_remote"}
         control["control_config"] = cfg
         svc._write_control(control)  # noqa: SLF001
-        with pytest.raises(
-            PermissionError,
-            match="require_auth_false_only_supported_for_local_only_connectivity",
-        ):
-            svc.assert_runtime_policy_safe()
+        svc.assert_runtime_policy_safe()
+        config = svc.get_control_config()
+        assert config["require_auth"] is True
+        assert config["access_profile"] == {"connectivity_mode": "local_only"}
 
 
 def test_claim_engine_uses_endpoint_mode_default_when_exclusive_omitted() -> None:
     with _workspace_tmpdir() as td:
         svc = _svc(td)
-        svc.set_control_config(endpoint_mode_default="exclusive")
         out = svc.claim_engine("worker1", backend_id="backend:a", exclusive=None)
         assert str(out.get("mode") or "") == "exclusive"
         assert str(out.get("exclusive_owner") or "") == "backend:a"
@@ -555,8 +486,8 @@ def test_claim_engine_uses_endpoint_mode_default_when_exclusive_omitted() -> Non
 
 def test_lifecycle_profile_defaults_for_service_managed() -> None:
     with _workspace_tmpdir() as td:
-        svc = _svc(td)
-        out = svc.set_control_config(lifecycle_profile="service_managed")
+        svc = _svc(td, lifecycle={"profile": "service_managed"})
+        out = svc.get_control_config()
         assert str(out.get("lifecycle_profile") or "") == "service_managed"
         policy = dict(out.get("lifecycle_policy") or {})
         assert str(policy.get("on_terminal_disconnect") or "") == "keep_daemon_running"
@@ -570,22 +501,22 @@ def test_lifecycle_profile_defaults_for_service_managed() -> None:
 
 def test_invalid_lifecycle_profile_is_rejected() -> None:
     with _workspace_tmpdir() as td:
-        svc = _svc(td)
-        with pytest.raises(ValueError, match="lifecycle_profile must be one of"):
-            svc.set_control_config(lifecycle_profile="unknown_profile")
+        with pytest.raises(ValueError, match="hosting_configuration_value_invalid"):
+            _svc(td, lifecycle={"profile": "unknown_profile"})
 
 
 def test_lifecycle_policy_override_is_persisted() -> None:
     with _workspace_tmpdir() as td:
-        svc = _svc(td)
-        out = svc.set_control_config(
-            lifecycle_profile="detached_user_process",
-            lifecycle_policy={
+        svc = _svc(
+            td,
+            lifecycle={
+                "profile": "detached_user_process",
                 "on_terminal_disconnect": "stop_daemon",
                 "terminal_control_enabled": False,
                 "owner_disconnect_shutdown": True,
             },
         )
+        out = svc.get_control_config()
         policy = dict(out.get("lifecycle_policy") or {})
         assert str(policy.get("on_terminal_disconnect") or "") == "stop_daemon"
         assert bool(policy.get("terminal_control_enabled")) is False
@@ -598,18 +529,15 @@ def test_daemon_runtime_endpoint_override_applies_to_claims() -> None:
         daemon = EngineHostDaemon(
             port=0,
             engines_state_file=root / "engines.json",
-            control_state_file=root / "control.json",
+            mp13_config_file=write_hosting_configuration(
+                root, require_auth=True, endpoint_mode="shared"
+            ),
         )
         daemon.svc.auth_upsert_key(
             key_id="admin",
             key_secret="admin-secret",
             role="admin",
             auth_method="shared_secret",
-        )
-        daemon.svc.set_control_config(
-            require_auth=True,
-            access_profile={"connectivity_mode": "local_only"},
-            endpoint_mode_default="shared",
         )
         session = daemon.svc.auth_issue_session(
             key_id="admin",
@@ -654,17 +582,13 @@ def test_authenticated_daemon_auth_responses_project_replacement_public_key() ->
         daemon = EngineHostDaemon(
             port=0,
             engines_state_file=root / "engines.json",
-            control_state_file=root / "control.json",
+            mp13_config_file=write_hosting_configuration(root, require_auth=True),
         )
         daemon.svc.auth_upsert_key(
             key_id="bootstrap-admin",
             key_secret="admin-secret",
             role="admin",
             auth_method="shared_secret",
-        )
-        daemon.svc.set_control_config(
-            require_auth=True,
-            access_profile={"connectivity_mode": "local_only"},
         )
         session = daemon.svc.auth_issue_session(
             key_id="bootstrap-admin",
@@ -716,10 +640,6 @@ def test_model_user_cannot_override_model_in_connect_from_config() -> None:
             role="model_user",
             auth_method="shared_secret",
         )
-        svc.set_control_config(
-            require_auth=True,
-            access_profile={"connectivity_mode": "local_only"},
-        )
         session = svc.auth_issue_session(
             key_id="model",
             key_secret="model-secret",
@@ -747,10 +667,6 @@ def test_model_user_with_model_control_can_override_model_in_connect_from_config
             key_secret="model-control-secret",
             role="model_user_with_model_control",
             auth_method="shared_secret",
-        )
-        svc.set_control_config(
-            require_auth=True,
-            access_profile={"connectivity_mode": "local_only"},
         )
         session = svc.auth_issue_session(
             key_id="model-control",
@@ -783,10 +699,6 @@ def test_model_user_cannot_connect_generic_worker_profile() -> None:
             key_secret="model-secret",
             role="model_user",
             auth_method="shared_secret",
-        )
-        svc.set_control_config(
-            require_auth=True,
-            access_profile={"connectivity_mode": "local_only"},
         )
         session = svc.auth_issue_session(
             key_id="model",
@@ -822,10 +734,6 @@ def test_worker_user_cannot_connect_generic_worker_profile() -> None:
             key_secret="worker-secret",
             role="worker_user",
             auth_method="shared_secret",
-        )
-        svc.set_control_config(
-            require_auth=True,
-            access_profile={"connectivity_mode": "local_only"},
         )
         session = svc.auth_issue_session(
             key_id="worker",
@@ -863,10 +771,6 @@ def test_config_editor_can_connect_generic_worker_profile() -> None:
             auth_method="shared_secret",
             allowed_engines=["*"],
         )
-        svc.set_control_config(
-            require_auth=True,
-            access_profile={"connectivity_mode": "local_only"},
-        )
         session = svc.auth_issue_session(
             key_id="editor",
             key_secret="editor-secret",
@@ -902,7 +806,6 @@ def test_model_user_denied_proxy_to_generic_registered_engine() -> None:
             auth_method="shared_secret",
             allowed_engines=["generic1"],
         )
-        svc.set_control_config(require_auth=True, access_profile={"connectivity_mode": "local_only"})
         session = svc.auth_issue_session(
             key_id="model",
             key_secret="model-secret",
@@ -935,7 +838,6 @@ def test_model_user_allowed_proxy_to_workflow_python_helper_engine() -> None:
             auth_method="shared_secret",
             allowed_engines=["workflow-python-helper"],
         )
-        svc.set_control_config(require_auth=True, access_profile={"connectivity_mode": "local_only"})
         session = svc.auth_issue_session(
             key_id="model",
             key_secret="model-secret",
@@ -966,7 +868,6 @@ def test_worker_user_allowed_proxy_to_generic_registered_engine() -> None:
             auth_method="shared_secret",
             allowed_engines=["generic1"],
         )
-        svc.set_control_config(require_auth=True, access_profile={"connectivity_mode": "local_only"})
         session = svc.auth_issue_session(
             key_id="worker",
             key_secret="worker-secret",
@@ -996,10 +897,6 @@ def test_transport_role_rejects_shared_secret_key_upsert() -> None:
 def test_transport_role_public_key_cannot_issue_session_or_challenge() -> None:
     with _workspace_tmpdir() as td:
         svc = _svc(td)
-        svc.set_control_config(
-            require_auth=True,
-            access_profile={"connectivity_mode": "local_only"},
-        )
         svc.auth_upsert_key(
             key_id="transport1",
             role="transport",
@@ -1022,16 +919,12 @@ def test_transport_role_public_key_cannot_issue_session_or_challenge() -> None:
 
 def test_remote_connectivity_disallows_shared_secret_session_issue() -> None:
     with _workspace_tmpdir() as td:
-        svc = _svc(td)
+        svc = _svc(td, connectivity_mode="truly_remote")
         svc.auth_upsert_key(
             key_id="admin",
             key_secret="admin-secret",
             role="admin",
             auth_method="shared_secret",
-        )
-        svc.set_control_config(
-            require_auth=True,
-            access_profile={"connectivity_mode": "truly_remote"},
         )
         with pytest.raises(PermissionError, match="shared_secret_bootstrap_not_supported_for_remote_connectivity"):
             svc.auth_issue_session(
@@ -1050,16 +943,12 @@ def test_remote_connectivity_disallows_shared_secret_session_issue() -> None:
 
 def test_remote_connectivity_requires_ssh_binding_for_public_key_challenge_begin() -> None:
     with _workspace_tmpdir() as td:
-        svc = _svc(td)
+        svc = _svc(td, connectivity_mode="ssh_tunnel_only")
         svc.auth_upsert_key(
             key_id="admin-pub",
             role="admin",
             auth_method="public_key",
             public_key="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeFakeFakeFakeFakeFakeFakeFakeFake admin-pub",
-        )
-        svc.set_control_config(
-            require_auth=True,
-            access_profile={"connectivity_mode": "ssh_tunnel_only"},
         )
         with pytest.raises(PermissionError, match="ssh_binding_required_for_remote_connectivity"):
             svc.auth_begin_challenge(
@@ -1085,10 +974,6 @@ def test_remote_connectivity_command_denied_when_ssh_binding_not_presented() -> 
             role="admin",
             auth_method="shared_secret",
         )
-        svc.set_control_config(
-            require_auth=True,
-            access_profile={"connectivity_mode": "local_only"},
-        )
         session = svc.auth_issue_session(
             key_id="admin",
             key_secret="admin-secret",
@@ -1096,15 +981,12 @@ def test_remote_connectivity_command_denied_when_ssh_binding_not_presented() -> 
         )
         token = str(session.get("token") or "")
         assert token
-        svc.set_control_config(
-            require_auth=True,
-            access_profile={"connectivity_mode": "ssh_tunnel_only"},
-        )
+        svc = _svc(td, connectivity_mode="ssh_tunnel_only")
         with pytest.raises(PermissionError, match="ssh_binding_required_for_remote_connectivity"):
             svc.authorize_command("discover-running", {"session_token": token})
 
 
-def test_remote_connectivity_denies_legacy_unbound_session() -> None:
+def test_remote_connectivity_denies_pre_restart_unbound_session() -> None:
     with _workspace_tmpdir() as td:
         svc = _svc(td)
         svc.auth_upsert_key(
@@ -1113,10 +995,6 @@ def test_remote_connectivity_denies_legacy_unbound_session() -> None:
             role="admin",
             auth_method="shared_secret",
         )
-        svc.set_control_config(
-            require_auth=True,
-            access_profile={"connectivity_mode": "local_only"},
-        )
         session = svc.auth_issue_session(
             key_id="admin",
             key_secret="admin-secret",
@@ -1124,11 +1002,8 @@ def test_remote_connectivity_denies_legacy_unbound_session() -> None:
         )
         token = str(session.get("token") or "")
         assert token
-        # Simulate profile flip after legacy session issuance.
-        svc.set_control_config(
-            require_auth=True,
-            access_profile={"connectivity_mode": "truly_remote"},
-        )
+        # Activate changed static connectivity policy through a new service instance.
+        svc = _svc(td, connectivity_mode="truly_remote")
         with pytest.raises(PermissionError, match="ssh_binding_required_for_remote_connectivity"):
             svc.authorize_command(
                 "discover-running",
@@ -1147,10 +1022,6 @@ def test_auth_validate_session_reports_binding_and_identity() -> None:
             key_secret="admin-secret",
             role="admin",
             auth_method="shared_secret",
-        )
-        svc.set_control_config(
-            require_auth=True,
-            access_profile={"connectivity_mode": "local_only"},
         )
         session = svc.auth_issue_session(
             key_id="admin",
@@ -1182,10 +1053,6 @@ def test_auth_renew_session_extends_valid_session() -> None:
             role="admin",
             auth_method="shared_secret",
         )
-        svc.set_control_config(
-            require_auth=True,
-            access_profile={"connectivity_mode": "local_only"},
-        )
         session = svc.auth_issue_session(
             key_id="admin",
             key_secret="admin-secret",
@@ -1215,10 +1082,6 @@ def test_auth_validate_session_checks_remote_ssh_binding() -> None:
             role="admin",
             auth_method="shared_secret",
         )
-        svc.set_control_config(
-            require_auth=True,
-            access_profile={"connectivity_mode": "local_only"},
-        )
         session = svc.auth_issue_session(
             key_id="admin",
             key_secret="admin-secret",
@@ -1226,10 +1089,7 @@ def test_auth_validate_session_checks_remote_ssh_binding() -> None:
             ssh_binding={"target": "user@example-host", "key_fingerprint": "SHA256:abc"},
         )
         token = str(session.get("token") or "")
-        svc.set_control_config(
-            require_auth=True,
-            access_profile={"connectivity_mode": "ssh_tunnel_only"},
-        )
+        svc = _svc(td, connectivity_mode="ssh_tunnel_only")
 
         denied = svc.auth_validate_session(token=token, scope="control", presented_ssh_binding={})
         assert denied["valid"] is False
@@ -1270,10 +1130,6 @@ def test_config_editor_cannot_authorize_admin_key_revocation_commands() -> None:
             role="config_editor",
             auth_method="shared_secret",
         )
-        svc.set_control_config(
-            require_auth=True,
-            access_profile={"connectivity_mode": "local_only"},
-        )
         session = svc.auth_issue_session(
             key_id="editor",
             key_secret="editor-secret",
@@ -1296,10 +1152,6 @@ def test_admin_can_authorize_key_revocation_commands() -> None:
             role="admin",
             auth_method="shared_secret",
         )
-        svc.set_control_config(
-            require_auth=True,
-            access_profile={"connectivity_mode": "local_only"},
-        )
         session = svc.auth_issue_session(
             key_id="admin",
             key_secret="admin-secret",
@@ -1319,10 +1171,6 @@ def test_config_editor_cannot_authorize_auth_audit_list() -> None:
             key_secret="editor-secret",
             role="config_editor",
             auth_method="shared_secret",
-        )
-        svc.set_control_config(
-            require_auth=True,
-            access_profile={"connectivity_mode": "local_only"},
         )
         session = svc.auth_issue_session(
             key_id="editor",

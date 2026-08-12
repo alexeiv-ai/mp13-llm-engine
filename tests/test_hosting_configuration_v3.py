@@ -110,6 +110,12 @@ def test_full_configuration_and_sanitized_inspection(tmp_path: Path) -> None:
             "hosting_configuration_policy_conflict",
         ),
         (
+            lambda value: value["control"].update(
+                authentication={"require_auth": False, "connectivity_mode": "local_only", "endpoint_mode": "shared"}
+            ),
+            "hosting_configuration_policy_conflict",
+        ),
+        (
             lambda value: value["control"].update(lifecycle={"profile": "legacy_daemon"}),
             "hosting_configuration_value_invalid",
         ),

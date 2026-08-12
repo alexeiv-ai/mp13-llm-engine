@@ -164,6 +164,8 @@ def parse_hosting_configuration(payload: Mapping[str, Any], resolver: PathResolv
             raise HostingConfigurationError("hosting_configuration_value_invalid", "control.authentication.endpoint_mode")
     if authentication.get("require_auth") is False and authentication.get("connectivity_mode", "local_only") != "local_only":
         raise HostingConfigurationError("hosting_configuration_policy_conflict", "control.authentication.require_auth")
+    if authentication.get("require_auth") is False and authentication.get("endpoint_mode", "exclusive") != "exclusive":
+        raise HostingConfigurationError("hosting_configuration_policy_conflict", "control.authentication.endpoint_mode")
     roles = _mapping(control.get("roles"), "control.roles")
     for role_id, role in roles.items():
         role_data = _mapping(role, f"control.roles.{role_id}")
