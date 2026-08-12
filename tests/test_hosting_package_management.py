@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from hosting.hosting_configuration import parse_hosting_configuration
-from hosting.packages import PackageError, PackagePolicy, PackageSource
+from hosting.packages import PackageError, PackageLock, PackagePolicy, PackageSource
 from hosting.service.auth import AuthMixin
 from hosting.service.host_service import EngineHostService
 from mp13_engine.mp13_config_paths import resolve_config_paths
@@ -278,6 +278,11 @@ def test_source_credentials_policy_and_deterministic_offline_lock(tmp_path: Path
     first = service.package_lock_create(**request)
     second = _service(tmp_path / "ready").package_lock_create(**request)
     assert second == first
+    assert PackageLock.from_dict(first).to_dict() == first
+    with pytest.raises(ValueError, match="package_lock_digest_mismatch"):
+        PackageLock.from_dict({**first, "lock_digest": "sha256:" + "f" * 64})
+    with pytest.raises(ValueError, match="package_lock_type_invalid"):
+        PackageLock.from_dict({**first, "artifacts": ["not-an-artifact"]})
     assert "credential" not in json.dumps(first).lower()
     with pytest.raises(PackageError, match="package_policy_rejected"):
         service.package_lock_create(**{**request, "platform": "macos_arm64"})

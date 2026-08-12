@@ -2,7 +2,7 @@
 
 Last updated: 2026-08-12
 
-Status: P0 clean cut complete; ready to open R7.1
+Status: active on R7.1 tool-change merge
 
 This is the current execution ledger for
 [`hosting_access_plan.md`](hosting_access_plan.md). Detailed completed-slice
@@ -12,10 +12,10 @@ compact evidence index, and external completion gates.
 
 ## 1. Current gate and resume order
 
-No slice is active. **R6.5 legacy environment cut** removed the builder-owned
-reference index and old receipt reader. Strict generic locks, receipts, and
-references now own runtime readiness, removal blockers, release, and GC; old
-roots and contracts fail closed.
+Active slice: **R7.1 tool-change merge**. Exact generic package locks and strict
+`EnvironmentRequest` records are now pinned during planning and consumed
+unchanged by apply. The next boundary is the compare-and-swap server-side
+add/update/rename/remove merge.
 
 Resume in this order:
 
@@ -39,9 +39,9 @@ after R9.4 removals make R9.7 evidence meaningful.
 | R2 Shared paths/setup | Complete | Final aggregate/platform proof at R9.7. |
 | R3 Unified configuration | Complete | Final aggregate/platform proof at R9.7. |
 | R4 Single startup path | Complete | Final aggregate/platform proof at R9.7. |
-| R5 Generic packages | Complete | Toolbox planning origin moves to generic locks in R7.1. |
+| R5 Generic packages | Complete | Final aggregate/platform proof at R9.7. |
 | R6 Generic environments | Active | Remove final legacy receipt/reference readers; add candidate lifecycle policy fields in R7.2. |
-| R7 Toolbox adoption | R7.0 design complete; implementation pending | R7.1 planning/revision and R7.2 candidate/materialization work. Existing package/reference/publication bridges remain useful. |
+| R7 Toolbox adoption | R7.1 generic planning complete | Tool-change/selective revision, then R7.2 candidate/materialization work. |
 | R8 Worker-neutral state | Complete | One focused workflow-helper checkpoint rerun remains as noted above. |
 | R9 Acceptance/handoff | Partial | Public signature alignment, lifecycle matrices, removals, docs, dependent receipt, and full/platform lanes. |
 
@@ -72,7 +72,6 @@ The pre-R7 P0 clean-cut items are complete.
 
 ### R7.1 planning and selective revision
 
-- Plan exact generic package locks and `EnvironmentRequest` records directly.
 - Implement server-side tool change sets, deterministic change IDs, per-tool
   import evidence, and atomic rename.
 - Implement immutable child plans with full closure/lock recomputation; never
@@ -114,6 +113,7 @@ The pre-R7 P0 clean-cut items are complete.
 | CODE-R6A–D | Generic environment contracts/manager/commands and legacy-root cut passed focused coverage. |
 | CODE/TEST-R6.5 | Generic lock/receipt/reference validation replaced legacy readers and builder references; lifecycle/runtime lanes passed 27 tests, atomic publication 7, and maintenance 15. |
 | CODE-R7A/B | Generic materializer/package/reference bridges and atomic candidate publication remain valid foundations; old plan/confirmation field assertions are provisional. |
+| CODE/TEST-R7.1A | Planning persists strict generic lock/request records and apply consumes the selected record without late lock creation; package/plan/rollout lane passed 29 tests and atomic routing passed 10. |
 | CODE-R8A–C | Versioned neutral state, Python/JS shared manager adoption, GC/repair controls passed focused coverage. |
 | CODE/TEST-R9 partial | Structured auth, role/hash authority, redaction, startup modes, generic lifecycle, and retry/restart identity passed focused coverage. |
 | TEST-R8.2C checkpoint | Workflow operation suite passed; full helper suite passed 116 tests on resume. |

@@ -212,6 +212,7 @@ class ToolboxDefinitionRolloutCoordinator:
         profile_changes: Sequence[Mapping[str, Any]],
         confirmation_result: Mapping[str, Any] | None = None,
         resolved_environments: Mapping[str, Any] | None = None,
+        planned_environment_records: Mapping[str, Any] | None = None,
         operation_id: str,
     ) -> dict[str, Any]:
         tid = draft.definition.toolbox_id
@@ -264,11 +265,18 @@ class ToolboxDefinitionRolloutCoordinator:
                 completed_units=0,
                 total_units=len(changed),
             )
+            spawn_kwargs = {
+                "toolbox_id": tid,
+                "definition_revision": draft.definition.revision,
+                "assignments": assignments,
+                "resolved_environments": dict(resolved_environments or {}),
+            }
+            if planned_environment_records is not None:
+                spawn_kwargs["planned_environment_records"] = dict(
+                    planned_environment_records
+                )
             assignments = orchestrator.spawn_resolved_assignments(
-                toolbox_id=tid,
-                definition_revision=draft.definition.revision,
-                assignments=assignments,
-                resolved_environments=dict(resolved_environments or {}),
+                **spawn_kwargs,
             )
             candidates = [
                 str(dict(item.registration or {}).get("engine_id") or "").strip()

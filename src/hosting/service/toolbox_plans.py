@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from ..environments.contracts import EnvironmentRequest
+from ..packages.contracts import PackageLock
 from ..toolbox.bundle_models import (
     ResolvedToolboxProfileSpec,
     ToolboxDefinitionSpec,
@@ -32,6 +34,60 @@ TOOLBOX_COMPLETE_PLAN_ID_DOMAIN = "hosting.toolbox.definition_plan_id.v2"
 MAX_TOOLBOX_PLANS = 256
 MAX_TOOLBOX_PLAN_BYTES = 4 * 1024 * 1024
 MAX_TOOLBOX_PLAN_TTL_MS = 15 * 60 * 1000
+
+
+@dataclass(frozen=True)
+class ToolboxPlannedEnvironmentRecord:
+    environment_id: str
+    alternative_id: str
+    package_lock: PackageLock
+    environment_request: EnvironmentRequest
+    contract: str = "hosting.toolbox.planned_environment.v1"
+
+    def __post_init__(self) -> None:
+        if self.contract != "hosting.toolbox.planned_environment.v1":
+            raise ValueError("toolbox_planned_environment_contract_invalid")
+        object.__setattr__(
+            self, "environment_id", require_digest(
+                self.environment_id, label="toolbox_planned_environment_id"
+            )
+        )
+        object.__setattr__(
+            self, "alternative_id", require_digest(
+                self.alternative_id, label="toolbox_planned_alternative_id"
+            )
+        )
+        if not isinstance(self.package_lock, PackageLock):
+            raise ValueError("toolbox_planned_package_lock_invalid")
+        if not isinstance(self.environment_request, EnvironmentRequest):
+            raise ValueError("toolbox_planned_environment_request_invalid")
+        if self.environment_request.package_lock_digest != self.package_lock.lock_digest:
+            raise ValueError("toolbox_planned_environment_lock_mismatch")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "contract": self.contract,
+            "environment_id": self.environment_id,
+            "alternative_id": self.alternative_id,
+            "package_lock": self.package_lock.to_dict(),
+            "environment_request": self.environment_request.to_dict(),
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "ToolboxPlannedEnvironmentRecord":
+        row = dict(payload or {})
+        if set(row) != {
+            "contract", "environment_id", "alternative_id", "package_lock",
+            "environment_request",
+        }:
+            raise ValueError("toolbox_planned_environment_fields_invalid")
+        return cls(
+            contract=row["contract"],
+            environment_id=row["environment_id"],
+            alternative_id=row["alternative_id"],
+            package_lock=PackageLock.from_dict(row["package_lock"]),
+            environment_request=EnvironmentRequest.from_dict(row["environment_request"]),
+        )
 
 
 @dataclass(frozen=True)
@@ -317,6 +373,7 @@ class PersistedCompleteToolboxDefinitionPlan:
     proposed_definition: ToolboxDefinitionSpec
     pins: ToolboxPlanPins
     environment_mutations: tuple[ToolboxEnvironmentMutationSpec, ...]
+    planned_environments: tuple[ToolboxPlannedEnvironmentRecord, ...]
     draft_plan: Mapping[str, Any]
     profile_changes: tuple[Mapping[str, Any], ...]
     created_at_ms: int
@@ -366,6 +423,57 @@ class PersistedCompleteToolboxDefinitionPlan:
         }
         if len(set(offered_tools)) != len(offered_tools) or set(offered_tools) != expected_tools:
             raise ValueError("toolbox_complete_plan_offered_tools_invalid")
+        planned = tuple(
+            sorted(
+                self.planned_environments,
+                key=lambda item: (item.environment_id, item.alternative_id),
+            )
+        )
+        expected_planned = {
+            (environment.environment_id, alternative.alternative_id)
+            for environment in mutations
+            if any(tool.change != "removed" for tool in environment.tool_mutations)
+            for alternative in environment.alternatives
+        }
+        if (
+            any(not isinstance(item, ToolboxPlannedEnvironmentRecord) for item in planned)
+            or len({(item.environment_id, item.alternative_id) for item in planned}) != len(planned)
+            or {(item.environment_id, item.alternative_id) for item in planned} != expected_planned
+        ):
+            raise ValueError("toolbox_complete_plan_planned_environments_invalid")
+        offers = {item.environment_id: item for item in mutations}
+        for item in planned:
+            offer = offers[item.environment_id]
+            alternative = next(
+                value for value in offer.alternatives
+                if value.alternative_id == item.alternative_id
+            )
+            request = item.environment_request
+            if (
+                request.consumer_kind != "toolbox"
+                or request.consumer_id != self.proposed_definition.toolbox_id
+                or request.template_id != offer.base_template_id
+                or request.configuration_revision != self.pins.configuration_revision
+            ):
+                raise ValueError("toolbox_complete_plan_environment_request_mismatch")
+            expected_dependencies = {
+                (artifact.distribution, artifact.version, artifact.artifact_digest)
+                for artifact in alternative.artifacts
+            }
+            actual_dependencies = {
+                (value["name"], value["version"], value["artifact_id"])
+                for value in item.package_lock.dependencies
+            }
+            expected_artifacts = {
+                (artifact.artifact_digest, artifact.source_id)
+                for artifact in alternative.artifacts
+            }
+            actual_artifacts = {
+                (value["artifact_id"], value["source_id"])
+                for value in item.package_lock.artifacts
+            }
+            if actual_dependencies != expected_dependencies or actual_artifacts != expected_artifacts:
+                raise ValueError("toolbox_complete_plan_package_lock_mismatch")
         draft = dict(self.draft_plan or {})
         fields = {
             "definition", "definition_revision", "profiles", "bundles",
@@ -404,6 +512,7 @@ class PersistedCompleteToolboxDefinitionPlan:
         if not owner or not authority:
             raise ValueError("toolbox_complete_plan_owner_invalid")
         object.__setattr__(self, "environment_mutations", mutations)
+        object.__setattr__(self, "planned_environments", planned)
         object.__setattr__(self, "draft_plan", draft)
         object.__setattr__(self, "profile_changes", changes)
         object.__setattr__(self, "owner_actor_id", owner)
@@ -426,6 +535,7 @@ class PersistedCompleteToolboxDefinitionPlan:
             "proposed_definition": self.proposed_definition.to_dict(),
             "pins": self.pins.to_dict(),
             "environment_mutations": [item.to_dict() for item in self.environment_mutations],
+            "planned_environments": [item.to_dict() for item in self.planned_environments],
             "draft_plan": dict(self.draft_plan),
             "profile_changes": [dict(item) for item in self.profile_changes],
             "created_at_ms": self.created_at_ms,
@@ -439,7 +549,7 @@ class PersistedCompleteToolboxDefinitionPlan:
         row = dict(payload or {})
         fields = {
             "contract", "plan_id", "active_definition", "proposed_definition", "pins",
-            "environment_mutations", "draft_plan", "profile_changes", "created_at_ms",
+            "environment_mutations", "planned_environments", "draft_plan", "profile_changes", "created_at_ms",
             "expires_at_ms", "owner_actor_id", "authority_id",
         }
         if set(row) != fields:
@@ -453,6 +563,10 @@ class PersistedCompleteToolboxDefinitionPlan:
                 "environment_mutations": tuple(
                     ToolboxEnvironmentMutationSpec.from_dict(item)
                     for item in row["environment_mutations"]
+                ),
+                "planned_environments": tuple(
+                    ToolboxPlannedEnvironmentRecord.from_dict(item)
+                    for item in row["planned_environments"]
                 ),
                 "profile_changes": tuple(row["profile_changes"]),
             }
@@ -526,6 +640,7 @@ class AtomicJsonCompleteToolboxDefinitionPlanRepository:
         active_definition: ToolboxDefinitionSpec,
         pins: ToolboxPlanPins,
         environment_mutations: Sequence[ToolboxEnvironmentMutationSpec],
+        planned_environments: Sequence[ToolboxPlannedEnvironmentRecord],
         active_profiles: Sequence[ActiveToolboxProfileSnapshot | Mapping[str, Any]],
         now_ms: int,
         ttl_ms: int,
@@ -541,6 +656,7 @@ class AtomicJsonCompleteToolboxDefinitionPlanRepository:
             "proposed_definition": draft.definition.to_dict(),
             "pins": pins.to_dict(),
             "environment_mutations": [item.to_dict() for item in environment_mutations],
+            "planned_environments": [item.to_dict() for item in planned_environments],
             "draft_plan": draft.to_persisted_dict(),
             "profile_changes": list(classify_toolbox_profiles(draft, active_profiles)),
             "owner_actor_id": str(owner_actor_id or "").strip(),
@@ -552,6 +668,7 @@ class AtomicJsonCompleteToolboxDefinitionPlanRepository:
             proposed_definition=draft.definition,
             pins=pins,
             environment_mutations=tuple(environment_mutations),
+            planned_environments=tuple(planned_environments),
             draft_plan=draft.to_persisted_dict(),
             profile_changes=tuple(identity_payload["profile_changes"]),
             created_at_ms=now_ms,

@@ -149,6 +149,55 @@ class PackageLock:
 
     CONTRACT = "hosting.package_lock.v1"
 
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "PackageLock":
+        row = _strict(
+            payload,
+            {
+                "contract", "lock_id", "revision", "policy_id", "policy_revision",
+                "artifacts", "dependencies", "lock_digest",
+            },
+            "package_lock",
+        )
+        if row["contract"] != cls.CONTRACT:
+            raise ValueError("package_lock_contract_unsupported")
+        if (
+            isinstance(row["revision"], bool)
+            or not isinstance(row["revision"], int)
+            or row["revision"] < 1
+            or isinstance(row["policy_revision"], bool)
+            or not isinstance(row["policy_revision"], int)
+            or row["policy_revision"] < 1
+            or not isinstance(row["artifacts"], list)
+            or not isinstance(row["dependencies"], list)
+            or any(not isinstance(item, Mapping) for item in row["artifacts"])
+            or any(not isinstance(item, Mapping) for item in row["dependencies"])
+        ):
+            raise ValueError("package_lock_type_invalid")
+        policy = PackagePolicy(
+            policy_id=_id(row["policy_id"], "package_policy_id"),
+            revision=row["policy_revision"],
+            allowed_source_ids=tuple(
+                sorted({_id(item.get("source_id"), "package_source_id") for item in row["artifacts"]})
+            ),
+            allowed_platforms=(),
+            allowed_runtimes=(),
+            max_artifact_bytes=1,
+            require_sha256=True,
+            optional_verifier=None,
+        )
+        rebuilt = cls.build(
+            lock_id=row["lock_id"],
+            revision=row["revision"],
+            policy=policy,
+            artifacts=row["artifacts"],
+            dependencies=row["dependencies"],
+        )
+        expected = require_digest(row["lock_digest"], "package_lock_digest")
+        if rebuilt.lock_digest != expected:
+            raise ValueError("package_lock_digest_mismatch")
+        return rebuilt
+
     @staticmethod
     def build(
         *,

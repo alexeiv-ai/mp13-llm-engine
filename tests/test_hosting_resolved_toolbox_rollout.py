@@ -5,8 +5,11 @@ from types import SimpleNamespace
 
 import pytest
 
+from hosting.environments.contracts import EnvironmentRequest
+from hosting.packages.contracts import PackageLock, PackagePolicy
 from hosting.service.errors import ToolboxRolloutError
 from hosting.service.host_service import EngineHostService
+from hosting.service.toolbox_plans import ToolboxPlannedEnvironmentRecord
 from tests.hosting_v3_fixtures import hosting_configuration
 from hosting.toolbox.bundle_models import (
     ResolvedToolboxProfileSpec,
@@ -67,13 +70,23 @@ def test_resolved_rollout_skips_reused_and_spawns_added_as_candidate(tmp_path: P
         _toolbox_required_platform = TARGET.platform
         engines_state_file = tmp_path / "engines.json"
         control_state_file = tmp_path / "access.json"
+        hosting_configuration_revision = _digest("f")
 
         def __init__(self) -> None:
             self.materialized: list[dict] = []
             self.spawned: list[dict] = []
-            self._package_manager = SimpleNamespace(create_lock=lambda **_kwargs: {"lock_digest": added.effective_lock_digest})
-            self._environment_manager = SimpleNamespace(adopt_published=lambda **_kwargs: {"reference": {"reference_id": "ref-generic"}})
+            self.adopted: list[dict] = []
+            self._package_manager = SimpleNamespace(
+                create_lock=lambda **_kwargs: (_ for _ in ()).throw(
+                    AssertionError("apply_must_not_recreate_planned_lock")
+                )
+            )
+            self._environment_manager = SimpleNamespace(adopt_published=self._adopt)
             self._toolbox_artifact_store = SimpleNamespace(object_path=lambda _digest: receipt_root / "unused")
+
+        def _adopt(self, **kwargs):
+            self.adopted.append(kwargs)
+            return {"reference": {"reference_id": "ref-generic"}}
 
         def materialize_toolbox_environment_for_bundle(self, **kwargs):
             self.materialized.append(kwargs)
@@ -93,6 +106,34 @@ def test_resolved_rollout_skips_reused_and_spawns_added_as_candidate(tmp_path: P
             return {**kwargs, "pid": 1234}
 
     service = Service()
+    generic_lock = PackageLock.build(
+        lock_id="test-lock",
+        revision=1,
+        policy=PackagePolicy(
+            "test", 1, (), (TARGET.platform,), ("python",), 1024, True, None
+        ),
+        artifacts=(),
+        dependencies=(),
+    )
+    generic_request = EnvironmentRequest.from_dict({
+        "contract": EnvironmentRequest.CONTRACT,
+        "request_id": "test-request",
+        "consumer_kind": "toolbox",
+        "consumer_id": "demo",
+        "revision": 1,
+        "template_id": added.template_id,
+        "template_revision": 1,
+        "package_lock_digest": generic_lock.lock_digest,
+        "runtime_kind": "python",
+        "platform": TARGET.platform,
+        "configuration_revision": service.hosting_configuration_revision,
+    })
+    generic_record = ToolboxPlannedEnvironmentRecord(
+        environment_id=added.profile_id,
+        alternative_id=_digest("e"),
+        package_lock=generic_lock,
+        environment_request=generic_request,
+    )
     orchestrator = ToolboxSandboxOrchestrator(
         service=service,
         stager=ToolboxBundleStager(tmp_path / "host"),
@@ -121,6 +162,7 @@ def test_resolved_rollout_skips_reused_and_spawns_added_as_candidate(tmp_path: P
         toolbox_id="demo",
         definition_revision=_digest("d"),
         assignments=assignments,
+        planned_environment_records={added.profile_id: generic_record.to_dict()},
     )
 
     reused_assignment = next(item for item in result if item.classification == "reused")
@@ -129,6 +171,8 @@ def test_resolved_rollout_skips_reused_and_spawns_added_as_candidate(tmp_path: P
     assert added_assignment.staged_bundle is not None
     assert added_assignment.registration["routing_state"] == "candidate"
     assert len(service.materialized) == len(service.spawned) == 1
+    assert service.adopted[0]["package_lock_digest"] == generic_lock.lock_digest
+    assert service.adopted[0]["revision"] == generic_request.revision
     assert service.spawned[0]["bundle"]["resolved_profile_id"] == added.profile_id
     assert service.spawned[0]["environment"]["environment_key"] == added.environment_key
 

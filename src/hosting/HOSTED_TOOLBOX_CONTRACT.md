@@ -322,11 +322,14 @@ and performs no staging, environment acquisition, registration, or routing.
 The resulting plan is stored in the process-safe atomic definition-plan
 repository. Its ID binds toolbox ID, definition revision, expected active
 revision, catalog revision, package-policy revision, resolved profiles, and
-bundle manifest/lock identities. Records have a strict 15-minute maximum TTL,
-a 4 MiB encoded maximum, and a 256-record repository maximum. Expired records
-are pruned and cannot be refreshed by repeating the same plan request. A
-restart reloads and revalidates the complete record; corrupt, truncated,
-unknown-field, over-capacity, or pin-mismatched state fails closed.
+bundle manifest/lock identities. Each non-removal alternative also binds one
+strict generic `hosting.package_lock.v1` and `hosting.environment_request.v1`;
+the lock contains the exact verified CAS artifacts and dependency closure.
+Records have a strict 15-minute maximum TTL, a 4 MiB encoded maximum, and a
+256-record repository maximum. Expired records are pruned and cannot be
+refreshed by repeating the same plan request. A restart reloads and revalidates
+the complete record; corrupt, truncated, unknown-field, over-capacity, or
+pin-mismatched state fails closed.
 
 ## Environment template descriptor
 
@@ -627,9 +630,12 @@ lockfile, venv, or filesystem path.
 For definition apply, confirmation persists one `ResolvedToolboxEnvironmentInput`
 per effective profile. It is constructed from the selected offered alternative
 and verified CAS objects, then carried unchanged through rollout orchestration
-to the builder. Active custom profiles persist that exact resolved input so a
-later plan compares against the real active closure rather than an installed
-environment or a newly resolved approximation.
+to the builder. The selected generic package lock and `EnvironmentRequest` are
+loaded from the same immutable plan and used unchanged for generic environment
+adoption; apply does not import package bytes or recreate the lock. Active
+custom profiles persist that exact resolved input so a later plan compares
+against the real active closure rather than an installed environment or a newly
+resolved approximation.
 
 Removal planning resolves each remaining profile again from only its complete
 remaining tool and package requirements. Packages needed solely by removed

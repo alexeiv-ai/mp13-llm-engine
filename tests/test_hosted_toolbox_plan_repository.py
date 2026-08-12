@@ -5,13 +5,18 @@ import multiprocessing
 import os
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
+from hosting.environments.contracts import EnvironmentRequest
+from hosting.packages.contracts import PackageLock, PackagePolicy
 from hosting.service.toolbox_plans import (
     AtomicJsonCompleteToolboxDefinitionPlanRepository,
     AtomicJsonToolboxDefinitionPlanRepository,
+    ToolboxPlannedEnvironmentRecord,
 )
+from hosting.service.toolbox_runtime import ToolboxRuntimeMixin
 from hosting.toolbox.bundle_models import (
     ToolboxDefinitionSpec,
     ToolboxDependencyEdgeSpec,
@@ -143,7 +148,65 @@ def _complete_inputs(definition: dict):
         dependency_policy_revision=POLICY_REVISION,
         source_set_revision=SOURCE_SET_REVISION,
     )
-    return draft, active, pins, (environment,)
+    return draft, active, pins, (environment,), _planned_environments(
+        draft, pins, (environment,)
+    )
+
+
+def _planned_environments(draft, pins, environments):
+    policy = PackagePolicy(
+        policy_id="test-policy",
+        revision=1,
+        allowed_source_ids=("release",),
+        allowed_platforms=("*",),
+        allowed_runtimes=("python",),
+        max_artifact_bytes=1024,
+        require_sha256=True,
+        optional_verifier=None,
+    )
+    records = []
+    for environment in environments:
+        for alternative in environment.alternatives:
+            lock = PackageLock.build(
+                lock_id="tbx-" + alternative.alternative_id.removeprefix("sha256:"),
+                revision=1,
+                policy=policy,
+                artifacts=[
+                    {
+                        "artifact_id": item.artifact_digest,
+                        "size_bytes": 1,
+                        "source_id": item.source_id,
+                    }
+                    for item in alternative.artifacts
+                ],
+                dependencies=[
+                    {
+                        "name": item.distribution,
+                        "version": item.version,
+                        "artifact_id": item.artifact_digest,
+                    }
+                    for item in alternative.artifacts
+                ],
+            )
+            request = EnvironmentRequest.from_dict({
+                "contract": EnvironmentRequest.CONTRACT,
+                "request_id": identity_digest(
+                    "test.toolbox.environment_request.v1", alternative.alternative_id
+                ),
+                "consumer_kind": "toolbox",
+                "consumer_id": draft.definition.toolbox_id,
+                "revision": 1,
+                "template_id": environment.base_template_id,
+                "template_revision": 1,
+                "package_lock_digest": lock.lock_digest,
+                "runtime_kind": "python",
+                "platform": "win_amd64" if os.name == "nt" else "manylinux_2_28_x86_64",
+                "configuration_revision": pins.configuration_revision,
+            })
+            records.append(ToolboxPlannedEnvironmentRecord(
+                environment.environment_id, alternative.alternative_id, lock, request
+            ))
+    return tuple(records)
 
 
 def _create_in_process(path: str, definition: dict, now_ms: int, queue) -> None:
@@ -163,12 +226,13 @@ def _create_in_process(path: str, definition: dict, now_ms: int, queue) -> None:
 
 def _create_complete_in_process(path: str, definition: dict, now_ms: int, queue) -> None:
     try:
-        draft, active, pins, environments = _complete_inputs(definition)
+        draft, active, pins, environments, planned = _complete_inputs(definition)
         record = AtomicJsonCompleteToolboxDefinitionPlanRepository(Path(path)).create(
             draft,
             active_definition=active,
             pins=pins,
             environment_mutations=environments,
+            planned_environments=planned,
             active_profiles=(),
             now_ms=now_ms,
             ttl_ms=60_000,
@@ -375,7 +439,7 @@ def test_planning_and_persistence_do_not_stage_or_start_workers(tmp_path: Path) 
 
 
 def test_complete_plan_roundtrips_every_pin_offer_artifact_and_edge(tmp_path: Path) -> None:
-    draft, active, pins, environments = _complete_inputs(
+    draft, active, pins, environments, planned = _complete_inputs(
         _definition("complete", [_auto("Alpha")])
     )
     path = tmp_path / "complete-plans.json"
@@ -385,6 +449,7 @@ def test_complete_plan_roundtrips_every_pin_offer_artifact_and_edge(tmp_path: Pa
         active_definition=active,
         pins=pins,
         environment_mutations=environments,
+        planned_environments=planned,
         active_profiles=(),
         now_ms=1_000,
         ttl_ms=60_000,
@@ -396,6 +461,7 @@ def test_complete_plan_roundtrips_every_pin_offer_artifact_and_edge(tmp_path: Pa
         active_definition=active,
         pins=pins,
         environment_mutations=environments,
+        planned_environments=planned,
         active_profiles=(),
         now_ms=1_100,
         ttl_ms=60_000,
@@ -419,8 +485,75 @@ def test_complete_plan_roundtrips_every_pin_offer_artifact_and_edge(tmp_path: Pa
     assert repository.invalidate_all() == 0
 
 
+def test_runtime_planning_builds_deterministic_generic_lock_and_request() -> None:
+    draft, _active, pins, environments, _planned = _complete_inputs(
+        _definition("complete", [_auto("Alpha")])
+    )
+    policy = PackagePolicy(
+        policy_id="test-policy",
+        revision=1,
+        allowed_source_ids=("release",),
+        allowed_platforms=("*",),
+        allowed_runtimes=("python",),
+        max_artifact_bytes=1024,
+        require_sha256=True,
+        optional_verifier=None,
+    )
+
+    class PackageManager:
+        def import_verified_file(self, **kwargs):
+            assert kwargs["actor_id"] == "service:toolbox-planner"
+            return {
+                "artifact_id": kwargs["expected_digest"],
+                "size_bytes": 7,
+                "source_id": kwargs["source_id"],
+            }
+
+        def create_lock(self, **kwargs):
+            assert kwargs["runtime_kind"] == "python"
+            return PackageLock.build(
+                lock_id=kwargs["lock_id"],
+                revision=kwargs["revision"],
+                policy=policy,
+                artifacts=kwargs["artifacts"],
+                dependencies=kwargs["dependencies"],
+            ).to_dict()
+
+    fake = SimpleNamespace(
+        hosting_configuration_revision=pins.configuration_revision,
+        _package_manager=PackageManager(),
+        _toolbox_artifact_store=SimpleNamespace(
+            object_path=lambda digest: Path("cas") / digest.removeprefix("sha256:")
+        ),
+    )
+    first = ToolboxRuntimeMixin._plan_generic_toolbox_environments(
+        fake,
+        definition=draft.definition,
+        environment_mutations=environments,
+        platform="win_amd64",
+        consumer_revision=2,
+    )
+    second = ToolboxRuntimeMixin._plan_generic_toolbox_environments(
+        fake,
+        definition=draft.definition,
+        environment_mutations=environments,
+        platform="win_amd64",
+        consumer_revision=2,
+    )
+
+    assert first == second
+    assert len(first) == 1
+    assert first[0].environment_request.revision == 2
+    assert first[0].environment_request.package_lock_digest == first[0].package_lock.lock_digest
+    assert first[0].package_lock.dependencies == ({
+        "name": "demo-pkg",
+        "version": "1.0.0",
+        "artifact_id": "sha256:" + "3" * 64,
+    },)
+
+
 def test_complete_plan_identity_changes_with_pin_and_offered_artifact(tmp_path: Path) -> None:
-    draft, active, pins, environments = _complete_inputs(
+    draft, active, pins, environments, planned = _complete_inputs(
         _definition("complete", [_auto("Alpha")])
     )
     repository = AtomicJsonCompleteToolboxDefinitionPlanRepository(tmp_path / "plans.json")
@@ -431,6 +564,9 @@ def test_complete_plan_identity_changes_with_pin_and_offered_artifact(tmp_path: 
             active_definition=active,
             pins=current_pins,
             environment_mutations=current_environments,
+            planned_environments=_planned_environments(
+                draft, current_pins, current_environments
+            ),
             active_profiles=(),
             now_ms=now_ms,
             ttl_ms=60_000,
@@ -474,7 +610,7 @@ def test_complete_plan_identity_changes_with_pin_and_offered_artifact(tmp_path: 
 
 
 def test_complete_plan_pins_require_unified_configuration_revision() -> None:
-    _, _, pins, _ = _complete_inputs(_definition("complete", [_auto("Alpha")]))
+    _, _, pins, _, _ = _complete_inputs(_definition("complete", [_auto("Alpha")]))
     payload = pins.to_dict()
     payload.pop("configuration_revision")
 

@@ -266,6 +266,89 @@ class ToolboxRuntimeMixin:
                 },
             )
 
+    def _plan_generic_toolbox_environments(
+        self,
+        *,
+        definition: Any,
+        environment_mutations: Any,
+        platform: str,
+        consumer_revision: int,
+    ) -> tuple[Any, ...]:
+        from ..environments.contracts import EnvironmentRequest
+        from ..packages.contracts import PackageLock
+        from ..toolbox.identity import identity_digest
+        from .toolbox_plans import ToolboxPlannedEnvironmentRecord
+
+        planned = []
+        for environment in environment_mutations:
+            if all(item.change == "removed" for item in environment.tool_mutations):
+                continue
+            for alternative in environment.alternatives:
+                generic_artifacts = []
+                generic_dependencies = []
+                import_request_id = identity_digest(
+                    "hosting.toolbox.plan_package_import.v1",
+                    {
+                        "toolbox_id": definition.toolbox_id,
+                        "definition_revision": definition.revision,
+                        "environment_id": environment.environment_id,
+                        "alternative_id": alternative.alternative_id,
+                        "configuration_revision": self.hosting_configuration_revision,
+                    },
+                )
+                for artifact in alternative.artifacts:
+                    generic_artifacts.append(self._package_manager.import_verified_file(
+                        source_id=artifact.source_id,
+                        path=self._toolbox_artifact_store.object_path(
+                            artifact.artifact_digest
+                        ),
+                        expected_digest=artifact.artifact_digest,
+                        actor_id="service:toolbox-planner",
+                        request_id=import_request_id,
+                    ))
+                    generic_dependencies.append({
+                        "name": artifact.distribution,
+                        "version": artifact.version,
+                        "artifact_id": artifact.artifact_digest,
+                    })
+                lock = PackageLock.from_dict(self._package_manager.create_lock(
+                    lock_id="tbx-" + alternative.alternative_id.removeprefix("sha256:"),
+                    revision=consumer_revision,
+                    runtime_kind="python",
+                    platform=platform,
+                    artifacts=generic_artifacts,
+                    dependencies=generic_dependencies,
+                ))
+                request = EnvironmentRequest.from_dict({
+                    "contract": EnvironmentRequest.CONTRACT,
+                    "request_id": identity_digest(
+                        "hosting.toolbox.environment_request_id.v1",
+                        {
+                            "toolbox_id": definition.toolbox_id,
+                            "definition_revision": definition.revision,
+                            "environment_id": environment.environment_id,
+                            "alternative_id": alternative.alternative_id,
+                            "package_lock_digest": lock.lock_digest,
+                        },
+                    ),
+                    "consumer_kind": "toolbox",
+                    "consumer_id": definition.toolbox_id,
+                    "revision": consumer_revision,
+                    "template_id": environment.base_template_id,
+                    "template_revision": 1,
+                    "package_lock_digest": lock.lock_digest,
+                    "runtime_kind": "python",
+                    "platform": platform,
+                    "configuration_revision": self.hosting_configuration_revision,
+                })
+                planned.append(ToolboxPlannedEnvironmentRecord(
+                    environment_id=environment.environment_id,
+                    alternative_id=alternative.alternative_id,
+                    package_lock=lock,
+                    environment_request=request,
+                ))
+        return tuple(planned)
+
     def _build_toolbox_definition_plan(
         self,
         *,
@@ -336,6 +419,16 @@ class ToolboxRuntimeMixin:
             active_environments=active_environments,
             dependency_approval_required=approval_required,
         )
+        # Environment references require an integer revision. Derive a stable,
+        # JSON-safe value from the immutable definition identity rather than the
+        # bounded rollout history, which intentionally truncates after 32 rows.
+        consumer_revision = int(model.revision.removeprefix("sha256:")[:13], 16) + 1
+        planned_environments = self._plan_generic_toolbox_environments(
+            definition=model,
+            environment_mutations=environment_mutations,
+            platform=context["platform"],
+            consumer_revision=consumer_revision,
+        )
         pins = ToolboxPlanPins(
             active_definition_revision=active_revision,
             target=context["target"],
@@ -353,6 +446,7 @@ class ToolboxRuntimeMixin:
             ),
             pins=pins,
             environment_mutations=environment_mutations,
+            planned_environments=planned_environments,
             active_profiles=active_profiles,
             now_ms=now_ms,
             ttl_ms=int(ttl_ms),
@@ -847,6 +941,17 @@ class ToolboxRuntimeMixin:
                 )
             )
         profile_changes = classify_toolbox_profiles(draft, active_profiles)
+        selected_alternatives = {
+            item["environment_id"]: item["alternative_id"]
+            for item in receipt.reduction["selected_alternatives"]
+        }
+        planned_environment_records = {
+            item.environment_id: item.to_dict()
+            for item in record.planned_environments
+            if selected_alternatives.get(item.environment_id) == item.alternative_id
+        }
+        if set(planned_environment_records) != {item.profile_id for item in draft.profiles}:
+            raise ValueError("toolbox_planned_environment_selection_incomplete")
         self._hosted_operations.update_progress(
             operation_id=operation_id,
             progress={
@@ -866,6 +971,7 @@ class ToolboxRuntimeMixin:
                 "profile_changes": [dict(item) for item in profile_changes],
                 "confirmation_result": dict(receipt.reduction),
                 "resolved_environments": dict(receipt.resolved_environments),
+                "planned_environment_records": planned_environment_records,
                 "operation_id": operation_id,
             },
             name=f"toolbox-definition-apply-{operation_id[:12]}",
@@ -881,6 +987,7 @@ class ToolboxRuntimeMixin:
         profile_changes: List[Dict[str, Any]],
         confirmation_result: Optional[Dict[str, Any]] = None,
         resolved_environments: Optional[Dict[str, Any]] = None,
+        planned_environment_records: Optional[Dict[str, Any]] = None,
         operation_id: str,
     ) -> Dict[str, Any]:
         from .toolbox_rollout import ToolboxDefinitionRolloutCoordinator
@@ -892,6 +999,11 @@ class ToolboxRuntimeMixin:
             profile_changes=profile_changes,
             confirmation_result=dict(confirmation_result or {}),
             resolved_environments=dict(resolved_environments or {}),
+            planned_environment_records=(
+                dict(planned_environment_records)
+                if planned_environment_records is not None
+                else None
+            ),
             operation_id=str(operation_id or "").strip(),
         )
 

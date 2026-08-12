@@ -101,6 +101,7 @@ class ToolboxSandboxOrchestrator:
         definition_revision: str,
         assignments: Sequence[ResolvedToolboxSandboxAssignment],
         resolved_environments: Optional[Dict[str, Any]] = None,
+        planned_environment_records: Optional[Dict[str, Any]] = None,
         worker_profile_class: str = "generic",
     ) -> List[ResolvedToolboxSandboxAssignment]:
         """Stage and spawn only added/replaced profiles as non-routable candidates."""
@@ -112,12 +113,24 @@ class ToolboxSandboxOrchestrator:
         out = list(assignments or [])
         current_target = detect_current_toolbox_target()
         pinned_environments = dict(resolved_environments or {})
+        pinned_generic_records = dict(planned_environment_records or {})
         for item in out:
             if item.toolbox_id != tid:
                 raise ValueError("resolved_assignment_toolbox_mismatch")
             if item.classification == "reused":
                 continue
             profile = item.resolved_profile
+            from ..service.toolbox_plans import ToolboxPlannedEnvironmentRecord
+            generic_record = ToolboxPlannedEnvironmentRecord.from_dict(
+                pinned_generic_records.get(profile.profile_id) or {}
+            )
+            generic_request = generic_record.environment_request
+            if (
+                generic_request.consumer_id != tid
+                or generic_request.configuration_revision
+                != self.service.hosting_configuration_revision
+            ):
+                raise RuntimeError("planned_environment_request_stale")
             item.staged_bundle = self.stager.stage_bundle(item.bundle_spec)
             staged = item.staged_bundle
             bundle_revision = str(staged.manifest.get("bundle_revision") or "")
@@ -126,10 +139,6 @@ class ToolboxSandboxOrchestrator:
             # Keep the logical prefix for diagnostics, but make each concrete
             # candidate identity unique and non-replacing.
             engine_id = f"{logical_engine_id}-{uuid.uuid4().hex[:12]}"
-            adoption_request_id = (
-                f"toolbox:{tid}:{profile.profile_id.removeprefix('sha256:')[:24]}:"
-                f"{revision.removeprefix('sha256:')[:24]}"
-            )
             hermetic = self.service.materialize_toolbox_environment_for_bundle(
                 files=list(staged.manifest.get("files") or []),
                 python_abi=str(getattr(self.service, "_toolbox_required_python_abi", "") or "").strip()
@@ -150,40 +159,16 @@ class ToolboxSandboxOrchestrator:
                 ) != profile.effective_lock_digest
             ):
                 raise RuntimeError("resolved_environment_identity_mismatch")
-            generic_artifacts = []
-            generic_dependencies = []
-            for artifact in hermetic.resolved.locked_artifacts:
-                imported = self.service._package_manager.import_verified_file(
-                    source_id=artifact.source_id,
-                    path=self.service._toolbox_artifact_store.object_path(artifact.sha256),
-                    expected_digest=artifact.sha256,
-                    actor_id="service:toolbox",
-                    request_id=adoption_request_id,
-                )
-                generic_artifacts.append(imported)
-                generic_dependencies.append({
-                    "name": artifact.distribution_name,
-                    "version": artifact.version,
-                    "artifact_id": artifact.sha256,
-                })
-            generic_lock = self.service._package_manager.create_lock(
-                lock_id=f"toolbox-{profile.profile_id.removeprefix('sha256:')[:32]}",
-                revision=1,
-                runtime_kind="python",
-                platform=current_target.platform,
-                artifacts=generic_artifacts,
-                dependencies=generic_dependencies,
-            )
             adopted = self.service._environment_manager.adopt_published(
                 environment_id=hermetic.environment_key,
-                consumer_kind="toolbox",
-                consumer_id=tid,
-                revision=1,
-                template_id=profile.template_id,
-                template_revision=1,
-                package_lock_digest=str(generic_lock["lock_digest"]),
-                runtime_kind="python",
-                platform=current_target.platform,
+                consumer_kind=generic_request.consumer_kind,
+                consumer_id=generic_request.consumer_id,
+                revision=generic_request.revision,
+                template_id=generic_request.template_id,
+                template_revision=generic_request.template_revision,
+                package_lock_digest=generic_request.package_lock_digest,
+                runtime_kind=generic_request.runtime_kind,
+                platform=generic_request.platform,
                 builder_id="python-environment-v1",
             )
             item.materialization_reference_id = str(adopted["reference"]["reference_id"])
