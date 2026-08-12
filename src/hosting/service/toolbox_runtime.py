@@ -2440,10 +2440,11 @@ class ToolboxRuntimeMixin:
         """Return configured capacity for discovery before a runtime pool exists."""
         caps = dict(dict(reg or {}).get("capabilities") or {})
         for key in ("capacity", "max_concurrency", "max_parallel_calls"):
-            if key not in caps or caps.get(key) is None:
+            raw_value = caps.get(key)
+            if raw_value is None:
                 continue
             try:
-                value = int(caps.get(key))
+                value = int(raw_value)
             except Exception:
                 return cls._toolbox_registration_capacity(reg)
             return max(0, min(value, 1024))
@@ -2458,20 +2459,22 @@ class ToolboxRuntimeMixin:
 
         depth = 32
         for key in ("queue_depth", "max_queue_depth"):
-            if key not in caps or caps.get(key) is None:
+            raw_depth = caps.get(key)
+            if raw_depth is None:
                 continue
             try:
-                depth = int(caps.get(key))
+                depth = int(raw_depth)
             except Exception:
                 depth = 32
             break
 
         timeout = 30.0
         for key in ("queue_timeout_seconds", "queue_wait_timeout_seconds"):
-            if key not in caps or caps.get(key) is None:
+            raw_timeout = caps.get(key)
+            if raw_timeout is None:
                 continue
             try:
-                timeout = float(caps.get(key))
+                timeout = float(raw_timeout)
             except Exception:
                 timeout = 30.0
             break
@@ -2914,7 +2917,7 @@ class ToolboxRuntimeMixin:
                 self._active_toolbox_v2_registrations(tid)
                 if v2_snapshot is not None
                 else self._toolbox_executor_registrations(tid)
-            )
+            ) or []
             if not regs and v2_snapshot is None:
                 return {
                     "status": "ok",
@@ -3273,12 +3276,14 @@ class ToolboxRuntimeMixin:
         dispatch_relay: Optional[_HostedToolCallbackRelay] = None
         dispatch_binding: Optional[Dict[str, Any]] = None
         try:
+            raw_tool_arguments = call.get("arguments")
+            tool_arguments = dict(raw_tool_arguments) if isinstance(raw_tool_arguments, dict) else {}
             dispatch_relay, dispatch_binding = self._toolbox_host_capability_dispatch_binding(
                 engine_id=eid,
                 toolbox_id=tid or self._registration_toolbox_id(reg),
                 tool_name=tool_name,
                 tool_call_id=model_tool_call_id,
-                tool_arguments=call.get("arguments") if isinstance(call.get("arguments"), dict) else {},
+                tool_arguments=tool_arguments,
                 sandbox_policy=dict(reg.get("sandbox_policy") or {}),
                 callback_binding=dict(callback_binding or {}) if isinstance(callback_binding, dict) else None,
                 host_api_approval=dict(host_api_approval or {}) if isinstance(host_api_approval, dict) else None,
