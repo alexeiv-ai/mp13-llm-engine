@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .bundle_models import ToolboxBundleSpec, ToolboxWorkerStartupSpec
-from .environment import ToolboxEnvironmentManager, ToolboxEnvironmentSpec
+from .environment import EnvironmentRuntimeAdapter, ToolboxEnvironmentSpec
 
 
 @dataclass
@@ -33,7 +33,7 @@ class StagedToolboxBundle:
     def registration_environment(self, environment_spec: Optional[ToolboxEnvironmentSpec] = None) -> Dict[str, Any]:
         spec = environment_spec
         if spec is None:
-            spec = ToolboxEnvironmentManager(self.bundle_root.parents[2]).environment_spec_for_bundle(self)
+            spec = EnvironmentRuntimeAdapter(self.bundle_root.parents[2]).environment_spec_for_bundle(self)
         return {
             "venv_key": spec.venv_key,
             "venv_path": spec.venv_path,

@@ -323,7 +323,7 @@ class HermeticToolboxEnvironmentBuildError(RuntimeError):
         super().__init__(self.code)
 
 
-class HermeticToolboxEnvironmentBuilder:
+class PythonEnvironmentBuilder:
     """Target-host offline builder for independently materialized toolbox venvs."""
 
     def __init__(
@@ -779,7 +779,7 @@ class HermeticToolboxEnvironmentBuilder:
 
 __all__ = [
     "HermeticToolboxEnvironmentBuildError",
-    "HermeticToolboxEnvironmentBuilder",
+    "PythonEnvironmentBuilder",
     "HermeticToolboxEnvironmentResolver",
     "HermeticToolboxEnvironmentSpec",
     "ResolvedToolboxEnvironmentInput",

@@ -392,9 +392,9 @@ class ProxyMixin:
             python_req.setdefault("python_source", "worker")
             out["python"] = python_req
             return out
-        from ..toolbox.environment import RuntimeEnvironmentManager
+        from ..toolbox.environment import WorkflowEnvironmentAdapter
 
-        manager = RuntimeEnvironmentManager(self.hosting_root)
+        manager = WorkflowEnvironmentAdapter(self.hosting_root)
         metadata = manager.realize_workflow_python_helper_environment(
             policy={
                 "import_allowlist": import_allowlist,

@@ -31,7 +31,7 @@ from hosting.toolbox.bundle_models import (
 )
 from hosting.toolbox.hermetic_environment import (
     HermeticToolboxEnvironmentBuildError,
-    HermeticToolboxEnvironmentBuilder,
+    PythonEnvironmentBuilder,
     ResolvedToolboxEnvironmentInput,
     ToolboxLockedArtifactSpec,
     HermeticToolboxEnvironmentResolver,
@@ -151,7 +151,7 @@ def _run(python: str, source: str) -> subprocess.CompletedProcess[str]:
 
 def _materialize_in_process(host: str, source: str, payload: dict, reference: str, queue) -> None:
     try:
-        builder = HermeticToolboxEnvironmentBuilder(
+        builder = PythonEnvironmentBuilder(
             Path(host), artifact_sources={"approved": Path(source)}
         )
         spec = builder.materialize_environment(payload, reference_id=reference)
@@ -170,7 +170,7 @@ def test_builder_rejects_cross_target_wheel_before_source_access(tmp_path: Path)
         filename=f"alpha_package-1.0.0-cp312-cp312-{foreign_platform}.whl",
     )
     resolved = _resolved((foreign,))
-    builder = HermeticToolboxEnvironmentBuilder(
+    builder = PythonEnvironmentBuilder(
         tmp_path / "host", artifact_sources={"approved": tmp_path / "missing-source"}
     )
 
@@ -186,7 +186,7 @@ def test_offline_preseed_builds_non_inheriting_venv_and_publishes_verified_recei
     source.mkdir()
     alpha = _wheel(source, "alpha-package", "1.0.0", "alpha_pkg")
     resolved = _resolved((alpha,))
-    builder = HermeticToolboxEnvironmentBuilder(tmp_path / "host", artifact_sources={"approved": source})
+    builder = PythonEnvironmentBuilder(tmp_path / "host", artifact_sources={"approved": source})
 
     spec = builder.materialize_environment(resolved, reference_id="toolbox:one")
 
@@ -210,7 +210,7 @@ def test_failed_final_interpreter_probe_is_quarantined_and_never_published(tmp_p
     source.mkdir()
     alpha = _wheel(source, "alpha-package", "1.0.0", "alpha_pkg")
     resolved = _resolved((alpha,), imports=("missing_root",))
-    builder = HermeticToolboxEnvironmentBuilder(tmp_path / "host", artifact_sources={"approved": source})
+    builder = PythonEnvironmentBuilder(tmp_path / "host", artifact_sources={"approved": source})
 
     with pytest.raises(HermeticToolboxEnvironmentBuildError, match="environment_import_probe_failed"):
         builder.materialize_environment(resolved, reference_id="toolbox:bad")
@@ -227,7 +227,7 @@ def test_artifact_digest_mismatch_fails_before_install(tmp_path: Path) -> None:
     source.mkdir()
     alpha = _wheel(source, "alpha-package", "1.0.0", "alpha_pkg")
     bad = ToolboxLockedArtifactSpec(**{**alpha.to_dict(), "sha256": _digest("f")})
-    builder = HermeticToolboxEnvironmentBuilder(tmp_path / "host", artifact_sources={"approved": source})
+    builder = PythonEnvironmentBuilder(tmp_path / "host", artifact_sources={"approved": source})
 
     with pytest.raises(HermeticToolboxEnvironmentBuildError, match="environment_artifact_verification_failed"):
         builder.materialize_environment(_resolved((bad,)), reference_id="toolbox:bad-artifact")
@@ -238,7 +238,7 @@ def test_concurrent_requests_deduplicate_one_physical_build(tmp_path: Path, monk
     source.mkdir()
     alpha = _wheel(source, "alpha-package", "1.0.0", "alpha_pkg")
     resolved = _resolved((alpha,))
-    builder = HermeticToolboxEnvironmentBuilder(tmp_path / "host", artifact_sources={"approved": source})
+    builder = PythonEnvironmentBuilder(tmp_path / "host", artifact_sources={"approved": source})
     original = builder._build_candidate
     count = 0
     count_lock = threading.Lock()
@@ -283,7 +283,7 @@ def test_concurrent_processes_share_one_atomically_published_environment(tmp_pat
 
     assert all(item["ok"] for item in results), results
     assert len({item["environment_root"] for item in results}) == 1
-    builder = HermeticToolboxEnvironmentBuilder(host, artifact_sources={"approved": source})
+    builder = PythonEnvironmentBuilder(host, artifact_sources={"approved": source})
     assert builder.verified_environment(resolved).environment_root == results[0]["environment_root"]
     assert not list(builder.candidates_root.glob("*"))
     references = json.loads(builder.references_path.read_text(encoding="utf-8"))["environments"]
@@ -295,7 +295,7 @@ def test_complete_base_plus_delta_lock_is_independent_of_base_site_packages(tmp_
     source.mkdir()
     alpha = _wheel(source, "alpha-package", "1.0.0", "alpha_pkg")
     delta = _wheel(source, "delta-package", "2.0.0", "delta_pkg")
-    builder = HermeticToolboxEnvironmentBuilder(tmp_path / "host", artifact_sources={"approved": source})
+    builder = PythonEnvironmentBuilder(tmp_path / "host", artifact_sources={"approved": source})
     base = _resolved((alpha,), lock_digest=_digest("3"))
     derived = _resolved(
         (alpha, delta),
@@ -326,7 +326,7 @@ def test_references_defer_deletion_to_grace_period_gc(tmp_path: Path) -> None:
     source.mkdir()
     alpha = _wheel(source, "alpha-package", "1.0.0", "alpha_pkg")
     resolved = _resolved((alpha,))
-    builder = HermeticToolboxEnvironmentBuilder(
+    builder = PythonEnvironmentBuilder(
         tmp_path / "host", artifact_sources={"approved": source}, gc_grace_ms=100
     )
     spec = builder.materialize_environment(resolved, reference_id="toolbox:gc")
@@ -346,7 +346,7 @@ def test_exact_environment_removal_requires_released_reference_and_is_idempotent
     source.mkdir()
     alpha = _wheel(source, "alpha-package", "1.0.0", "alpha_pkg")
     resolved = _resolved((alpha,))
-    builder = HermeticToolboxEnvironmentBuilder(tmp_path / "host", artifact_sources={"approved": source})
+    builder = PythonEnvironmentBuilder(tmp_path / "host", artifact_sources={"approved": source})
     spec = builder.materialize_environment(resolved, reference_id="toolbox:remove")
 
     with pytest.raises(HermeticToolboxEnvironmentBuildError, match="environment_references_present"):
@@ -361,7 +361,7 @@ def test_required_environment_readiness_is_receipt_gated(tmp_path: Path) -> None
     source.mkdir()
     alpha = _wheel(source, "alpha-package", "1.0.0", "alpha_pkg")
     resolved = _resolved((alpha,))
-    builder = HermeticToolboxEnvironmentBuilder(tmp_path / "host", artifact_sources={"approved": source})
+    builder = PythonEnvironmentBuilder(tmp_path / "host", artifact_sources={"approved": source})
 
     assert builder.required_environment_readiness((resolved,))["state"] == "degraded"
     builder.materialize_environment(resolved, reference_id="template:required")
@@ -406,7 +406,7 @@ def test_catalog_prewarm_adapter_builds_complete_wheel_lock_on_target_host(tmp_p
             }
         ],
     }
-    builder = HermeticToolboxEnvironmentBuilder(tmp_path / "host", artifact_sources={"approved": source})
+    builder = PythonEnvironmentBuilder(tmp_path / "host", artifact_sources={"approved": source})
     materializer = HermeticToolboxTemplateMaterializer(builder)
     progress: list[tuple] = []
 

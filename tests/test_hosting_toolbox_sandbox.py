@@ -26,7 +26,7 @@ from hosting.toolbox_harness import (
     ToolboxManualAssignmentRequest,
     ToolboxBundleFile,
     ToolboxBundleAutoTool,
-    ToolboxEnvironmentManager,
+    EnvironmentRuntimeAdapter,
     ToolboxBundleSpec,
     ToolboxBundleStager,
     ToolboxBundleTool,
@@ -1543,14 +1543,14 @@ def test_toolbox_environment_manager_derives_stable_environment_identity() -> No
                 intrinsic_tool_names=["symbolic_algebra"],
             )
         )
-        manager = ToolboxEnvironmentManager(root)
+        manager = EnvironmentRuntimeAdapter(root)
         spec = manager.environment_spec_for_bundle(staged)
 
         assert spec.venv_key
         assert spec.intrinsics_profile_id == intrinsic_dependency_profile_id(["symbolic_algebra"])
         assert spec.required_imports == ["requests", "numpy", "sympy"]
         assert spec.venv_path.endswith(spec.venv_key)
-        assert "toolbox_venvs" in spec.venv_path.replace("\\", "/")
+        assert "/environments/content/" in spec.venv_path.replace("\\", "/")
         assert spec.python_executable
         assert staged.registration_environment(spec)["venv_key"] == spec.venv_key
     finally:
@@ -1600,7 +1600,7 @@ def test_toolbox_environment_manager_reuses_environment_for_same_profile() -> No
                 ],
             )
         )
-        manager = ToolboxEnvironmentManager(root)
+        manager = EnvironmentRuntimeAdapter(root)
 
         first_spec = manager.ensure_for_bundle(first)
         second_spec = manager.ensure_for_bundle(second)
@@ -1627,7 +1627,7 @@ def test_toolbox_environment_runtime_python_uses_venv_when_no_packages_are_plann
                 tools=[ToolboxBundleTool(definition=_tool_definition("hello_tool"), entrypoint="demo_tools:hello")],
             )
         )
-        manager = ToolboxEnvironmentManager(root)
+        manager = EnvironmentRuntimeAdapter(root)
         spec = manager.ensure_for_bundle(staged)
 
         chosen = manager.runtime_python_executable(spec, bootstrap_python_executable="python-bootstrap")
@@ -1651,7 +1651,7 @@ def test_toolbox_environment_runtime_python_uses_bootstrap_until_dependency_inst
                 tools=[ToolboxBundleTool(definition=_tool_definition("hello_tool"), entrypoint="demo_tools:hello")],
             )
         )
-        manager = ToolboxEnvironmentManager(root)
+        manager = EnvironmentRuntimeAdapter(root)
         spec = manager.ensure_for_bundle(staged)
         manager.realize_environment(
             spec,
@@ -1683,7 +1683,7 @@ def test_toolbox_environment_runtime_python_uses_venv_after_verified_install() -
                 tools=[ToolboxBundleTool(definition=_tool_definition("hello_tool"), entrypoint="demo_tools:hello")],
             )
         )
-        manager = ToolboxEnvironmentManager(root)
+        manager = EnvironmentRuntimeAdapter(root)
         spec = manager.ensure_for_bundle(staged)
         env_root = Path(spec.venv_path)
         metadata = json.loads((env_root / "environment.json").read_text(encoding="utf-8"))
@@ -1701,7 +1701,7 @@ def test_toolbox_environment_runtime_python_uses_venv_after_verified_install() -
 def test_toolbox_environment_manager_realizes_workflow_python_helper_environment() -> None:
     root = _scratch_dir("env-workflow-python-helper-")
     try:
-        manager = ToolboxEnvironmentManager(root)
+        manager = EnvironmentRuntimeAdapter(root)
         metadata = manager.realize_workflow_python_helper_environment(
             policy={
                 "sandbox_kind": "workflow_python_helper",
@@ -1718,7 +1718,7 @@ def test_toolbox_environment_manager_realizes_workflow_python_helper_environment
 
         env_path = Path(str(metadata.get("venv_path") or "")).expanduser().resolve()
         assert (env_path / "pyvenv.cfg").exists()
-        assert "runtime_envs" in str(env_path).replace("\\", "/")
+        assert "/environments/content/" in str(env_path).replace("\\", "/")
         assert metadata["toolbox_runtime_hash"] == "workflow-python-helper-v1"
         assert metadata["intrinsics_profile_id"] == "workflow_python_helper"
         assert metadata["required_imports"] == ["json"]
@@ -1732,7 +1732,7 @@ def test_toolbox_environment_manager_realizes_workflow_python_helper_environment
 
 
 def test_toolbox_environment_manager_resolves_environment_inheritance() -> None:
-    resolved = ToolboxEnvironmentManager.resolve_environment_description(
+    resolved = EnvironmentRuntimeAdapter.resolve_environment_description(
         {
             "base": {
                 "name": "base",
@@ -1815,7 +1815,7 @@ def test_toolbox_runtime_base_adds_shared_environment_identity() -> None:
                 auto_tools=[ToolboxBundleAutoTool(module_name="demo", callable_name="demo")],
             )
         )
-        env_spec = ToolboxEnvironmentManager(root).environment_spec_for_bundle(staged)
+        env_spec = EnvironmentRuntimeAdapter(root).environment_spec_for_bundle(staged)
 
         out = HostedToolboxRuntimeBase().registration_environment(
             environment=staged.registration_environment(env_spec),
@@ -1827,7 +1827,7 @@ def test_toolbox_runtime_base_adds_shared_environment_identity() -> None:
 
         assert out["environment_key"]
         assert out["environment_key_full"]
-        assert out["environment_root_kind"] == "toolbox_venvs"
+        assert out["environment_root_kind"] == "environments"
         assert out["environment_consumer_kind"] == "toolbox_executor"
         assert out["environment_identity"]["runtime"]["runtime_kind"] == "toolbox_executor"
         assert out["environment_identity"]["runtime"]["profile"] == "default"

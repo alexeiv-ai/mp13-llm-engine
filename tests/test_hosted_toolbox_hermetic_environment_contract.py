@@ -9,7 +9,7 @@ import pytest
 
 from hosting.toolbox.bundle_models import ToolboxEnvironmentSpec
 from hosting.toolbox.catalog import ToolboxLockedDistributionSpec
-from hosting.toolbox.environment import RuntimeEnvironmentManager, ToolboxEnvironmentManager
+from hosting.toolbox.environment import WorkflowEnvironmentAdapter, EnvironmentRuntimeAdapter
 from hosting.toolbox.hermetic_environment import (
     HermeticToolboxEnvironmentResolver,
     ResolvedToolboxEnvironmentInput,
@@ -120,7 +120,7 @@ def test_environment_resolver_uses_only_digest_addressed_shared_root(tmp_path: P
 def test_toolbox_interpreter_selection_never_returns_bootstrap(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    manager = ToolboxEnvironmentManager(tmp_path)
+    manager = EnvironmentRuntimeAdapter(tmp_path)
     spec = ToolboxEnvironmentSpec(
         venv_key="strict",
         venv_path=str(tmp_path / "strict"),
@@ -129,7 +129,7 @@ def test_toolbox_interpreter_selection_never_returns_bootstrap(
     monkeypatch.setattr(manager, "ensure_environment", lambda candidate: candidate)
     assert manager.toolbox_runtime_python_executable(spec) == spec.python_executable
 
-    runtime_manager = RuntimeEnvironmentManager(tmp_path)
+    runtime_manager = WorkflowEnvironmentAdapter(tmp_path)
     monkeypatch.setattr(runtime_manager, "ensure_environment", lambda candidate: candidate)
     monkeypatch.setattr(
         runtime_manager,

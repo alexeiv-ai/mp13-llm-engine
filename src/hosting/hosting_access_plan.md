@@ -675,7 +675,7 @@ commands fail with the frozen version/unknown-command response.
 ##### R6.1 Replace toolbox-owned manager and builder types
 
 - [x] Implement the neutral environment contracts from R0.
-- [ ] Replace `ToolboxEnvironmentManager`, the compatibility-only
+- [x] Replace `ToolboxEnvironmentManager`, the compatibility-only
   `RuntimeEnvironmentManager` subclass, and hermetic toolbox names with one
   `EnvironmentManager` and generic builders.
 - [x] Keep runtime-specific mechanics behind adapters rather than in the shared

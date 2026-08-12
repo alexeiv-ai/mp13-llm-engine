@@ -17,7 +17,7 @@ from ..toolbox.identity import identity_digest, require_digest
 from ..toolbox.catalog import ToolboxEnvironmentTemplateSpec, normalize_distribution_name
 from ..toolbox.hermetic_environment import (
     HermeticToolboxEnvironmentBuildError,
-    HermeticToolboxEnvironmentBuilder,
+    PythonEnvironmentBuilder,
     ResolvedToolboxEnvironmentInput,
     ToolboxLockedArtifactSpec,
 )
@@ -171,8 +171,8 @@ class UnconfiguredToolboxTemplateMaterializer:
 class HermeticToolboxTemplateMaterializer:
     """Adapt catalog prewarm to the target-host hermetic environment builder."""
 
-    def __init__(self, builder: HermeticToolboxEnvironmentBuilder):
-        if not isinstance(builder, HermeticToolboxEnvironmentBuilder):
+    def __init__(self, builder: PythonEnvironmentBuilder):
+        if not isinstance(builder, PythonEnvironmentBuilder):
             raise ValueError("hermetic_toolbox_builder_required")
         self.builder = builder
 

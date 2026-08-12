@@ -2583,10 +2583,10 @@ class ToolboxRuntimeMixin:
         *,
         timeout_seconds: float = 8.0,
     ) -> Dict[str, Dict[str, Any]]:
-        from ..toolbox_harness import ToolboxEnvironmentManager, ToolboxEnvironmentSpec
+        from ..toolbox_harness import EnvironmentRuntimeAdapter, ToolboxEnvironmentSpec
 
         ready: Dict[str, Dict[str, Any]] = {}
-        environment_manager = ToolboxEnvironmentManager(self.hosting_root)
+        environment_manager = EnvironmentRuntimeAdapter(self.hosting_root)
         for item in list(assignments or []):
             reg = dict(getattr(item, "registration", None) or {})
             engine_id = str(reg.get("engine_id") or "").strip()

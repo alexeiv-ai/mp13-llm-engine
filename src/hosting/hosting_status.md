@@ -479,6 +479,16 @@ the slice.
   neutral environment tests ran with 24 passing before two deliberately stale
   fixtures, which were migrated to shared-root and legacy-constructor rejection
 
+### CODE-R6C — compatibility environment type names removed
+
+- Date: 2026-08-11
+- Plan IDs: R6.1 alias cut and R6.5 compatibility readers; P0; high expertise
+- Outcome: the toolbox and workflow mechanics are explicit runtime adapters and
+  the Python materializer is a runtime-specific builder; the retired manager
+  and hermetic-builder class names have no production or test imports
+- Proof: prohibited type-name search returned zero; 26 hermetic/neutral tests
+  and three focused toolbox runtime-adapter tests passed
+
 Append one concise entry per completed slice. Include exact commands, counts,
 durations where useful, negative-path results, commit pin, and dependent receipt
 impact. Do not paste an unstructured full test transcript.

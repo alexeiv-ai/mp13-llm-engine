@@ -21,7 +21,7 @@ class HostedToolboxRuntimeBase(HostedProcessSandboxBase):
     """Internal base for toolbox executor registrations.
 
     It deliberately does not own toolbox environment realization.  Existing
-    toolbox lifecycle code keeps using ``ToolboxEnvironmentManager`` and
+    toolbox lifecycle code keeps using ``EnvironmentRuntimeAdapter`` and
     the resolved environments root; this base adds shared environment-key and registration
     metadata so toolbox workers can later move onto common pool accounting.
     """

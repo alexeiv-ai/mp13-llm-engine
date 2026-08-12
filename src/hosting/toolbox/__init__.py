@@ -52,12 +52,12 @@ from .dependency_policy import (
     ToolboxDependencyPolicyError,
     validate_toolbox_dependency_policy,
 )
-from .environment import RuntimeEnvironmentManager, ToolboxEnvironmentManager
+from .environment import WorkflowEnvironmentAdapter, EnvironmentRuntimeAdapter
 from .execution import ToolboxExecutionHarness
 from .hosted_ref import HostedToolBoxRef, SandboxedToolboxFacade
 from .hermetic_environment import (
     HermeticToolboxEnvironmentBuildError,
-    HermeticToolboxEnvironmentBuilder,
+    PythonEnvironmentBuilder,
     HermeticToolboxEnvironmentResolver,
     HermeticToolboxEnvironmentSpec,
     ResolvedToolboxEnvironmentInput,
@@ -108,12 +108,12 @@ __all__ = [
     "profile_snapshots_from_draft",
     "ToolboxWorkerStartupSpec",
     "ToolboxEnvironmentSpec",
-    "ToolboxEnvironmentManager",
-    "RuntimeEnvironmentManager",
+    "EnvironmentRuntimeAdapter",
+    "WorkflowEnvironmentAdapter",
     "HermeticToolboxEnvironmentResolver",
     "HermeticToolboxEnvironmentSpec",
     "HermeticToolboxEnvironmentBuildError",
-    "HermeticToolboxEnvironmentBuilder",
+    "PythonEnvironmentBuilder",
     "ResolvedToolboxEnvironmentInput",
     "ToolboxLockedArtifactSpec",
     "StagedToolboxBundle",

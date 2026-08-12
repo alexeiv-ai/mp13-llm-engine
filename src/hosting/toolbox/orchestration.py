@@ -16,7 +16,7 @@ from .bundle_models import (
     ToolboxManualAssignmentRequest,
     ToolboxSandboxAssignment,
 )
-from .environment import ToolboxEnvironmentManager
+from .environment import EnvironmentRuntimeAdapter
 from .staging import ToolboxBundleStager
 from .target import detect_current_toolbox_target
 from ..sandbox.toolbox_runtime import HostedToolboxRuntimeBase
@@ -34,7 +34,7 @@ class ToolboxSandboxOrchestrator:
         self.service = service
         self.stager = stager
         self.python_executable = str(python_executable or sys.executable)
-        self.environment_manager = ToolboxEnvironmentManager(self.stager.hosting_root)
+        self.environment_manager = EnvironmentRuntimeAdapter(self.stager.hosting_root)
         self.runtime_base = HostedToolboxRuntimeBase()
 
     @staticmethod

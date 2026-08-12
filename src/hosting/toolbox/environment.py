@@ -19,7 +19,7 @@ from .common import _sha256_text, _stable_json
 from .bundle_models import SandboxProfileSpec, ToolboxEnvironmentSpec
 
 
-class ToolboxEnvironmentManager:
+class EnvironmentRuntimeAdapter:
     def __init__(self, hosting_root: Path):
         self.hosting_root = Path(hosting_root).expanduser().resolve()
         self.toolbox_environments_root = (self.hosting_root / "environments" / "content").resolve()
@@ -1113,9 +1113,5 @@ class ToolboxEnvironmentManager:
         return self.ensure_environment(self.environment_spec_for_bundle(staged, environment_description=environment_description))
 
 
-class RuntimeEnvironmentManager(ToolboxEnvironmentManager):
-    """Shared runtime environment manager.
-
-    `ToolboxEnvironmentManager` remains as the compatibility name for existing
-    toolbox callers. New non-toolbox consumers should prefer this neutral name.
-    """
+class WorkflowEnvironmentAdapter(EnvironmentRuntimeAdapter):
+    """Workflow-specific mechanics behind the neutral lifecycle manager."""
