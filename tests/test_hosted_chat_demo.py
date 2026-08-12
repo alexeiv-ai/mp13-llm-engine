@@ -122,10 +122,16 @@ def test_setup_and_shutdown_apply_complete_definitions(monkeypatch, tmp_path: Pa
             }
 
     monkeypatch.setattr("app.hosted_chat_demo.EngineHostService", FakeService)
+    monkeypatch.setattr(
+        "hosting.hosting_setup_api.apply_local_hosting_setup", lambda _request: {}
+    )
+    monkeypatch.setattr(
+        "hosting.hosting_configuration.load_hosting_configuration", lambda _path: {}
+    )
     runtime = setup_hosted_chat_demo(
         toolbox=Toolbox(),
-        hosting_root=tmp_path,
-        project_root=tmp_path,
+        hosting_root=tmp_path / "hosting",
+        project_root=tmp_path / "project",
         toolbox_id="demo",
     )
     created = [payload["definition"] for name, payload in calls if name == "plan"][0]
