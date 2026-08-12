@@ -92,11 +92,14 @@ def _persistent_posix_launch_loop(
 def _launch_from_persistent_posix_thread(req: WorkerLaunchRequest) -> WorkerLaunchResult:
     global _POSIX_LAUNCH_QUEUE, _POSIX_LAUNCH_THREAD
 
+    request_queue: queue.Queue[
+        tuple[WorkerLaunchRequest, queue.Queue[tuple[str, Any]]]
+    ] | None
     with _POSIX_LAUNCH_LOCK:
         if _POSIX_LAUNCH_THREAD is None or not _POSIX_LAUNCH_THREAD.is_alive():
             # Recreate both objects after a fork: inherited Thread objects are
             # not alive in the child and their old queue has no consumer.
-            request_queue: queue.Queue[tuple[WorkerLaunchRequest, queue.Queue[tuple[str, Any]]]] = queue.Queue()
+            request_queue = queue.Queue()
             launcher = threading.Thread(
                 target=_persistent_posix_launch_loop,
                 args=(request_queue,),

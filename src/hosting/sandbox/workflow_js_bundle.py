@@ -123,7 +123,11 @@ def _clean_set(values: Optional[Iterable[str]]) -> set[str]:
 
 def _host_api_namespace_flags(sandbox_policy: Optional[Mapping[str, Any]]) -> tuple[bool, bool]:
     sandbox = dict(dict(sandbox_policy or {}).get("sandbox") or sandbox_policy or {})
-    host_api_policy = sandbox.get("host_api") if isinstance(sandbox.get("host_api"), Mapping) else {}
+    host_api_policy: Dict[str, Any] = (
+        dict(sandbox["host_api"])
+        if isinstance(sandbox.get("host_api"), Mapping)
+        else {}
+    )
     namespace_policy = dict(host_api_policy.get("namespaces") or {})
     fs_enabled = bool(host_api_policy.get("enabled", True))
     http_enabled = False
@@ -428,7 +432,7 @@ def build_workflow_js_bundle(
         start = int(item["start"])
         end = int(item["end"])
         specifier = str(item["specifier"])
-        bridge = bridges.get(specifier)
+        selected_bridge = bridges.get(specifier)
         output.append(str(source or "")[cursor:start])
         detail: Dict[str, Any] = {
             "specifier": specifier,
@@ -436,10 +440,14 @@ def build_workflow_js_bundle(
             "status": "unresolved",
             "bindings": [],
         }
-        if bridge is None:
+        if selected_bridge is None:
             unresolved.add(specifier)
             output.append(str(item["statement"]))
-        elif not bridge.enabled:
+            details.append(detail)
+            cursor = end
+            continue
+        bridge = selected_bridge
+        if not bridge.enabled:
             disabled.add(specifier)
             detail["status"] = "disabled"
             output.append(str(item["statement"]))

@@ -725,6 +725,7 @@ class HostedArtifactManager:
         filename = artifact_safe_name((str(rel).replace("\\", "_") if path_mask else spec.get("filename")) or source_file.name, fallback="artifact.bin")
         ref = str(spec.get("ref") or "").strip()
         host_takeover = _bool(spec.get("host_takeover")) or not ref
+        target: Path
         if ref and not host_takeover:
             target_base = self.path_from_ref(ref)
             if target_base is None:
@@ -740,9 +741,10 @@ class HostedArtifactManager:
         else:
             rel_ref = str(rel).replace("\\", "/")
             out_ref = f"@artifacts/{artifact_id}/{filename}" if not path_mask else f"@artifacts/{artifact_id}/{rel_ref}"
-            target = self.path_from_ref(out_ref)
-            if target is None:
+            resolved_target = self.path_from_ref(out_ref)
+            if resolved_target is None:
                 raise ValueError(f"artifact_output_ref_invalid:{spec.get('name')}")
+            target = resolved_target
             ownership = "host"
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(source_file, target)

@@ -234,27 +234,36 @@ class PackageLock:
                     "artifact_id": artifact_id,
                 }
             )
-        unsigned = {
+        normalized_lock_id = _id(lock_id, "package_lock_id")
+        normalized_revision = int(revision)
+        if normalized_revision < 1:
+            raise ValueError("package_lock_revision_invalid")
+        sorted_artifacts = sorted(
+            normalized_artifacts, key=lambda item: (item["source_id"], item["artifact_id"])
+        )
+        sorted_dependencies = sorted(
+            normalized_dependencies,
+            key=lambda item: (item["name"], item["version"], item["artifact_id"]),
+        )
+        unsigned: dict[str, Any] = {
             "contract": PackageLock.CONTRACT,
-            "lock_id": _id(lock_id, "package_lock_id"),
-            "revision": int(revision),
+            "lock_id": normalized_lock_id,
+            "revision": normalized_revision,
             "policy_id": policy.policy_id,
             "policy_revision": policy.revision,
-            "artifacts": sorted(normalized_artifacts, key=lambda item: (item["source_id"], item["artifact_id"])),
-            "dependencies": sorted(normalized_dependencies, key=lambda item: (item["name"], item["version"], item["artifact_id"])),
+            "artifacts": sorted_artifacts,
+            "dependencies": sorted_dependencies,
         }
-        if unsigned["revision"] < 1:
-            raise ValueError("package_lock_revision_invalid")
         digest = "sha256:" + hashlib.sha256(
             json.dumps(unsigned, sort_keys=True, separators=(",", ":")).encode("utf-8")
         ).hexdigest()
         return PackageLock(
-            lock_id=unsigned["lock_id"],
-            revision=unsigned["revision"],
+            lock_id=normalized_lock_id,
+            revision=normalized_revision,
             policy_id=policy.policy_id,
             policy_revision=policy.revision,
-            artifacts=tuple(unsigned["artifacts"]),
-            dependencies=tuple(unsigned["dependencies"]),
+            artifacts=tuple(sorted_artifacts),
+            dependencies=tuple(sorted_dependencies),
             lock_digest=digest,
         )
 

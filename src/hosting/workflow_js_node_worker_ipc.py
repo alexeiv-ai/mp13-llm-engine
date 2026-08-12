@@ -39,7 +39,9 @@ def _send(conn: Any, row: Dict[str, Any]) -> None:
 
 
 def _state_mode(req: Dict[str, Any]) -> str:
-    js = req.get("javascript") if isinstance(req.get("javascript"), dict) else {}
+    js: Dict[str, Any] = (
+        dict(req["javascript"]) if isinstance(req.get("javascript"), dict) else {}
+    )
     raw = req.get("instance_state_mode") or req.get("state_mode") or js.get("instance_state_mode") or js.get("state_mode")
     mode = str(raw or "ephemeral").strip().lower().replace("-", "_")
     if mode in {"persistent", "persistent_module", "module_persistent"}:
@@ -118,7 +120,11 @@ class HostApiBridge:
     @staticmethod
     def _result_from_response(response: Dict[str, Any]) -> str:
         if str(response.get("status") or "").strip().lower() == "error":
-            detail = response.get("detail") if isinstance(response.get("detail"), dict) else {}
+            detail: Dict[str, Any] = (
+                dict(response["detail"])
+                if isinstance(response.get("detail"), dict)
+                else {}
+            )
             message = str(response.get("message") or detail.get("message") or response.get("reason") or "host_call_failed")
             raise HostApiError(
                 reason=str(response.get("reason") or detail.get("reason") or "host_call_failed"),
@@ -281,10 +287,20 @@ def _execute_quickjs(conn: Any, req: Dict[str, Any]) -> int:
     source = str(req.get("module_source") or "")
     export_name = str(req.get("export_name") or "run").strip() or "run"
     execution_mode = str(req.get("execution_mode") or "script").strip().lower() or "script"
-    project = req.get("project") if isinstance(req.get("project"), dict) else {}
+    project: Dict[str, Any] = (
+        dict(req["project"]) if isinstance(req.get("project"), dict) else {}
+    )
     payload = req.get("payload")
-    artifact_context = req.get("artifact_context") if isinstance(req.get("artifact_context"), dict) else {}
-    artifact_inputs = artifact_context.get("inputs") if isinstance(artifact_context.get("inputs"), dict) else {}
+    artifact_context: Dict[str, Any] = (
+        dict(req["artifact_context"])
+        if isinstance(req.get("artifact_context"), dict)
+        else {}
+    )
+    artifact_inputs: Dict[str, Any] = (
+        dict(artifact_context["inputs"])
+        if isinstance(artifact_context.get("inputs"), dict)
+        else {}
+    )
     output_limit_bytes = max(1, int(req.get("output_limit_bytes") or 65536))
     limits = dict(req.get("limits") or {})
     timeout_ms = max(1, int(limits.get("timeout_ms") or 5000))
@@ -331,6 +347,7 @@ def _execute_quickjs(conn: Any, req: Dict[str, Any]) -> int:
     state_key = str(req.get("instance_state_key") or req.get("code_revision") or req.get("module_sha256") or "")
     callback_state: Dict[str, Any] = {"conn": conn, "request_id": request_id, "host": host, "stdout": stdout_io}
     persistent_reused = False
+    memory_limit_report: Dict[str, Any]
     if state_mode == "persistent_module" and _PERSISTENT_QUICKJS.get("state_key") == state_key and _PERSISTENT_QUICKJS.get("ctx") is not None:
         ctx = _PERSISTENT_QUICKJS["ctx"]
         callback_state = _PERSISTENT_QUICKJS["callback_state"]
@@ -339,7 +356,7 @@ def _execute_quickjs(conn: Any, req: Dict[str, Any]) -> int:
         persistent_reused = True
     else:
         ctx = quickjs.Context()
-        memory_limit_report: Dict[str, Any] = {
+        memory_limit_report = {
             "requested_mb": int(memory_limit_mb) if memory_limit_mb is not None else None,
             "enforced": False,
             "reason": "not_requested" if memory_limit_mb is None else "not_enforced",

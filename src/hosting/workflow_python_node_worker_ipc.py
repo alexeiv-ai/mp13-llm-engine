@@ -183,7 +183,11 @@ class HostApi:
     @staticmethod
     def _result_from_response(response: Dict[str, Any]) -> Dict[str, Any]:
         if str(response.get("status") or "").strip().lower() == "error":
-            detail = response.get("detail") if isinstance(response.get("detail"), dict) else {}
+            detail: Dict[str, Any] = (
+                dict(response["detail"])
+                if isinstance(response.get("detail"), dict)
+                else {}
+            )
             message = str(response.get("message") or detail.get("message") or response.get("reason") or "host_call_failed")
             raise RuntimeError(message)
         return dict(response.get("result") or {})
@@ -317,7 +321,7 @@ def _send(conn: Any, row: Dict[str, Any]) -> None:
 
 
 def _state_mode(req: Dict[str, Any]) -> str:
-    py = req.get("python") if isinstance(req.get("python"), dict) else {}
+    py: Dict[str, Any] = dict(req["python"]) if isinstance(req.get("python"), dict) else {}
     raw = req.get("instance_state_mode") or req.get("state_mode") or py.get("instance_state_mode") or py.get("state_mode")
     mode = str(raw or "ephemeral").strip().lower().replace("-", "_")
     if mode in {"persistent", "persistent_module", "module_persistent"}:
@@ -412,12 +416,26 @@ def _execute(conn: Any, req: Dict[str, Any]) -> int:
     export_name = str(req.get("export_name") or req.get("operation") or "")
     execution_mode = str(req.get("execution_mode") or "module").strip().lower() or "module"
     state_mode = _state_mode(req)
-    project = req.get("project") if isinstance(req.get("project"), dict) else {}
+    project: Dict[str, Any] = (
+        dict(req["project"]) if isinstance(req.get("project"), dict) else {}
+    )
     allowlist = list(req.get("import_allowlist") or [])
     payload = req.get("payload")
-    artifact_context = req.get("artifact_context") if isinstance(req.get("artifact_context"), dict) else {}
-    artifact_inputs = artifact_context.get("inputs") if isinstance(artifact_context.get("inputs"), dict) else {}
-    artifact_outputs = artifact_context.get("outputs") if isinstance(artifact_context.get("outputs"), dict) else {}
+    artifact_context: Dict[str, Any] = (
+        dict(req["artifact_context"])
+        if isinstance(req.get("artifact_context"), dict)
+        else {}
+    )
+    artifact_inputs: Dict[str, str] = (
+        dict(artifact_context["inputs"])
+        if isinstance(artifact_context.get("inputs"), dict)
+        else {}
+    )
+    artifact_outputs: Dict[str, str] = (
+        dict(artifact_context["outputs"])
+        if isinstance(artifact_context.get("outputs"), dict)
+        else {}
+    )
     project_roots: list[str] = []
     project_root = ""
     if execution_mode == "project":
@@ -493,7 +511,11 @@ def _execute(conn: Any, req: Dict[str, Any]) -> int:
                 old_environ = dict(os.environ)
                 try:
                     _clear_project_modules(project_root)
-                    env = project.get("env") if isinstance(project.get("env"), dict) else {}
+                    env: Dict[str, Any] = (
+                        dict(project["env"])
+                        if isinstance(project.get("env"), dict)
+                        else {}
+                    )
                     for key, val in env.items():
                         if str(key or "").strip():
                             os.environ[str(key)] = str(val)

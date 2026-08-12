@@ -320,7 +320,11 @@ class HostedRequestLifecycle:
                 "type": event_type,
                 "timestamp": float(
                     row.get("timestamp")
-                    or (float(row.get("timestamp_ms")) / 1000.0 if row.get("timestamp_ms") is not None else time.time())
+                    or (
+                        float(str(row.get("timestamp_ms"))) / 1000.0
+                        if row.get("timestamp_ms") is not None
+                        else time.time()
+                    )
                 ),
                 "sequence": max(0, int(row.get("sequence") or 0)),
                 "payload": payload,

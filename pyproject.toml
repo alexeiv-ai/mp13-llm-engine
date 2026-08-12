@@ -104,6 +104,7 @@ pytest = ">=6.2.5"
 pytest-asyncio = ">=0.21.0"
 pytest-xdist = "^3.8.0"
 pylint = "^3.3.4"
+mypy = "^1.20.2"
 
 [build-system]
 requires = ["poetry-core"]
@@ -147,3 +148,12 @@ disable = [
   "redefined-outer-name",
   "unused-argument",
 ]
+
+[tool.mypy]
+files = ["src/hosting"]
+follow_imports = "skip"
+ignore_missing_imports = true
+show_error_codes = true
+# EngineHostService is assembled from deliberately independent mixins. Mypy
+# cannot see attributes supplied by sibling mixins while checking each class.
+disable_error_code = ["attr-defined"]
