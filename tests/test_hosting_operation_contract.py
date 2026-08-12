@@ -399,6 +399,48 @@ def test_definition_apply_publication_progress_is_not_cancellable() -> None:
         )
 
 
+@pytest.mark.parametrize(
+    ("execution_kind", "valid_phase", "invalid_phase"),
+    [
+        (HostedExecutionKind.TOOLBOX_DEFINITION_CANDIDATE_PREPARE, "candidate_ready", "publication"),
+        (HostedExecutionKind.TOOLBOX_DEFINITION_CANDIDATE_PUBLISH, "publication", "warmup"),
+        (HostedExecutionKind.TOOLBOX_DEFINITION_CANDIDATE_DISCARD, "draining", "environment_build"),
+    ],
+)
+def test_candidate_operation_phases_are_kind_specific(
+    execution_kind: HostedExecutionKind, valid_phase: str, invalid_phase: str
+) -> None:
+    ref = HostedOperationRef(
+        operation_id=f"op_{execution_kind.value}",
+        request_id=f"request-{execution_kind.value}",
+        execution_kind=execution_kind,
+        selector=HostedOperationSelector(kind="toolbox_id", id="demo"),
+        fingerprint=hosted_execution_fingerprint({"kind": execution_kind.value}),
+        receipt_namespace="toolbox-definition:demo",
+    )
+    valid = HostedOperationStatus(
+        operation=ref,
+        lifecycle=HostedOperationLifecycle.RUNNING,
+        request_id=ref.request_id,
+        created_at_ms=1000,
+        updated_at_ms=1100,
+        progress=HostedOperationProgress(
+            phase=valid_phase,
+            code="candidate_progress",
+            completed_units=None,
+            total_units=None,
+            updated_at_ms=1100,
+            summary="Candidate progress.",
+            cancellable=True,
+        ),
+    )
+    assert HostedOperationStatus.from_dict(valid.to_dict()) == valid
+    invalid = valid.to_dict()
+    invalid["progress"]["phase"] = invalid_phase
+    with pytest.raises(ValueError, match="toolbox_definition_candidate_progress_phase_invalid"):
+        HostedOperationStatus.from_dict(invalid)
+
+
 def test_progress_rejects_missing_fields_and_non_mapping_status_value() -> None:
     with pytest.raises(ValueError, match="operation_progress_missing_fields:summary"):
         HostedOperationProgress.from_dict(

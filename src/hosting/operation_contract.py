@@ -89,6 +89,15 @@ TOOLBOX_DEFINITION_CONFIRMATION_PHASES = frozenset(
     {"validation", "acquisition", "receipt_commit"}
 )
 TOOLBOX_DEFINITION_APPLY_COMMITTED_PHASES = frozenset({"publication", "draining", "cleanup"})
+TOOLBOX_DEFINITION_CANDIDATE_PREPARE_PHASES = frozenset(
+    {"validation", "environment_build", "staging", "warmup", "candidate_ready"}
+)
+TOOLBOX_DEFINITION_CANDIDATE_PUBLISH_PHASES = frozenset(
+    {"validation", "publication", "draining", "cleanup"}
+)
+TOOLBOX_DEFINITION_CANDIDATE_DISCARD_PHASES = frozenset(
+    {"validation", "draining", "cleanup"}
+)
 ENVIRONMENT_TEMPLATE_PREWARM_PHASES = frozenset(
     {"validation", "artifact_verification", "environment_build", "import_probe", "receipt_commit"}
 )
@@ -133,6 +142,9 @@ class HostedExecutionKind(StrEnum):
     TOOLBOX_DEFINITION_PLAN = "toolbox_definition_plan"
     TOOLBOX_DEFINITION_PLAN_REVISION = "toolbox_definition_plan_revision"
     TOOLBOX_DEFINITION_CONFIRMATION = "toolbox_definition_confirmation"
+    TOOLBOX_DEFINITION_CANDIDATE_PREPARE = "toolbox_definition_candidate_prepare"
+    TOOLBOX_DEFINITION_CANDIDATE_PUBLISH = "toolbox_definition_candidate_publish"
+    TOOLBOX_DEFINITION_CANDIDATE_DISCARD = "toolbox_definition_candidate_discard"
     ENVIRONMENT_TEMPLATE_PREWARM = "environment_template_prewarm"
     TOOLBOX_SETUP = "toolbox_setup"
     TOOLBOX_ARTIFACT_IMPORT = "toolbox_artifact_import"
@@ -537,6 +549,22 @@ class HostedOperationStatus:
             if self.operation.execution_kind == HostedExecutionKind.TOOLBOX_DEFINITION_CONFIRMATION:
                 if self.progress.phase not in TOOLBOX_DEFINITION_CONFIRMATION_PHASES:
                     raise ValueError("toolbox_definition_confirmation_progress_phase_invalid")
+            candidate_phases = {
+                HostedExecutionKind.TOOLBOX_DEFINITION_CANDIDATE_PREPARE: (
+                    TOOLBOX_DEFINITION_CANDIDATE_PREPARE_PHASES
+                ),
+                HostedExecutionKind.TOOLBOX_DEFINITION_CANDIDATE_PUBLISH: (
+                    TOOLBOX_DEFINITION_CANDIDATE_PUBLISH_PHASES
+                ),
+                HostedExecutionKind.TOOLBOX_DEFINITION_CANDIDATE_DISCARD: (
+                    TOOLBOX_DEFINITION_CANDIDATE_DISCARD_PHASES
+                ),
+            }
+            if (
+                self.operation.execution_kind in candidate_phases
+                and self.progress.phase not in candidate_phases[self.operation.execution_kind]
+            ):
+                raise ValueError("toolbox_definition_candidate_progress_phase_invalid")
             if self.operation.execution_kind == HostedExecutionKind.ENVIRONMENT_TEMPLATE_PREWARM:
                 if self.progress.phase not in ENVIRONMENT_TEMPLATE_PREWARM_PHASES:
                     raise ValueError("environment_template_prewarm_progress_phase_invalid")
