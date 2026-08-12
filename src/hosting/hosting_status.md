@@ -53,7 +53,7 @@ and remaining permanent documents are migrated and the named proofs pass.
 | R5 Generic package subsystem | P0 | high | Complete | CODE-R5 |
 | R6 Generic environment subsystem | P0 | high | Active (foundation complete) | CODE-R6A |
 | R7 Toolbox adoption | P1 | high | Not started | — |
-| R8 Worker-neutral state/operations | P1 | high | Active (R8.1 complete) | CODE-R8A |
+| R8 Worker-neutral state/operations | P1 | high | Active (R8.1/R8.2 complete) | CODE-R8A/R8B |
 | R9 Public surfaces/acceptance/handoff | P2 | high | Not started | — |
 
 Do not mark a row complete merely because an older toolbox-specific
@@ -541,6 +541,17 @@ the slice.
   the sole failure was a test-only string-to-Path assertion and was corrected
 - Remaining: make plan/apply consume generic package-lock and environment
   request/receipt/reference records transactionally before closing R7.2
+
+### CODE-R8B — workflow runtimes adopt shared environment manager
+
+- Date: 2026-08-11
+- Plan IDs: R8.2; P1; high expertise
+- Outcome: Python-helper and JavaScript/Node runtime bases receive the service's
+  `EnvironmentManager`, enforce stable consumer kinds, acquire exact package-
+  lock-backed environments, and release generic references
+- Proof: 17 focused package/environment tests passed; matching Python-helper and
+  JS-node inputs reused one physical build while retaining independent references,
+  and removal remained denied until both consumers released
 
 Append one concise entry per completed slice. Include exact commands, counts,
 durations where useful, negative-path results, commit pin, and dependent receipt

@@ -4,6 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from ..environments import EnvironmentManager, EnvironmentRequest
 from .process_base import HostedProcessSandboxBase
 from .runtime_base import HostedEnvironmentKeySpec, HostedRuntimeIdentity
 
@@ -37,9 +38,22 @@ class HostedJsRuntimeBase(HostedProcessSandboxBase):
 
     sandbox_kind = "workflow_js"
 
-    def __init__(self, hosting_root: Path):
+    def __init__(self, hosting_root: Path, *, shared_environment_manager: EnvironmentManager | None = None):
         super().__init__()
         self.hosting_root = Path(hosting_root).expanduser().resolve()
+        self.shared_environment_manager = shared_environment_manager
+
+    def acquire_shared_environment(self, request: EnvironmentRequest) -> Dict[str, Any]:
+        if self.shared_environment_manager is None:
+            raise RuntimeError("shared_environment_manager_required")
+        if request.consumer_kind != "workflow_js_node":
+            raise ValueError("workflow_js_consumer_kind_invalid")
+        return self.shared_environment_manager.ensure(request)
+
+    def release_shared_environment(self, *, reference_id: str) -> Dict[str, Any]:
+        if self.shared_environment_manager is None:
+            raise RuntimeError("shared_environment_manager_required")
+        return self.shared_environment_manager.release(reference_id=reference_id)
 
     def environment_key_spec(
         self,

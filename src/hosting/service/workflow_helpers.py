@@ -48,10 +48,10 @@ class WorkflowHelperMixin:
     _workflow_registry_initialization_guard = threading.Lock()
 
     def _workflow_python_runtime_manager(self) -> HostedPythonRuntimeManager:
-        return HostedPythonRuntimeManager(self.hosting_root)
+        return HostedPythonRuntimeManager(self.hosting_root, shared_environment_manager=self._environment_manager)
 
     def _workflow_js_runtime_base(self) -> HostedJsRuntimeBase:
-        return HostedJsRuntimeBase(self.hosting_root)
+        return HostedJsRuntimeBase(self.hosting_root, shared_environment_manager=self._environment_manager)
 
     def _workflow_python_pool_registry(self) -> HostedProcessPoolRegistry:
         registry = getattr(self, "_workflow_python_runtime_pools", None)
@@ -66,7 +66,7 @@ class WorkflowHelperMixin:
     def _workflow_python_stream_base(self) -> HostedPythonRuntimeBase:
         base = getattr(self, "_workflow_python_stream_base_runtime", None)
         if base is None:
-            base = HostedPythonRuntimeBase(self.hosting_root)
+            base = HostedPythonRuntimeBase(self.hosting_root, shared_environment_manager=self._environment_manager)
             base.pool_registry = self._workflow_python_pool_registry()
             setattr(self, "_workflow_python_stream_base_runtime", base)
         return base
@@ -74,7 +74,7 @@ class WorkflowHelperMixin:
     def _workflow_js_stream_base(self) -> HostedJsRuntimeBase:
         base = getattr(self, "_workflow_js_stream_base_runtime", None)
         if base is None:
-            base = HostedJsRuntimeBase(self.hosting_root)
+            base = HostedJsRuntimeBase(self.hosting_root, shared_environment_manager=self._environment_manager)
             base.pool_registry = self._workflow_python_pool_registry()
             setattr(self, "_workflow_js_stream_base_runtime", base)
         return base

@@ -13,6 +13,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, Optional, Sequence
 
+from ..environments import EnvironmentManager, EnvironmentRequest
 from ..model_runtime_contract import reject_model_runtime_selection
 from ..toolbox.environment import WorkflowEnvironmentAdapter
 from ..toolbox.bundle_models import ToolboxEnvironmentSpec
@@ -128,10 +129,23 @@ class HostedPythonRuntimeBase(HostedProcessSandboxBase):
 
     sandbox_kind = "workflow_python"
 
-    def __init__(self, hosting_root: Path):
+    def __init__(self, hosting_root: Path, *, shared_environment_manager: EnvironmentManager | None = None):
         super().__init__()
         self.hosting_root = Path(hosting_root).expanduser().resolve()
         self.environment_manager = WorkflowEnvironmentAdapter(self.hosting_root)
+        self.shared_environment_manager = shared_environment_manager
+
+    def acquire_shared_environment(self, request: EnvironmentRequest) -> Dict[str, Any]:
+        if self.shared_environment_manager is None:
+            raise RuntimeError("shared_environment_manager_required")
+        if request.consumer_kind != "workflow_python_helper":
+            raise ValueError("workflow_python_consumer_kind_invalid")
+        return self.shared_environment_manager.ensure(request)
+
+    def release_shared_environment(self, *, reference_id: str) -> Dict[str, Any]:
+        if self.shared_environment_manager is None:
+            raise RuntimeError("shared_environment_manager_required")
+        return self.shared_environment_manager.release(reference_id=reference_id)
 
     def environment_key_spec(
         self,

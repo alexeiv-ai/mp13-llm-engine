@@ -776,12 +776,12 @@ concurrent-writer tests preserve the last valid state or fail closed.
 
 ##### R8.2 Adopt the shared manager in existing worker runtimes
 
-- [ ] Integrate the existing Python workflow helper and JavaScript/Node workflow
+- [x] Integrate the existing Python workflow helper and JavaScript/Node workflow
   runtime with `EnvironmentManager` without adding their mechanics to the
   shared manager.
-- [ ] Use stable `workflow_python_helper` and `workflow_js_node` consumer kinds
+- [x] Use stable `workflow_python_helper` and `workflow_js_node` consumer kinds
   (or the exact R0 replacements) with consumer ID and revision.
-- [ ] Exercise source resolution, package lock, build/reuse, references,
+- [x] Exercise source resolution, package lock, build/reuse, references,
   execution handoff, and release for both worker kinds.
 
 Proof: cross-consumer tests demonstrate shared reuse where inputs match and

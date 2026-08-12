@@ -16,6 +16,8 @@ from hosting.environments import (
     EnvironmentTemplate,
 )
 from hosting.service.auth import AuthMixin
+from hosting.sandbox.python_runtime import HostedPythonRuntimeManager
+from hosting.sandbox.js_runtime import HostedJsRuntimeBase
 
 
 REVISION = "sha256:" + "a" * 64
@@ -151,6 +153,26 @@ def test_public_role_commands_use_only_generic_environment_names() -> None:
     assert "environment-remove" in all_commands
     assert not any(command.startswith("toolbox-template-") for command in all_commands)
     assert "toolbox-environment-remove" not in all_commands
+
+
+def test_workflow_runtime_adapters_share_manager_and_keep_references_independent(tmp_path: Path) -> None:
+    manager, builder = _manager(tmp_path)
+    python = HostedPythonRuntimeManager(tmp_path, shared_environment_manager=manager)
+    javascript = HostedJsRuntimeBase(tmp_path, shared_environment_manager=manager)
+    py_result = python.acquire_shared_environment(
+        _request(request_id="py", consumer_kind="workflow_python_helper", consumer_id="helper-1")
+    )
+    js_result = javascript.acquire_shared_environment(
+        _request(request_id="js", consumer_kind="workflow_js_node", consumer_id="node-1")
+    )
+    assert py_result["receipt"]["environment_id"] == js_result["receipt"]["environment_id"]
+    assert py_result["reference"]["reference_id"] != js_result["reference"]["reference_id"]
+    assert builder.calls == 1
+    python.release_shared_environment(reference_id=py_result["reference"]["reference_id"])
+    with pytest.raises(EnvironmentError, match="environment_referenced"):
+        manager.remove(environment_id=js_result["receipt"]["environment_id"])
+    javascript.release_shared_environment(reference_id=js_result["reference"]["reference_id"])
+    assert manager.remove(environment_id=js_result["receipt"]["environment_id"])["state"] == "removed"
 
 
 def test_lower_roles_cannot_mutate_templates_environments_references_or_gc() -> None:
