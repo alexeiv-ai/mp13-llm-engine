@@ -926,6 +926,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "toolbox-prepare-definition-candidate",
         "toolbox-get-definition-candidate",
         "toolbox-renew-definition-candidate",
+        "toolbox-execute-definition-candidate",
         "environment-template-list",
         "environment-template-describe",
         "environment-template-construct",
@@ -2152,6 +2153,17 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
                 candidate_ref=str(payload.get("candidate_ref") or ""),
                 requested_lifetime_ms=payload.get("requested_lifetime_ms"),
                 request_id=str(payload.get("request_id") or ""),
+            ))
+            return 0
+        if cmd == "toolbox-execute-definition-candidate":
+            _print_ok(svc.toolbox_execute_definition_candidate(
+                candidate_ref=str(payload.get("candidate_ref") or ""),
+                tool_call=dict(payload.get("tool_call") or {}),
+                execution_request_id=str(payload.get("execution_request_id") or ""),
+                timeout_seconds=float(payload.get("timeout_seconds") or 30.0),
+                tools_view=(dict(payload["tools_view"]) if isinstance(payload.get("tools_view"), dict) else None),
+                callback_binding=(dict(payload["callback_binding"]) if isinstance(payload.get("callback_binding"), dict) else None),
+                host_api_approval=(dict(payload["host_api_approval"]) if isinstance(payload.get("host_api_approval"), dict) else None),
             ))
             return 0
         if cmd == "environment-template-list":

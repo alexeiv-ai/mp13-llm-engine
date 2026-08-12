@@ -634,6 +634,42 @@ def test_confirmed_plan_prepares_durable_candidate_without_publication(tmp_path:
             authority_id="workspace:a",
         )
     service.hosting_configuration_revision = original_configuration_revision
+    execution_calls = []
+    service.toolbox_execute = lambda **kwargs: execution_calls.append(kwargs) or {  # type: ignore[method-assign]
+        "contract": "hosting.operation_status", "lifecycle": "terminal_success"
+    }
+    executed = service.toolbox_execute_definition_candidate(
+        candidate_ref=candidate["candidate_ref"],
+        tool_call={"id": "call-1", "name": "Fetch", "arguments": {"value": 1}},
+        execution_request_id="execute-candidate",
+        timeout_seconds=12.0,
+        tools_view={"allowed_tool_names": ["Fetch"], "gated_tool_names": []},
+        callback_binding={"callback_id": "callback-1"},
+        host_api_approval={"approval_id": "host-approval-1"},
+        owner_actor_id="actor:a",
+        authority_id="workspace:a",
+    )
+    assert executed["lifecycle"] == "terminal_success"
+    assert execution_calls[0]["engine_id"] in {
+        item["engine_id"] for item in registrations
+    }
+    assert execution_calls[0]["toolbox_id"] == "custom-demo"
+    assert execution_calls[0]["tools_view"]["allowed_tool_names"] == ["Fetch"]
+    assert execution_calls[0]["callback_binding"]["callback_id"] == "callback-1"
+    assert execution_calls[0]["host_api_approval"]["approval_id"] == "host-approval-1"
+    persisted_candidate = service._toolbox_definition_candidates.get(  # noqa: SLF001
+        candidate["candidate_ref"], owner_actor_id="actor:a",
+        authority_id="workspace:a", now_ms=0,
+    )
+    assert persisted_candidate.execution_leases == {}
+    with pytest.raises(PermissionError, match="candidate_execution_denied"):
+        service.toolbox_execute_definition_candidate(
+            candidate_ref=candidate["candidate_ref"],
+            tool_call={"name": "Unchanged", "arguments": {}},
+            execution_request_id="execute-unchanged",
+            owner_actor_id="actor:a",
+            authority_id="workspace:a",
+        )
     duplicate = service.toolbox_prepare_definition_candidate(
         plan_id=plan["plan_id"],
         confirmation_ref=confirmation["confirmation_ref"],

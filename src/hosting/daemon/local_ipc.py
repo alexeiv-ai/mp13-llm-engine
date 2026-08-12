@@ -3341,6 +3341,34 @@ class EngineHostDaemon:
                 owner_actor_id=actor,
                 authority_id=actor,
             )
+        if cmd == "toolbox-execute-definition-candidate":
+            allowed = {
+                "candidate_ref", "tool_call", "execution_request_id", "timeout_seconds",
+                "tools_view", "callback_binding", "host_api_approval", "_claim_actor_id",
+            }
+            if set(payload) - allowed:
+                raise ValueError("candidate_request_fields_invalid")
+            actor = str(payload.get("_claim_actor_id") or "service:local")
+            return svc.toolbox_execute_definition_candidate(
+                candidate_ref=str(payload.get("candidate_ref") or ""),
+                tool_call=dict(payload.get("tool_call") or {}),
+                execution_request_id=str(payload.get("execution_request_id") or ""),
+                timeout_seconds=float(payload.get("timeout_seconds") or 30.0),
+                tools_view=(
+                    dict(payload["tools_view"])
+                    if isinstance(payload.get("tools_view"), dict) else None
+                ),
+                callback_binding=(
+                    dict(payload["callback_binding"])
+                    if isinstance(payload.get("callback_binding"), dict) else None
+                ),
+                host_api_approval=(
+                    dict(payload["host_api_approval"])
+                    if isinstance(payload.get("host_api_approval"), dict) else None
+                ),
+                owner_actor_id=actor,
+                authority_id=actor,
+            )
         if cmd == "environment-template-list":
             return svc.environment_template_list(include_revoked=bool(payload.get("include_revoked", False)))
         if cmd == "package-artifact-upload-begin":

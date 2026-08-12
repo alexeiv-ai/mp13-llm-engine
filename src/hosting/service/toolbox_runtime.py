@@ -1680,6 +1680,80 @@ class ToolboxRuntimeMixin:
         )
         return renewed.public_projection(candidate_ref)
 
+    @staticmethod
+    def _toolbox_candidate_changed_routes(candidate: Any) -> Dict[str, Dict[str, Any]]:
+        payload = dict(candidate.retained_payload)
+        changed_keys = set(candidate.changed_tool_keys)
+        changed_profile_ids = {
+            str(profile_id)
+            for profile_id, raw in dict(payload["profiles"]).items()
+            if changed_keys.intersection(
+                set(dict(dict(raw or {}).get("profile") or {}).get("assigned_tool_keys") or [])
+            )
+        }
+        return {
+            str(tool_name): dict(route)
+            for tool_name, route in dict(payload["routes"]).items()
+            if str(dict(route or {}).get("profile_id") or "") in changed_profile_ids
+        }
+
+    def toolbox_execute_definition_candidate(
+        self,
+        *,
+        candidate_ref: str,
+        tool_call: Dict[str, Any],
+        execution_request_id: str,
+        timeout_seconds: float = 30.0,
+        tools_view: Optional[Dict[str, Any]] = None,
+        callback_binding: Optional[Dict[str, Any]] = None,
+        host_api_approval: Optional[Dict[str, Any]] = None,
+        owner_actor_id: str = "service:local",
+        authority_id: str = "authority:local",
+    ) -> Dict[str, Any]:
+        now_ms = int(time.time() * 1000)
+        candidate = self._toolbox_definition_candidates.get(
+            candidate_ref,
+            owner_actor_id=owner_actor_id,
+            authority_id=authority_id,
+            now_ms=now_ms,
+        )
+        self._validate_toolbox_candidate_pins(candidate)
+        call = dict(tool_call or {})
+        tool_name = str(call.get("name") or "").strip()
+        changed_routes = self._toolbox_candidate_changed_routes(candidate)
+        route = changed_routes.get(tool_name)
+        if route is None:
+            raise PermissionError("candidate_execution_denied")
+        engine_id = str(route.get("engine_id") or "").strip()
+        registration = dict(self._find_registration(engine_id) or {})
+        if registration.get("routing_state") != "candidate":
+            raise ValueError("candidate_stale")
+        self._toolbox_definition_candidates.acquire_execution_lease(
+            candidate_ref,
+            owner_actor_id=owner_actor_id,
+            authority_id=authority_id,
+            execution_request_id=execution_request_id,
+            now_ms=now_ms,
+        )
+        try:
+            return self.toolbox_execute(
+                engine_id=engine_id,
+                toolbox_id=candidate.toolbox_id,
+                tool_call=call,
+                timeout_seconds=timeout_seconds,
+                tools_view=tools_view,
+                callback_binding=callback_binding,
+                host_api_approval=host_api_approval,
+                execution_request_id=execution_request_id,
+                owner_actor_id=owner_actor_id,
+            )
+        finally:
+            self._toolbox_definition_candidates.release_execution_lease(
+                candidate_ref,
+                execution_request_id=execution_request_id,
+                now_ms=int(time.time() * 1000),
+            )
+
     def _apply_resolved_toolbox_definition(
         self,
         *,

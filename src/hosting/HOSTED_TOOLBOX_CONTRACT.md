@@ -355,6 +355,14 @@ the approval consumed, while a restart retry with the same request is
 idempotent. Materialization completes before generic reference adoption or
 worker spawn, so changed bytes cannot leak a reference or executable candidate.
 
+Candidate execution uses the ordinary durable `toolbox_execute` path against
+the retained candidate registration. It is limited to tools in changed
+candidate profiles and applies the same tool-view gates, callback binding,
+host-API approval, sandbox policy, timeout, cancellation, and effect semantics
+as active execution. A durable candidate lease is acquired before dispatch and
+released only after the ordinary terminal result, so nominal candidate expiry
+cannot retire resources underneath an in-flight call.
+
 The resulting plan is stored in the process-safe atomic definition-plan
 repository. Its ID binds toolbox ID, definition revision, expected active
 revision, catalog revision, package-policy revision, resolved profiles, and

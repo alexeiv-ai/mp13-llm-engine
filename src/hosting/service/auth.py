@@ -88,6 +88,7 @@ _TOOLBOX_DEFINITION_COMMANDS = {
     "toolbox-prepare-definition-candidate",
     "toolbox-get-definition-candidate",
     "toolbox-renew-definition-candidate",
+    "toolbox-execute-definition-candidate",
 }
 
 _TOOLBOX_DEPENDENCY_APPROVAL_COMMANDS = {

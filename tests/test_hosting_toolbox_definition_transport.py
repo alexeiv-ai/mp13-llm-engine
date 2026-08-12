@@ -83,6 +83,15 @@ def test_definition_channel_forwards_exact_commands_and_payloads() -> None:
     channel.toolbox_renew_definition_candidate(
         candidate_ref="candidate-1", requested_lifetime_ms=900_000, request_id="renew-1"
     )
+    channel.toolbox_execute_definition_candidate(
+        candidate_ref="candidate-1",
+        tool_call={"name": "Fetch", "arguments": {}},
+        execution_request_id="execute-1",
+        timeout_seconds=12.0,
+        tools_view={"allowed_tool_names": ["Fetch"]},
+        callback_binding={"callback_id": "callback-1"},
+        host_api_approval={"approval_id": "approval-1"},
+    )
 
     assert [command for command, _ in connection.calls] == [
         "toolbox-get-definition",
@@ -95,6 +104,7 @@ def test_definition_channel_forwards_exact_commands_and_payloads() -> None:
         "op-start",
         "toolbox-get-definition-candidate",
         "toolbox-renew-definition-candidate",
+        "toolbox-execute-definition-candidate",
     ]
     assert all(payload["session_token"] == "token-1" for _, payload in connection.calls)
     assert connection.calls[1][1]["payload"]["ttl_ms"] == 42
@@ -105,6 +115,8 @@ def test_definition_channel_forwards_exact_commands_and_payloads() -> None:
     assert connection.calls[7][1]["payload"]["requested_lifetime_ms"] == 600_000
     assert connection.calls[8][1]["candidate_ref"] == "candidate-1"
     assert connection.calls[9][1]["requested_lifetime_ms"] == 900_000
+    assert connection.calls[10][1]["execution_request_id"] == "execute-1"
+    assert connection.calls[10][1]["host_api_approval"]["approval_id"] == "approval-1"
 
 
 def test_operation_watch_emits_changed_snapshots_and_stops_at_terminal() -> None:
@@ -302,6 +314,15 @@ def test_remote_cli_routes_definition_commands(
             "requested_lifetime_ms": 900_000,
             "request_id": "renew-1",
         },
+        "toolbox-execute-definition-candidate": {
+            "candidate_ref": "candidate-1",
+            "tool_call": {"name": "Fetch", "arguments": {}},
+            "execution_request_id": "execute-1",
+            "timeout_seconds": 12.0,
+            "tools_view": None,
+            "callback_binding": None,
+            "host_api_approval": None,
+        },
     }
     for command, payload in payloads.items():
         monkeypatch.setattr("sys.stdin.read", lambda value=json.dumps(payload): value)
@@ -319,6 +340,7 @@ def test_remote_cli_routes_definition_commands(
         "op-start",
         "toolbox-get-definition-candidate",
         "toolbox-renew-definition-candidate",
+        "toolbox-execute-definition-candidate",
     ]
     assert calls[1][1] == {
         "command": "toolbox-plan-definition",

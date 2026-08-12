@@ -3658,6 +3658,34 @@ class EngineHostControlChannel:
             },
         ) or {})
 
+    def toolbox_execute_definition_candidate(
+        self,
+        *,
+        candidate_ref: str,
+        tool_call: Dict[str, Any],
+        execution_request_id: str,
+        timeout_seconds: float = 30.0,
+        tools_view: Optional[Dict[str, Any]] = None,
+        callback_binding: Optional[Dict[str, Any]] = None,
+        host_api_approval: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        return dict(self._invoke(
+            "toolbox-execute-definition-candidate",
+            {
+                "candidate_ref": str(candidate_ref or "").strip(),
+                "tool_call": dict(tool_call or {}),
+                "execution_request_id": str(execution_request_id or "").strip(),
+                "timeout_seconds": float(timeout_seconds or 30.0),
+                "tools_view": dict(tools_view) if isinstance(tools_view, dict) else None,
+                "callback_binding": (
+                    dict(callback_binding) if isinstance(callback_binding, dict) else None
+                ),
+                "host_api_approval": (
+                    dict(host_api_approval) if isinstance(host_api_approval, dict) else None
+                ),
+            },
+        ) or {})
+
     def model_runtime_status(self) -> Dict[str, Any]:
         res = self._invoke("model-runtime-status", {})
         return dict(res or {})
