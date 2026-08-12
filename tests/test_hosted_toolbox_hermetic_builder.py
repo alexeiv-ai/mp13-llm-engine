@@ -389,8 +389,6 @@ def test_service_rejects_legacy_artifact_source_constructor_inputs(tmp_path: Pat
     source.mkdir()
     with pytest.raises(TypeError, match="unexpected keyword argument"):
         EngineHostService(  # type: ignore[call-arg]
-            engines_state_file=tmp_path / "engines.json",
-            control_state_file=tmp_path / "access.json",
             toolbox_artifact_sources={"approved": source},
         )
 
@@ -410,8 +408,6 @@ def test_configured_orchestrator_spawns_only_with_resolved_verified_interpreter(
         def __init__(self):
             self.materialized: list[dict] = []
             self.spawned: list[dict] = []
-            self.engines_state_file = tmp_path / "engines.json"
-            self.control_state_file = tmp_path / "access.json"
 
         def materialize_toolbox_environment_for_bundle(self, **kwargs):
             self.materialized.append(kwargs)
