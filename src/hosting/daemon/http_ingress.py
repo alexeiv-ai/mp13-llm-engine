@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from ..service.host_service import EngineHostService
+from ..hosting_configuration import load_hosting_configuration
 from .constants import DEFAULT_HTTP_INGRESS_PORT
 from .diagnostics import write_daemon_report
 from .paths import _default_http_pid_file
@@ -41,7 +42,7 @@ class EngineHostHttpIngressDaemon:
         port: int = DEFAULT_HTTP_INGRESS_PORT,
         pid_file: Optional[Path] = None,
         engines_state_file: Optional[Path] = None,
-        control_state_file: Optional[Path] = None,
+        mp13_config_file: Optional[Path] = None,
         service: Optional[EngineHostService] = None,
     ):
         self.port = int(port or DEFAULT_HTTP_INGRESS_PORT)
@@ -49,7 +50,7 @@ class EngineHostHttpIngressDaemon:
         self.shutdown_token = secrets.token_urlsafe(24)
         self.svc = service or EngineHostService(
             engines_state_file=engines_state_file,
-            control_state_file=control_state_file,
+            hosting_configuration=load_hosting_configuration(mp13_config_file),
         )
         self.svc.assert_runtime_policy_safe()
         self._server: Optional[http.server.ThreadingHTTPServer] = None

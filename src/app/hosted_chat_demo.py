@@ -466,9 +466,44 @@ def setup_hosted_chat_demo(
     plan = build_hosted_chat_demo_plan(toolbox_id=toolbox_id, project_root=project_root)
     register_local_hosted_chat_demo_tools(toolbox, project_root=plan.project_root)
     root = Path(hosting_root).expanduser().resolve()
+    mp13_config_file = root.parent / "mp13_config.json"
+    from hosting.hosting_setup_api import apply_local_hosting_setup
+    from hosting.hosting_configuration import load_hosting_configuration
+
+    apply_local_hosting_setup(
+        {
+            "contract": "hosting.setup.v1",
+            "mp13_config_file": mp13_config_file,
+            "roots": {
+                "hosting_root_dir": f"@config/{root.name}",
+                "packages_root_dir": "@config/demo-packages",
+                "environments_root_dir": "@config/demo-environments",
+            },
+            "hosting_configuration": {
+                "contract": "hosting.configuration.v3",
+                "control": {"authentication": {}, "roles": {}, "session_policy": {}, "audit": {}},
+                "package_management": {
+                    "artifact_root": "@packages/artifacts",
+                    "lock_root": "@packages/locks",
+                    "sources": {},
+                    "credentials": {},
+                    "dependency_policy": {},
+                    "verification": {"hash_algorithm": "sha256"},
+                },
+                "environment_management": {
+                    "environment_root": "@environments",
+                    "scratch_root": "@hosting/scratch",
+                    "retention": {},
+                    "cache": {},
+                },
+            },
+            "confirm": True,
+            "allow_nonempty_destinations": True,
+        }
+    )
     service = EngineHostService(
-        engines_state_file=root / "managed_engines.json",
-        control_state_file=root / "access_control.json",
+        engines_state_file=root / "state" / "managed_engines.json",
+        hosting_configuration=load_hosting_configuration(mp13_config_file),
     )
     toolbox_ref = HostedToolBoxRef(toolbox_id=plan.toolbox_id, host=service)
     current = toolbox_ref.get_definition()

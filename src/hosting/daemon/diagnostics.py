@@ -23,12 +23,15 @@ def default_daemon_report_path() -> Path:
         return (Path.home() / ".mp13-llm" / "hosting" / "logs" / "daemon-crash.log").expanduser().resolve()
 
 
-def daemon_report_path_for_control_state(control_state_file: Optional[Path]) -> Path:
-    if control_state_file is None:
+def daemon_report_path_for_config(mp13_config_file: Optional[Path]) -> Path:
+    try:
+        from ..hosting_configuration import load_hosting_configuration
+
+        configuration = load_hosting_configuration(mp13_config_file)
+        hosting_root = Path(configuration.resolved_paths["scratch_root"]).parent
+        return (hosting_root / "logs" / "daemon-crash.log").resolve()
+    except Exception:
         return default_daemon_report_path()
-    raw = Path(control_state_file).expanduser().resolve()
-    hosting_root = raw.parent if raw.suffix else raw
-    return (hosting_root / "logs" / "daemon-crash.log").resolve()
 
 
 def _timestamp() -> str:
@@ -52,7 +55,7 @@ def _render_report(
         "details": dict(details or {}),
         "python": sys.version,
         "platform": sys.platform,
-        "argv": list(sys.argv),
+        "process": "hosting-daemon",
     }
     try:
         import os

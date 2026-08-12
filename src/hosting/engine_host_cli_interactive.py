@@ -38,7 +38,7 @@ def _control_channel_settings(args: argparse.Namespace) -> Dict[str, Any]:
         "engine_host_daemon_auto_bootstrap": False,
         "engine_host_daemon_pid_file": str(_arg_value(args, "pid_file") or "") or None,
         "engine_host_state_file": str(_arg_value(args, "engines_state_file") or "") or None,
-        "engine_host_control_state_file": str(_arg_value(args, "control_state_file") or "") or None,
+        "engine_host_mp13_config_file": str(_arg_value(args, "mp13_config_file") or "") or None,
         # Interactive menus require explicit Authenticate selection; do not let
         # profile-provided shared secrets auto-mint sessions for protected actions.
         "engine_host_key_secret": "",
@@ -668,11 +668,12 @@ def _print_inference_metrics(metrics: Dict[str, Any], *, observed_latency_sec: f
 
 
 def _offline_service(args: argparse.Namespace):
+    from .hosting_configuration import load_hosting_configuration
     from .service.host_service import EngineHostService
 
     return EngineHostService(
         engines_state_file=_arg_value(args, "engines_state_file", None),
-        control_state_file=_arg_value(args, "control_state_file", None),
+        hosting_configuration=load_hosting_configuration(_arg_value(args, "mp13_config_file", None)),
     )
 
 
@@ -1201,7 +1202,7 @@ def _show_local_auth_status(args: argparse.Namespace) -> None:
             ("sessions_count", status.get("sessions_count")),
             ("challenges_count", status.get("challenges_count")),
             ("roles", ", ".join(list(status.get("roles") or []))),
-            ("control_state_file", status.get("control_state_file") or getattr(svc, "control_state_file", "")),
+            ("configuration_revision", getattr(svc, "hosting_configuration_revision", "")),
         ]
     )
 

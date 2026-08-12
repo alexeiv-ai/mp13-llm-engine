@@ -12,6 +12,7 @@ from types import MappingProxyType
 from typing import Any, Dict, Iterator, Mapping
 
 from mp13_engine.mp13_config_paths import PathResolver
+from mp13_engine.mp13_config_paths import get_default_config_path, load_json_config, resolve_config_paths
 
 
 HOSTING_CONFIGURATION_CONTRACT = "hosting.configuration.v3"
@@ -151,7 +152,7 @@ def parse_hosting_configuration(payload: Mapping[str, Any], resolver: PathResolv
     _optional_bool(authentication, "require_auth", "control.authentication")
     if "connectivity_mode" in authentication:
         mode = _string(authentication["connectivity_mode"], "control.authentication.connectivity_mode")
-        if mode not in {"local_only", "lan", "remote"}:
+        if mode not in {"local_only", "ssh_tunnel_only", "truly_remote"}:
             raise HostingConfigurationError("hosting_configuration_value_invalid", "control.authentication.connectivity_mode")
     if "endpoint_mode" in authentication:
         endpoint = _string(authentication["endpoint_mode"], "control.authentication.endpoint_mode")
@@ -301,10 +302,34 @@ class HostingConfigurationRepository:
             self.path.unlink(missing_ok=True)
 
 
+def load_hosting_configuration(mp13_config_file: Path | None = None) -> HostingConfiguration:
+    """Load the one authority from a top-level MP13 configuration location."""
+    config_file = Path(mp13_config_file or get_default_config_path()).expanduser().resolve()
+    try:
+        top_level = load_json_config(config_file)
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise HostingConfigurationError("mp13_configuration_invalid") from exc
+    if top_level is None:
+        raise HostingConfigurationError("mp13_configuration_missing")
+    if not isinstance(top_level, dict):
+        raise HostingConfigurationError("mp13_configuration_invalid")
+    try:
+        _, resolver = resolve_config_paths(
+            dict(top_level), cwd=config_file.parent, config_path=config_file
+        )
+    except (TypeError, ValueError) as exc:
+        raise HostingConfigurationError("mp13_configuration_invalid") from exc
+    repository = HostingConfigurationRepository(
+        config_file.parent / "hosting" / "hosting_config.json", resolver
+    )
+    return repository.read()
+
+
 __all__ = [
     "HOSTING_CONFIGURATION_CONTRACT",
     "HostingConfiguration",
     "HostingConfigurationError",
     "HostingConfigurationRepository",
+    "load_hosting_configuration",
     "parse_hosting_configuration",
 ]

@@ -213,7 +213,7 @@ Use a dedicated keyring structure under default config root:
 `<default_engine_config_dir>/hosting/`
 
 Suggested contents:
-1. `access_control.json` (role/policy config)
+1. `hosting/hosting_config.json` (static role and session policy)
 2. `keyring/` (active keys and metadata)
 3. `audit/` (bounded append-only audit records)
 4. `state/` (claims/sessions/runtime state checkpoints)
@@ -236,7 +236,7 @@ Key metadata expectations:
 ### 4.4 Secure-state ownership boundary
 
 1. GUI/backend-owned stores may use `hosting.secure_state` for JSON secure-state custody. The helper API supports plaintext/encrypted JSON read/write, envelope detection, fail-closed errors, status metadata, and encrypt/decrypt/rotate operations.
-2. Hosting-owned files remain owned by hosting. GUI/backend code must not encrypt or rewrite hosting-owned files such as `access_control.json`, `bootstrap/bootstrap_state.json`, or `bootstrap/client_key_map.json`.
+2. Hosting-owned files remain owned by hosting. GUI/backend code must not rewrite hosting-owned files such as `hosting/hosting_config.json`, `bootstrap/bootstrap_state.json`, or `bootstrap/client_key_map.json`; static configuration changes go through the host-local setup repository.
 3. Hosting exposes metadata-only replacements for direct file reads:
    - in-process: `EngineHostService.hosting_setup_summary()`
    - in-process: `EngineHostService.hosting_secure_state_status()`

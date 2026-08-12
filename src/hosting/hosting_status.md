@@ -15,10 +15,19 @@ complete.
 
 Current continuous block: C — implementation and acceptance (`high`, P0–P2)
 
-Active slice: R3 unified configuration (`high`, P0)
+Active slice: R3.2–R4 authority/startup cut (`high`, P0)
 
 R0.1–R0.7, R1.1–R1.5, R2.1–R2.3, and R3.1 are complete. R3.2 is the next
 production slice; no dependent adoption is claimed.
+
+In-progress R3.2–R4 production state: daemon/service/foreground/background/
+HTTP/relay/channel startup now accepts the top-level MP13 configuration and
+loads immutable v3 policy before listener construction; static and dynamic
+records are separated; legacy launcher inputs and module are removed from
+production. New focused tests pass. The aggregate lane currently reports 100
+failures before its configured stop after 340 passes, predominantly deliberate
+legacy fixture/signature expectations. R3.2/R4 remain open until those fixtures
+and remaining permanent documents are migrated and the named proofs pass.
 
 ## 2. Progress ledger
 

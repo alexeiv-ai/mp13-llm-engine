@@ -23,7 +23,6 @@ HOSTING_ROOT_SUBDIR = "hosting"
 HOSTING_STATE_SUBDIR = "hosting/state"
 HOSTING_BOOTSTRAP_SUBDIR = "hosting/bootstrap"
 HOSTING_ENGINES_STATE_FILENAME = "managed_engines.json"
-HOSTING_CONTROL_STATE_FILENAME = "access_control.json"
 HOSTING_CONFIGURATION_FILENAME = "hosting_config.json"
 HOSTING_DAEMON_PID_FILENAME = "daemon.pid"
 HOSTING_DAEMON_HTTP_PID_FILENAME = "daemon_http.pid"
@@ -182,10 +181,6 @@ def get_hosting_bootstrap_dir() -> Path:
 
 def get_hosting_engines_state_path() -> Path:
     return get_hosting_state_dir() / HOSTING_ENGINES_STATE_FILENAME
-
-
-def get_hosting_control_state_path() -> Path:
-    return get_hosting_root_dir() / HOSTING_CONTROL_STATE_FILENAME
 
 
 def get_hosting_daemon_pid_path() -> Path:

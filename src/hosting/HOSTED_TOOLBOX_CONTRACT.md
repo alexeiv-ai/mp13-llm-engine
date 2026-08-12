@@ -781,10 +781,10 @@ The production `run_daemon_foreground` and `start_daemon_background` launchers
 expose those same five keyword inputs. `EngineHostControlChannel` local
 bootstrap forwards the same names from its control settings. A launcher caller
 may instead supply `toolbox_config_file` (or
-`engine_host_toolbox_config_file` in channel settings), whose strict JSON object
+the unified host configuration selected by `engine_host_mp13_config_file`, whose strict JSON object
 contains only those five named mapping fields. Direct inputs and a configuration
 file are mutually exclusive. CLI daemon and relay-wrapper startup expose the
-file as `--toolbox-config-file`; the path refers to a daemon-host-local file and
+file through `--mp13-config-file`; the path refers to the top-level host-local configuration and
 the caller is responsible for securing a persistent file.
 
 Detached startup never places a trust key, credential, configuration payload,

@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 
 from hosting.daemon import EngineHostDaemon
-from hosting.daemon.diagnostics import daemon_report_path_for_control_state, write_daemon_report
+from hosting.daemon.diagnostics import daemon_report_path_for_config, write_daemon_report
 
 
 def _make_daemon(tmp_path: Path) -> EngineHostDaemon:
@@ -1317,11 +1317,8 @@ def test_daemon_report_shutdown_overwrites_and_start_appends(tmp_path: Path, mon
     assert "restart_attempt" not in text
 
 
-def test_daemon_report_path_uses_control_state_hosting_root(tmp_path: Path) -> None:
-    control_state = tmp_path / "custom-hosting" / "access_control.json"
-    assert daemon_report_path_for_control_state(control_state) == (control_state.parent / "logs" / "daemon-crash.log").resolve()
-    hosting_root = tmp_path / "custom-hosting-root"
-    assert daemon_report_path_for_control_state(hosting_root) == (hosting_root / "logs" / "daemon-crash.log").resolve()
+def test_daemon_report_path_uses_sanitized_default_when_configuration_is_missing(tmp_path: Path) -> None:
+    assert daemon_report_path_for_config(tmp_path / "missing.json").name == "daemon-crash.log"
 
 
 def test_daemon_terminal_control_disabled_blocks_endpoint_mode_override(tmp_path: Path) -> None:

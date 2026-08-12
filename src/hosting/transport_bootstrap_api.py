@@ -39,7 +39,7 @@ class TransportBootstrapRequest:
     overwrite_ssh_config: bool = False
     register_rbac: bool = True
     default_config_dir: Optional[Path] = None
-    control_state_file: Optional[Path] = None
+    mp13_config_file: Optional[Path] = None
 
 
 def _data(request: TransportBootstrapRequest | Dict[str, Any]) -> Dict[str, Any]:
@@ -127,18 +127,22 @@ def install_authorized_transport_key(request: Dict[str, Any]) -> Dict[str, Any]:
     )
     if not bool(data.get("register_rbac", True)):
         return install_result
-    control_state_value = data.get("control_state_file")
-    if control_state_value:
-        control_state_file = Path(control_state_value).expanduser().resolve()
+    default_config_value = data.get("mp13_config_file")
+    if default_config_value:
+        mp13_config_file = Path(default_config_value).expanduser().resolve()
     else:
-        default_config_value = data.get("default_config_dir")
+        default_dir_value = data.get("default_config_dir")
         default_config_dir = (
-            Path(default_config_value).expanduser().resolve()
-            if default_config_value
+            Path(default_dir_value).expanduser().resolve()
+            if default_dir_value
             else get_default_config_dir()
         )
-        control_state_file = (default_config_dir / "hosting" / "access_control.json").resolve()
-    key_result = EngineHostService(control_state_file=control_state_file).auth_upsert_key(
+        mp13_config_file = (default_config_dir / "mp13_config.json").resolve()
+    from .hosting_configuration import load_hosting_configuration
+
+    key_result = EngineHostService(
+        hosting_configuration=load_hosting_configuration(mp13_config_file)
+    ).auth_upsert_key(
         key_id=str(install_result.get("transport_key_id") or "transport"),
         role="transport",
         auth_method="public_key",
@@ -146,7 +150,7 @@ def install_authorized_transport_key(request: Dict[str, Any]) -> Dict[str, Any]:
     )
     return {
         **install_result,
-        "control_state_file": str(control_state_file),
+        "configuration_source": "mp13_config",
         "rbac_key_id": key_result.get("key_id"),
         "rbac_role": key_result.get("role"),
         "rbac_auth_method": key_result.get("auth_method"),

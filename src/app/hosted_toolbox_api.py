@@ -25,7 +25,7 @@ class HostedToolboxAttachment:
 def create_hosted_control_channel(
     *,
     engines_state_file: Any,
-    control_state_file: Any,
+    mp13_config_file: Any,
     timeout_seconds: float = 15.0,
     auto_bootstrap: bool = True,
 ) -> EngineHostControlChannel:
@@ -37,7 +37,7 @@ def create_hosted_control_channel(
     return EngineHostControlChannel(
         {
             "engine_host_state_file": str(engines_state_file),
-            "engine_host_control_state_file": str(control_state_file),
+            "engine_host_mp13_config_file": str(mp13_config_file),
             "engine_host_timeout_seconds": float(timeout_seconds or 15.0),
             "engine_host_daemon_auto_bootstrap": bool(auto_bootstrap),
         }
@@ -48,7 +48,7 @@ def attach_existing_hosted_toolbox(
     *,
     toolbox_id: str,
     engines_state_file: Any,
-    control_state_file: Any,
+    mp13_config_file: Any,
     timeout_seconds: float = 15.0,
     auto_bootstrap: bool = True,
 ) -> HostedToolboxAttachment:
@@ -63,7 +63,7 @@ def attach_existing_hosted_toolbox(
         raise ValueError("toolbox_id is required")
     control_channel = create_hosted_control_channel(
         engines_state_file=engines_state_file,
-        control_state_file=control_state_file,
+        mp13_config_file=mp13_config_file,
         timeout_seconds=timeout_seconds,
         auto_bootstrap=auto_bootstrap,
     )

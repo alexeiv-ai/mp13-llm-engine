@@ -63,7 +63,7 @@ def test_minimal_configuration_is_immutable_and_preserves_logical_paths(tmp_path
 def test_full_configuration_and_sanitized_inspection(tmp_path: Path) -> None:
     payload = _minimal()
     payload["control"] = {
-        "authentication": {"require_auth": True, "connectivity_mode": "remote", "endpoint_mode": "shared", "ssh_key_ref": "keyring:admin"},
+        "authentication": {"require_auth": True, "connectivity_mode": "truly_remote", "endpoint_mode": "shared", "ssh_key_ref": "keyring:admin"},
         "roles": {"admin": {"permissions": ["*"]}},
         "session_policy": {"ttl_seconds": 300, "idle_timeout_seconds": 60, "max_sessions_per_key": 2},
         "audit": {"event_limit": 100, "retention_seconds": 3600},
@@ -98,7 +98,7 @@ def test_full_configuration_and_sanitized_inspection(tmp_path: Path) -> None:
         ),
         (
             lambda value: value["control"].update(
-                authentication={"require_auth": False, "connectivity_mode": "remote"}
+                authentication={"require_auth": False, "connectivity_mode": "truly_remote"}
             ),
             "hosting_configuration_policy_conflict",
         ),

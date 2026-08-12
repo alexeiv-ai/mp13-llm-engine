@@ -64,6 +64,7 @@ def _startup_spec_or_none() -> Optional[ToolboxWorkerStartupSpec]:
 
 
 def _host_service():
+    from .hosting_configuration import load_hosting_configuration
     from .service.host_service import EngineHostService
 
     spec = _startup_spec_or_none()
@@ -72,14 +73,12 @@ def _host_service():
         if spec is not None
         else str(os.environ.get("MP13_HOSTING_ENGINES_STATE_FILE") or "").strip()
     )
-    control_state_file = (
-        str(spec.control_state_file or "").strip()
-        if spec is not None
-        else str(os.environ.get("MP13_HOSTING_CONTROL_STATE_FILE") or "").strip()
-    )
+    mp13_config_file = str(os.environ.get("MP13_CONFIG_FILE") or "").strip()
     svc = EngineHostService(
         engines_state_file=Path(engines_state_file).expanduser().resolve() if engines_state_file else None,
-        control_state_file=Path(control_state_file).expanduser().resolve() if control_state_file else None,
+        hosting_configuration=load_hosting_configuration(
+            Path(mp13_config_file).expanduser().resolve() if mp13_config_file else None
+        ),
     )
     if spec is not None and str(spec.worker_id or "").strip() and callable(getattr(svc, "register_spawned", None)):
         svc.register_spawned(

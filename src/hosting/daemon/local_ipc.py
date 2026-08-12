@@ -18,7 +18,7 @@ import time
 from multiprocessing.connection import Client as MPClient
 from multiprocessing.connection import Listener as MPListener
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional
+from typing import Any, Dict, List, Optional
 
 from ..sandbox.host_capabilities import (
     CapabilityAuthorityLease,
@@ -28,9 +28,7 @@ from ..sandbox.host_capabilities import (
     HostCapabilitySession,
 )
 from ..service.host_service import EngineHostService
-from ..toolbox.dependency_policy import ToolboxDependencyPolicy
-from ..toolbox.host_project_config import ToolboxHostProjectConfiguration
-from ..service.toolbox_artifact_store import validate_trust_public_keys
+from ..hosting_configuration import load_hosting_configuration
 from .constants import DEFAULT_DAEMON_PORT
 from .diagnostics import write_daemon_report
 from .paths import _daemon_local_ipc_endpoint
@@ -55,113 +53,24 @@ class EngineHostDaemon:
         port: int = DEFAULT_DAEMON_PORT,
         pid_file: Optional[Path] = None,
         engines_state_file: Optional[Path] = None,
-        control_state_file: Optional[Path] = None,
+        mp13_config_file: Optional[Path] = None,
         runtime_profile: str = "foreground_terminal_bound",
-        toolbox_host_project_configuration: Optional[Mapping[str, Any]] = None,
-        toolbox_artifact_sources: Optional[Mapping[str, Path]] = None,
-        toolbox_trust_public_keys: Optional[Mapping[str, str]] = None,
-        toolbox_source_credentials: Optional[Mapping[str, str]] = None,
-        toolbox_dependency_policy: Optional[Mapping[str, Any]] = None,
     ):
+        hosting_configuration = load_hosting_configuration(mp13_config_file)
         self.port = int(port or DEFAULT_DAEMON_PORT)
         self.pid_file = DaemonPidFile(pid_file)
         self.shutdown_token = secrets.token_urlsafe(24)
         local_transport = _daemon_local_ipc_endpoint(self.pid_file.path)
         self._local_transport = dict(local_transport)
-        toolbox_setup_diagnostic: Optional[Dict[str, Any]] = None
-        toolbox_service_kwargs: Dict[str, Any] = {}
-        provided = (
-            toolbox_host_project_configuration is not None,
-            toolbox_artifact_sources is not None,
-            toolbox_dependency_policy is not None,
-            toolbox_trust_public_keys is not None,
-        )
-        if not any(provided):
-            toolbox_setup_diagnostic = {
-                "code": "toolbox_configuration_missing",
-                "summary": "Toolbox hosting configuration is not available.",
-            }
-        elif not all(provided):
-            toolbox_setup_diagnostic = {
-                "code": "toolbox_configuration_incomplete",
-                "summary": "Toolbox hosting configuration is incomplete.",
-            }
-        else:
-            try:
-                parsed_configuration = ToolboxHostProjectConfiguration.from_dict(
-                    toolbox_host_project_configuration or {}
-                )
-                parsed_policy = ToolboxDependencyPolicy.from_dict(toolbox_dependency_policy or {})
-                parsed_trust_keys = validate_trust_public_keys(
-                    parsed_configuration, toolbox_trust_public_keys or {}
-                )
-                bindings = {
-                    str(key): Path(value).expanduser().resolve()
-                    for key, value in dict(toolbox_artifact_sources or {}).items()
-                }
-                airgap_source_ids = {
-                    item.source_id
-                    for item in parsed_configuration.sources
-                    if item.kind == "airgap_store"
-                }
-                if set(bindings) != airgap_source_ids or any(
-                    not path.is_dir() for path in bindings.values()
-                ):
-                    raise ValueError("toolbox_source_binding_invalid")
-                credential_refs = {
-                    item.credential_ref
-                    for item in parsed_configuration.sources
-                    if item.credential_ref is not None
-                }
-                credential_bindings = {
-                    str(key): str(value)
-                    for key, value in dict(toolbox_source_credentials or {}).items()
-                }
-                if set(credential_bindings) != credential_refs:
-                    raise ValueError("toolbox_source_binding_invalid")
-                toolbox_service_kwargs = {
-                    "toolbox_host_project_configuration": parsed_configuration.to_dict(),
-                    "toolbox_artifact_sources": bindings or None,
-                    "toolbox_dependency_policy": parsed_policy.to_dict(),
-                    "toolbox_trust_public_keys": parsed_trust_keys,
-                    "toolbox_source_credentials": credential_bindings,
-                }
-            except Exception as exc:
-                reason = str(exc or "")
-                code = (
-                    "toolbox_source_binding_invalid"
-                    if reason == "toolbox_source_binding_invalid"
-                    else "toolbox_configuration_invalid"
-                )
-                toolbox_setup_diagnostic = {
-                    "code": code,
-                    "summary": (
-                        "Toolbox source bindings are invalid."
-                        if code == "toolbox_source_binding_invalid"
-                        else "Toolbox hosting configuration is invalid."
-                    ),
-                }
         self.svc = EngineHostService(
             engines_state_file=engines_state_file,
-            control_state_file=control_state_file,
-            **toolbox_service_kwargs,
+            hosting_configuration=hosting_configuration,
         )
-        self.svc._toolbox_setup_diagnostic = toolbox_setup_diagnostic  # noqa: SLF001
+        self.svc._toolbox_setup_diagnostic = {  # noqa: SLF001
+            "code": "environment_template_missing",
+            "summary": "No environment template has been activated.",
+        }
         self.svc.assert_runtime_policy_safe()
-        if toolbox_setup_diagnostic is None:
-            try:
-                self.svc._toolbox_setup_operation = self.svc.toolbox_setup_start()  # noqa: SLF001
-            except Exception:
-                self.svc._toolbox_startup = {  # noqa: SLF001
-                    **dict(self.svc._toolbox_startup or {}),  # noqa: SLF001
-                    "status": "not_ready",
-                    "diagnostics": [
-                        {
-                            "code": "toolbox_setup_dispatch_failed",
-                            "summary": "The toolbox setup worker could not be started.",
-                        }
-                    ],
-                }
         self._server: Optional[asyncio.AbstractServer] = None
         self._stop_event: Optional[asyncio.Event] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None

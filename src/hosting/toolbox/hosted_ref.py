@@ -68,12 +68,15 @@ class HostedToolBoxRef:
                 resolved_host = EngineHostControlChannel(dict(host_row.get("control_settings") or {}))
             elif kind == "service":
                 from ..service.host_service import EngineHostService
+                from ..hosting_configuration import load_hosting_configuration
 
                 engines_state_raw = str(host_row.get("engines_state_file") or "").strip()
-                control_state_raw = str(host_row.get("control_state_file") or "").strip()
+                mp13_config_raw = str(host_row.get("mp13_config_file") or "").strip()
                 resolved_host = EngineHostService(
                     engines_state_file=Path(engines_state_raw) if engines_state_raw else None,
-                    control_state_file=Path(control_state_raw) if control_state_raw else None,
+                    hosting_configuration=load_hosting_configuration(
+                        Path(mp13_config_raw) if mp13_config_raw else None
+                    ),
                 )
             else:
                 raise ValueError("host_required_for_hosted_toolbox_ref_deserialization")

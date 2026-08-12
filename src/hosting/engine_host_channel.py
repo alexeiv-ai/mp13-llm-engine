@@ -101,7 +101,7 @@ class EngineHostControlChannel:
         self.control_settings: Dict[str, Any] = resolve_client_profile_control_settings(control_settings)
         self._base_cmd: List[str] = []
         self._engines_state_file = self.control_settings.get("engine_host_state_file")
-        self._control_state_file = self.control_settings.get("engine_host_control_state_file")
+        self._mp13_config_file = self.control_settings.get("engine_host_mp13_config_file")
         self._timeout = float(self.control_settings.get("engine_host_timeout_seconds") or 15.0)
         self._session_token: Optional[str] = str(
             self.control_settings.get("engine_host_session_token") or ""
@@ -139,28 +139,6 @@ class EngineHostControlChannel:
         self._stream_approval_leases: Dict[str, ApprovalCallbackLease] = {}
         self._stream_approval_lock = threading.Lock()
         self._refresh_base_cmd()
-
-    def _daemon_toolbox_launch_kwargs(self) -> Dict[str, Any]:
-        """Project production-launcher toolbox settings into daemon kwargs."""
-        direct: Dict[str, Any] = {}
-        for key in (
-            "toolbox_host_project_configuration",
-            "toolbox_artifact_sources",
-            "toolbox_trust_public_keys",
-            "toolbox_source_credentials",
-            "toolbox_dependency_policy",
-        ):
-            value = self.control_settings.get(key)
-            if value is not None:
-                direct[key] = dict(value) if isinstance(value, dict) else value
-        config_file = str(
-            self.control_settings.get("engine_host_toolbox_config_file") or ""
-        ).strip()
-        if config_file and direct:
-            raise ValueError("toolbox_launch_configuration_inputs_conflict")
-        if config_file:
-            return {"toolbox_config_file": Path(config_file)}
-        return direct
 
     def approval_callback_lease(
         self,
@@ -318,7 +296,7 @@ class EngineHostControlChannel:
         remote_cmd: Optional[str] = None,
         engine_host_cmd: Optional[List[str]] = None,
         engine_host_state_file: Optional[str] = None,
-        engine_host_control_state_file: Optional[str] = None,
+        engine_host_mp13_config_file: Optional[str] = None,
     ) -> Dict[str, Any]:
         m = str(mode or "local").strip().lower()
         if m not in {"local", "ssh"}:
@@ -342,10 +320,10 @@ class EngineHostControlChannel:
             self.control_settings["engine_host_cmd"] = [str(x) for x in list(engine_host_cmd or [])] or None
         if engine_host_state_file is not None:
             self.control_settings["engine_host_state_file"] = str(engine_host_state_file).strip() or None
-        if engine_host_control_state_file is not None:
-            self.control_settings["engine_host_control_state_file"] = str(engine_host_control_state_file).strip() or None
+        if engine_host_mp13_config_file is not None:
+            self.control_settings["engine_host_mp13_config_file"] = str(engine_host_mp13_config_file).strip() or None
         self._engines_state_file = self.control_settings.get("engine_host_state_file")
-        self._control_state_file = self.control_settings.get("engine_host_control_state_file")
+        self._mp13_config_file = self.control_settings.get("engine_host_mp13_config_file")
         self._refresh_base_cmd()
         # Reset persistent connection: target has changed
         with self._connection_lock:
@@ -370,8 +348,8 @@ class EngineHostControlChannel:
             env["PYTHONPATH"] = src_root if not py_path else f"{src_root}{os.pathsep}{py_path}"
         return env
 
-    def _local_control_state_path(self) -> Optional[Path]:
-        raw = str(self._control_state_file or "").strip()
+    def _local_mp13_config_path(self) -> Optional[Path]:
+        raw = str(self._mp13_config_file or "").strip()
         if not raw:
             return None
         if os.name != "nt" and re.match(r"^[A-Za-z]:[\\/]", raw):
@@ -382,60 +360,16 @@ class EngineHostControlChannel:
         if str(self.get_target().get("mode") or "local") != "local":
             return None
         try:
+            from .hosting_configuration import load_hosting_configuration
             from .service.host_service import EngineHostService
 
-            svc = EngineHostService(control_state_file=self._local_control_state_path())
+            svc = EngineHostService(
+                hosting_configuration=load_hosting_configuration(self._local_mp13_config_path())
+            )
             return dict(svc.get_control_config() or {})
         except Exception as exc:
             logger.debug("Failed to read local hosting control snapshot: %s", exc)
             return None
-
-    def _configured_access_root_conflict(self) -> Optional[Dict[str, Any]]:
-        selected = self._local_control_state_path()
-        if selected is None:
-            return None
-        try:
-            selected_resolved = selected.expanduser().resolve()
-        except Exception:
-            selected_resolved = selected
-
-        candidates: List[Path] = []
-        try:
-            from .service.constants import DEFAULT_CONTROL_STATE_FILE
-
-            candidates.append(DEFAULT_CONTROL_STATE_FILE.expanduser().resolve())
-        except Exception:
-            pass
-        try:
-            if selected_resolved.name != "access_control.json":
-                candidates.append((selected_resolved.parent.parent / "hosting" / "access_control.json").resolve())
-        except Exception:
-            pass
-
-        seen: set[str] = set()
-        for candidate in candidates:
-            key = str(candidate)
-            if key in seen:
-                continue
-            seen.add(key)
-            if candidate == selected_resolved or not candidate.exists():
-                continue
-            try:
-                from .service.host_service import EngineHostService
-
-                cfg = EngineHostService(control_state_file=candidate).get_control_config()
-            except Exception:
-                continue
-            if int(dict(cfg or {}).get("keys_count") or 0) <= 0:
-                continue
-            return {
-                "selected_control_state_file": str(selected_resolved),
-                "configured_control_state_file": str(candidate),
-                "configured_require_auth": bool(dict(cfg or {}).get("require_auth", False)),
-                "configured_keys_count": int(dict(cfg or {}).get("keys_count") or 0),
-                "configured_endpoint_mode_default": str(dict(cfg or {}).get("endpoint_mode_default") or ""),
-            }
-        return None
 
     def _should_auto_recover_unreachable_local_daemon(self) -> Dict[str, Any]:
         snapshot = dict(self._read_local_control_snapshot() or {})
@@ -497,9 +431,9 @@ class EngineHostControlChannel:
         if not requested_at and not progress:
             return None
         try:
-            from .daemon.diagnostics import daemon_report_path_for_control_state
+            from .daemon.diagnostics import daemon_report_path_for_config
 
-            report_path = daemon_report_path_for_control_state(self._local_control_state_path())
+            report_path = daemon_report_path_for_config(self._local_mp13_config_path())
         except Exception:
             report_path = None
         return {
@@ -573,35 +507,7 @@ class EngineHostControlChannel:
     def _prepare_local_unconfigured_bootstrap(self) -> Optional[Dict[str, Any]]:
         if str(self.get_target().get("mode") or "local") != "local":
             return None
-        snapshot = self._read_local_control_snapshot()
-        if not isinstance(snapshot, dict):
-            return None
-        if int(snapshot.get("keys_count") or 0) != 0:
-            return snapshot
-        conflict = self._configured_access_root_conflict()
-        if conflict:
-            raise RuntimeError(
-                "Refusing temporary no-auth local daemon bootstrap because configured hosting access "
-                f"already exists at {conflict['configured_control_state_file']} "
-                f"(selected control state: {conflict['selected_control_state_file']})"
-            )
-        try:
-            from .service.host_service import EngineHostService
-
-            svc = EngineHostService(control_state_file=self._local_control_state_path())
-            updated = svc.set_control_config(
-                require_auth=False,
-                access_profile={"connectivity_mode": "local_only"},
-                endpoint_mode_default="exclusive",
-            )
-            logger.warning(
-                "Local hosting was unconfigured (keys_count=0); forcing temporary local-only "
-                "no-auth exclusive bootstrap. Configure hosting_access as soon as possible."
-            )
-            return dict(updated or {})
-        except Exception as exc:
-            logger.warning("Failed to prepare local unconfigured hosting bootstrap defaults: %s", exc)
-            return snapshot
+        return self._read_local_control_snapshot()
 
     # ------------------------------------------------------------------
     # Persistent connection management
@@ -676,9 +582,8 @@ class EngineHostControlChannel:
                             pid_file=pid_path,
                             log_file=Path(self._daemon_log_file) if self._daemon_log_file else None,
                             engines_state_file=Path(self._engines_state_file) if self._engines_state_file else None,
-                            control_state_file=Path(self._control_state_file) if self._control_state_file else None,
+                            mp13_config_file=Path(self._mp13_config_file) if self._mp13_config_file else None,
                             wait_ready_seconds=wait,
-                            **self._daemon_toolbox_launch_kwargs(),
                         )
                         new_port = int(result.get("port") or DEFAULT_DAEMON_PORT)
                         conn = LocalSocketConnection(
@@ -747,8 +652,8 @@ class EngineHostControlChannel:
         argv = list(self._base_cmd) + ["--payload-stdin"]
         if self._engines_state_file:
             argv += ["--engines-state-file", str(self._engines_state_file)]
-        if self._control_state_file:
-            argv += ["--control-state-file", str(self._control_state_file)]
+        if self._mp13_config_file:
+            argv += ["--mp13-config-file", str(self._mp13_config_file)]
         argv += [str(command)]
         proc = subprocess.run(  # noqa: S603
             argv,
@@ -958,7 +863,7 @@ class EngineHostControlChannel:
     def _auto_session_cache_key(self) -> str:
         binding = self._current_ssh_session_binding() or {}
         payload = {
-            "control_state_file": str(self._control_state_file or ""),
+            "mp13_config_file": str(self._mp13_config_file or ""),
             "engine_state_file": str(self._engines_state_file or ""),
             "key_id": str(self._key_id or ""),
             "scope": str(self._session_scope or ""),
@@ -1019,7 +924,7 @@ class EngineHostControlChannel:
         binding = self._current_ssh_session_binding() if bind_to_ssh else None
         payload = {
             "auth_method": "public_key",
-            "control_state_file": str(self._control_state_file or ""),
+            "mp13_config_file": str(self._mp13_config_file or ""),
             "engine_state_file": str(self._engines_state_file or ""),
             "key_id": str(key_id or "").strip(),
             "scope": str(scope or "control").strip().lower() or "control",
@@ -1289,9 +1194,8 @@ class EngineHostControlChannel:
             pid_file=pid_path,
             log_file=Path(self._daemon_log_file) if self._daemon_log_file else None,
             engines_state_file=Path(self._engines_state_file) if self._engines_state_file else None,
-            control_state_file=Path(self._control_state_file) if self._control_state_file else None,
+            mp13_config_file=Path(self._mp13_config_file) if self._mp13_config_file else None,
             wait_ready_seconds=wait_ready_seconds,
-            **self._daemon_toolbox_launch_kwargs(),
         )
         with self._connection_lock:
             self._connection = None  # Force reconnect on next invoke
@@ -1351,7 +1255,7 @@ class EngineHostControlChannel:
 
     def _write_local_daemon_report(self, *, event: str, reason: str, details: Optional[Dict[str, Any]] = None) -> None:
         try:
-            from .daemon.diagnostics import daemon_report_path_for_control_state, write_daemon_report
+            from .daemon.diagnostics import daemon_report_path_for_config, write_daemon_report
 
             write_daemon_report(
                 event=event,
@@ -1363,7 +1267,7 @@ class EngineHostControlChannel:
                     "peer_process": {"pid": os.getpid(), "name": Path(sys.argv[0]).name if sys.argv else None},
                 },
                 details=dict(details or {}),
-                path=daemon_report_path_for_control_state(self._local_control_state_path()),
+                path=daemon_report_path_for_config(self._local_mp13_config_path()),
             )
         except Exception:
             logger.debug("Failed to write local daemon diagnostic report", exc_info=True)
@@ -1464,9 +1368,11 @@ class EngineHostControlChannel:
         }
         registered_pids: set[int] = set()
         if stop_workers:
+            from .hosting_configuration import load_hosting_configuration
+
             svc = EngineHostService(
                 engines_state_file=Path(self._engines_state_file) if self._engines_state_file else None,
-                control_state_file=self._local_control_state_path(),
+                hosting_configuration=load_hosting_configuration(self._local_mp13_config_path()),
             )
             try:
                 rows = svc.discover_running(
@@ -1669,7 +1575,11 @@ class EngineHostControlChannel:
                 except Exception:
                     pass
                 self._connection = None
-        svc = EngineHostService(control_state_file=self._local_control_state_path())
+        from .hosting_configuration import load_hosting_configuration
+
+        svc = EngineHostService(
+            hosting_configuration=load_hosting_configuration(self._local_mp13_config_path())
+        )
         reset = svc.reset_hosting_access()
         return {
             "status": "ok",

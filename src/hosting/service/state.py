@@ -233,7 +233,6 @@ class StateMixin:
     def _control_layout(self) -> Dict[str, Path]:
         return {
             "root": self.hosting_root,
-            "access_control": self.hosting_root / "access_control.json",
             "keys": self.hosting_root / "keyring" / "keys.json",
             "sessions": self.hosting_root / "state" / "sessions.json",
             "challenges": self.hosting_root / "state" / "challenges.json",
@@ -243,11 +242,10 @@ class StateMixin:
             "host_capability_audit": self.hosting_root / "audit" / "host_capability_audit.json",
         }
 
-    def hosting_secure_state_status(self) -> Dict[str, Any]:
+    def hosting_secure_state_status(self, *, local_admin: bool = False) -> Dict[str, Any]:
         layout = self._control_layout()
         bootstrap_root = self.hosting_root / "bootstrap"
         files = {
-            "access_control": layout["access_control"],
             "keys": layout["keys"],
             "sessions": layout["sessions"],
             "challenges": layout["challenges"],
@@ -258,16 +256,26 @@ class StateMixin:
             "bootstrap_state": bootstrap_root / "bootstrap_state.json",
             "client_key_map": bootstrap_root / "client_key_map.json",
         }
-        statuses = {name: secure_state_status(path) for name, path in files.items()}
+        raw_statuses = {name: secure_state_status(path) for name, path in files.items()}
+        statuses = (
+            raw_statuses
+            if local_admin
+            else {
+                name: {
+                    key: value
+                    for key, value in row.items()
+                    if key in {"state", "exists", "encrypted", "locked"}
+                }
+                for name, row in raw_statuses.items()
+            }
+        )
         encrypted_count = sum(1 for row in statuses.values() if bool(row.get("encrypted")))
         locked_count = sum(1 for row in statuses.values() if bool(row.get("locked")))
         plaintext_count = sum(1 for row in statuses.values() if str(row.get("state") or "") == "plaintext")
         return {
             "status": "ok",
-            "hosting_root": str(self.hosting_root),
             "encryption_enabled": False,
             "daemon_secure_state_read_enabled": False,
-            "startup_env_names": ["MP13_SECURE_STATE_KEY", "MP13_HOSTING_SECURE_STATE_KEY"],
             "files": statuses,
             "summary": {
                 "encrypted_count": encrypted_count,
@@ -277,7 +285,7 @@ class StateMixin:
             },
         }
 
-    def hosting_setup_summary(self) -> Dict[str, Any]:
+    def hosting_setup_summary(self, *, local_admin: bool = False) -> Dict[str, Any]:
         control = self._read_control()
         cfg = dict(control.get("control_config") or {})
         auth = dict(cfg.get("auth") or {})
@@ -290,8 +298,8 @@ class StateMixin:
         access_profile = dict(cfg.get("access_profile") or {})
         summary = {
             "status": "ok",
-            "hosting_root": str(self.hosting_root),
-            "configured": bool((self.hosting_root / "access_control.json").exists() or keys),
+            "configured": True,
+            "configuration": self.hosting_configuration.inspect(local_admin=local_admin),
             "connectivity_mode": str(access_profile.get("connectivity_mode") or "local_only"),
             "endpoint_mode_default": str(cfg.get("endpoint_mode_default") or "exclusive"),
             "lifecycle_profile": self._normalize_lifecycle_profile(cfg.get("lifecycle_profile")),
@@ -304,7 +312,7 @@ class StateMixin:
             "admin_key_ids": admin_key_ids,
             "keys_count": len(keys),
             "sessions_count": len(dict(auth.get("sessions") or {})),
-            "secure_state": self.hosting_secure_state_status(),
+            "secure_state": self.hosting_secure_state_status(local_admin=local_admin),
         }
         required_abi = str(getattr(self, "_toolbox_required_python_abi", "") or "").strip()
         required_platform = str(getattr(self, "_toolbox_required_platform", "") or "").strip()
@@ -388,11 +396,7 @@ class StateMixin:
     def _read_control(self) -> Dict[str, Any]:
         default_payload = self._default_control_payload()
         layout = self._control_layout()
-        access_default = dict(default_payload.get("control_config") or {})
-        access_payload = self._read_json(
-            layout["access_control"],
-            {"version": 1, "updated_at": 0.0, "control_config": access_default},
-        )
+        access_default = self._static_control_config()
         runtime_payload = self._read_json(
             layout["runtime_state"],
             {
@@ -426,7 +430,6 @@ class StateMixin:
         payload = {
             "version": 1,
             "updated_at": max(
-                float(access_payload.get("updated_at") or 0.0),
                 float(runtime_payload.get("updated_at") or 0.0),
                 float(keys_payload.get("updated_at") or 0.0),
                 float(sessions_payload.get("updated_at") or 0.0),
@@ -435,7 +438,7 @@ class StateMixin:
                 float(claim_audit_payload.get("updated_at") or 0.0),
                 float(host_capability_audit_payload.get("updated_at") or 0.0),
             ),
-            "control_config": dict(access_payload.get("control_config") or access_default),
+            "control_config": access_default,
             "claims_by_engine": dict(runtime_payload.get("claims_by_engine") or {}),
             "endpoint_claim": dict(
                 runtime_payload.get("endpoint_claim") or {"owners": [], "exclusive_owner": None, "claimed_at": 0.0}
@@ -548,16 +551,6 @@ class StateMixin:
         layout = self._control_layout()
         cfg = dict(out.get("control_config") or {})
         auth = dict(cfg.get("auth") or {})
-        cfg_without_auth = dict(cfg)
-        cfg_without_auth.pop("auth", None)
-        self._write_json(
-            layout["access_control"],
-            {
-                "version": 1,
-                "updated_at": out["updated_at"],
-                "control_config": cfg_without_auth,
-            },
-        )
         self._write_json(
             layout["keys"],
             {"version": 1, "updated_at": out["updated_at"], "keys": dict(auth.get("keys") or {})},
@@ -597,6 +590,28 @@ class StateMixin:
             layout["host_capability_audit"],
             {"version": 1, "updated_at": out["updated_at"], "events": list(out.get("host_capability_audit_events") or [])},
         )
+
+    def _static_control_config(self) -> Dict[str, Any]:
+        static = dict(self.hosting_configuration.control)
+        authentication = dict(static.get("authentication") or {})
+        session_policy = dict(static.get("session_policy") or {})
+        audit = dict(static.get("audit") or {})
+        default = dict(self._default_control_payload()["control_config"])
+        default.update(
+            {
+                "ssh_key": authentication.get("ssh_key_ref"),
+                "require_auth": bool(authentication.get("require_auth", False)),
+                "access_profile": {
+                    "connectivity_mode": str(authentication.get("connectivity_mode") or "local_only")
+                },
+                "endpoint_mode_default": str(authentication.get("endpoint_mode") or "exclusive"),
+                "session_policy": session_policy,
+                "roles": dict(static.get("roles") or {}),
+                "audit_policy": audit,
+            }
+        )
+        default.pop("auth", None)
+        return default
 
     @classmethod
     def _toolbox_lock_for(cls, toolbox_id: str) -> threading.RLock:

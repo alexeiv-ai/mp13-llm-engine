@@ -7,17 +7,12 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional
+from typing import Any, Dict, List, Optional
 
 from .._process_utils import hidden_subprocess_kwargs
 from .constants import DEFAULT_DAEMON_PORT, DEFAULT_HTTP_INGRESS_PORT
 from .paths import _default_http_pid_file
 from .pidfile import DaemonPidFile
-from .toolbox_launch_config import (
-    load_toolbox_launch_configuration,
-    toolbox_launch_configuration,
-    write_ephemeral_toolbox_launch_configuration,
-)
 
 
 def start_daemon_background(
@@ -26,14 +21,8 @@ def start_daemon_background(
     pid_file: Optional[Path] = None,
     log_file: Optional[Path] = None,
     engines_state_file: Optional[Path] = None,
-    control_state_file: Optional[Path] = None,
+    mp13_config_file: Optional[Path] = None,
     wait_ready_seconds: float = 8.0,
-    toolbox_config_file: Optional[Path] = None,
-    toolbox_host_project_configuration: Optional[Mapping[str, Any]] = None,
-    toolbox_artifact_sources: Optional[Mapping[str, Path]] = None,
-    toolbox_trust_public_keys: Optional[Mapping[str, str]] = None,
-    toolbox_source_credentials: Optional[Mapping[str, str]] = None,
-    toolbox_dependency_policy: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Spawn daemon as a detached background process and wait until it is connectable.
@@ -112,26 +101,6 @@ def start_daemon_background(
             f"stop or force-restart it before starting another daemon (pid_file={pid_info.path})"
         )
 
-    direct_toolbox_configuration = toolbox_launch_configuration(
-        toolbox_host_project_configuration=toolbox_host_project_configuration,
-        toolbox_artifact_sources=toolbox_artifact_sources,
-        toolbox_trust_public_keys=toolbox_trust_public_keys,
-        toolbox_source_credentials=toolbox_source_credentials,
-        toolbox_dependency_policy=toolbox_dependency_policy,
-    )
-    if toolbox_config_file is not None and direct_toolbox_configuration:
-        raise ValueError("toolbox_launch_configuration_inputs_conflict")
-    owned_toolbox_config_file: Optional[Path] = None
-    resolved_toolbox_config_file: Optional[Path] = None
-    if toolbox_config_file is not None:
-        resolved_toolbox_config_file = Path(toolbox_config_file).expanduser().resolve()
-        load_toolbox_launch_configuration(resolved_toolbox_config_file)
-    elif direct_toolbox_configuration:
-        owned_toolbox_config_file = write_ephemeral_toolbox_launch_configuration(
-            direct_toolbox_configuration
-        )
-        resolved_toolbox_config_file = owned_toolbox_config_file
-
     argv: List[str] = [
         sys.executable,
         "-m",
@@ -148,10 +117,8 @@ def start_daemon_background(
         argv += ["--pid-file", str(pid_file)]
     if engines_state_file:
         argv += ["--engines-state-file", str(engines_state_file)]
-    if control_state_file:
-        argv += ["--control-state-file", str(control_state_file)]
-    if resolved_toolbox_config_file:
-        argv += ["--toolbox-config-file", str(resolved_toolbox_config_file)]
+    if mp13_config_file:
+        argv += ["--mp13-config-file", str(mp13_config_file)]
 
     # Build environment with src dir on PYTHONPATH so connectors package is found
     import os as _os
@@ -173,12 +140,7 @@ def start_daemon_background(
     else:
         kwargs["start_new_session"] = True
 
-    try:
-        proc = subprocess.Popen(argv, **kwargs)  # noqa: S603
-    except Exception:
-        if owned_toolbox_config_file is not None:
-            owned_toolbox_config_file.unlink(missing_ok=True)
-        raise
+    proc = subprocess.Popen(argv, **kwargs)  # noqa: S603
     spawned_pid = int(proc.pid)
     try:
         # On Windows, Popen with DETACHED_PROCESS can leave a stale CPython
@@ -221,14 +183,10 @@ def start_daemon_background(
             out: Dict[str, Any] = {"pid": int(info.get("pid") or spawned_pid), "port": actual_port}
             if log_file:
                 out["log_file"] = str(log_file)
-            if owned_toolbox_config_file is not None:
-                owned_toolbox_config_file.unlink(missing_ok=True)
             return out
         except Exception:
             continue
 
-    if owned_toolbox_config_file is not None:
-        owned_toolbox_config_file.unlink(missing_ok=True)
     raise RuntimeError(
         f"Engine host daemon did not become ready within {wait_ready_seconds}s "
         f"(spawned pid={spawned_pid}, port={port}, log_file={log_file})"
@@ -241,7 +199,7 @@ def start_http_ingress_background(
     pid_file: Optional[Path] = None,
     log_file: Optional[Path] = None,
     engines_state_file: Optional[Path] = None,
-    control_state_file: Optional[Path] = None,
+    mp13_config_file: Optional[Path] = None,
     wait_ready_seconds: float = 8.0,
 ) -> Dict[str, Any]:
     """
@@ -263,8 +221,8 @@ def start_http_ingress_background(
         argv += ["--pid-file", str(pid_file)]
     if engines_state_file:
         argv += ["--engines-state-file", str(engines_state_file)]
-    if control_state_file:
-        argv += ["--control-state-file", str(control_state_file)]
+    if mp13_config_file:
+        argv += ["--mp13-config-file", str(mp13_config_file)]
 
     import os as _os
 

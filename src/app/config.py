@@ -44,7 +44,6 @@ PathResolver = _cfg.PathResolver
 get_nested_value = _cfg.get_nested_value
 set_nested_value = _cfg.set_nested_value
 delete_nested_value = _cfg.delete_nested_value
-get_hosting_control_state_path = _cfg.get_hosting_control_state_path
 normalize_hosting_config_selector = _cfg.normalize_hosting_config_selector
 
 
@@ -269,10 +268,11 @@ def _run_host_auth_ops(args: argparse.Namespace) -> Optional[int]:
     if not host_action:
         return None
 
+    from hosting.hosting_configuration import load_hosting_configuration
     from hosting.service.host_service import EngineHostService
 
-    control_state = Path(args.host_control_state_file).expanduser().resolve() if args.host_control_state_file else get_hosting_control_state_path().expanduser().resolve()
-    svc = EngineHostService(control_state_file=control_state)
+    mp13_config = Path(args.host_mp13_config_file).expanduser().resolve() if args.host_mp13_config_file else get_default_config_path().expanduser().resolve()
+    svc = EngineHostService(hosting_configuration=load_hosting_configuration(mp13_config))
 
     if args.host_auth_generate_secret:
         print(json.dumps({"secret": secrets.token_urlsafe(int(args.host_auth_generate_secret))}, indent=2))
@@ -901,8 +901,8 @@ def main() -> int:
         action="store_true",
         help="Print package, torch dependency, and CUDA/GPU runtime status as JSON.",
     )
-    parser.add_argument("--host-control-state-file", type=str, default=None, help="Path to hosting access-control state for host auth management.")
-    parser.add_argument("--host-auth-status", action="store_true", help="Print host auth status from control state.")
+    parser.add_argument("--host-mp13-config-file", type=str, default=None, help="Top-level MP13 configuration used for host auth management.")
+    parser.add_argument("--host-auth-status", action="store_true", help="Print host auth status from unified hosting configuration.")
     parser.add_argument("--host-auth-list-keys", action="store_true", help="List host auth keys (without secrets).")
     parser.add_argument("--host-auth-generate-secret", type=int, default=0, metavar="BYTES", help="Generate a random key secret token (BYTES entropy hint).")
     parser.add_argument("--host-auth-upsert-key", type=str, default=None, metavar="KEY_ID", help="Create/update host auth key.")

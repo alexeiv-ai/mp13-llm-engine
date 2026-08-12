@@ -9,15 +9,15 @@ from __future__ import annotations
 import os
 import threading
 from pathlib import Path
-from typing import Any, Dict, Mapping, Optional
+from typing import Any, Dict, Optional
 
 from .auth import AuthMixin
 from .claims import ClaimsMixin
 from .constants import (
-    DEFAULT_CONTROL_STATE_FILE,
     DEFAULT_ENGINES_STATE_FILE,
     VALID_AUTH_ROLES,
 )
+from ..hosting_configuration import HostingConfiguration
 from .configs import ConfigMixin
 from .control import ControlMixin
 from .core import CoreMixin
@@ -37,7 +37,6 @@ from .state import StateMixin
 from .toolbox_env import ToolboxMaintenanceMixin
 from .toolbox_artifact_upload_service import ToolboxArtifactUploadMixin
 from .toolbox_catalog import ToolboxTemplateCatalogMixin
-from ..toolbox.hermetic_environment import HermeticToolboxEnvironmentBuilder
 from .toolbox_materialization import (
     HermeticToolboxTemplateMaterializer,
     ToolboxTemplateMaterializer,
@@ -47,16 +46,9 @@ from .toolbox_runtime import ToolboxRuntimeMixin
 from .toolbox_state_v2 import AtomicJsonToolboxStateV2Repository
 from .toolbox_plans import AtomicJsonCompleteToolboxDefinitionPlanRepository
 from .toolbox_host_config_state import AtomicJsonToolboxHostConfigurationRepository
-from .toolbox_artifact_store import (
-    AtomicToolboxArtifactStore,
-    validate_trust_public_keys,
-)
+from .toolbox_artifact_store import AtomicToolboxArtifactStore
 from .toolbox_approvals import AtomicJsonToolboxDependencyApprovalRepository
 from .toolbox_confirmations import AtomicJsonToolboxConfirmationRepository
-from ..toolbox.dependency_policy import ToolboxDependencyPolicy
-from ..toolbox.host_project_config import (
-    ToolboxHostProjectConfiguration,
-)
 from ..toolbox.target import detect_current_toolbox_target
 from .workflow_helpers import WorkflowHelperMixin
 
@@ -74,105 +66,36 @@ class EngineHostService(CoreMixin, MetricsMixin, StateMixin, ConfigMixin, Contro
         self,
         *,
         engines_state_file: Optional[Path] = None,
-        control_state_file: Optional[Path] = None,
+        hosting_configuration: HostingConfiguration,
         operation_retention_seconds: Optional[float] = None,
         operation_tombstone_seconds: Optional[float] = None,
         operation_max_count: Optional[int] = None,
         operation_max_tombstones: Optional[int] = None,
         operation_max_inline_result_bytes: Optional[int] = None,
         toolbox_template_materializer: Optional[ToolboxTemplateMaterializer] = None,
-        toolbox_artifact_sources: Optional[Dict[str, Path]] = None,
         toolbox_required_python_abi: Optional[str] = None,
         toolbox_required_platform: Optional[str] = None,
-        toolbox_host_project_configuration: Optional[Mapping[str, Any]] = None,
-        toolbox_trust_public_keys: Optional[Mapping[str, str]] = None,
-        toolbox_source_credentials: Optional[Mapping[str, str]] = None,
         model_runtime_identity: Optional[Dict[str, Any] | ModelRuntimeIdentity] = None,
-        toolbox_dependency_policy: Optional[Dict[str, Any] | ToolboxDependencyPolicy] = None,
     ):
-        self.engines_state_file = (engines_state_file or DEFAULT_ENGINES_STATE_FILE).expanduser().resolve()
-        raw_control = (control_state_file or DEFAULT_CONTROL_STATE_FILE).expanduser().resolve()
-        if raw_control.suffix:
-            self.hosting_root = raw_control.parent.resolve()
-            self.control_state_file = self.hosting_root / "access_control.json"
-        else:
-            self.hosting_root = raw_control.resolve()
-            self.control_state_file = self.hosting_root / "access_control.json"
+        if not isinstance(hosting_configuration, HostingConfiguration):
+            raise TypeError("hosting_configuration_required")
+        self.hosting_configuration = hosting_configuration
+        self.hosting_configuration_revision = hosting_configuration.revision
+        self.hosting_root = Path(hosting_configuration.resolved_paths["scratch_root"]).parent.resolve()
+        self.control_state_file = self.hosting_root / "state" / "control_state.json"
+        self.engines_state_file = (
+            engines_state_file or self.hosting_root / "state" / DEFAULT_ENGINES_STATE_FILE.name
+        ).expanduser().resolve()
         self._runtime_engines_lock = threading.RLock()
         self._runtime_engines: list[Dict[str, Any]] = []
-        self._toolbox_artifact_sources = {
-            str(source_id): Path(path).expanduser().resolve()
-            for source_id, path in dict(toolbox_artifact_sources or {}).items()
-        }
-        self._toolbox_host_project_config = (
-            ToolboxHostProjectConfiguration.from_dict(toolbox_host_project_configuration)
-            if toolbox_host_project_configuration is not None
-            else None
-        )
-        if self._toolbox_host_project_config is None and toolbox_trust_public_keys is not None:
-            raise ValueError("toolbox_trust_public_keys_without_configuration")
-        self._toolbox_trust_public_keys = (
-            validate_trust_public_keys(
-                self._toolbox_host_project_config, toolbox_trust_public_keys
-            )
-            if self._toolbox_host_project_config is not None
-            and toolbox_trust_public_keys is not None
-            else None
-        )
-        self._toolbox_source_credentials = {
-            str(key): str(value)
-            for key, value in dict(toolbox_source_credentials or {}).items()
-        }
-        expected_credential_refs = (
-            {
-                source.credential_ref
-                for source in self._toolbox_host_project_config.sources
-                if source.credential_ref is not None
-            }
-            if self._toolbox_host_project_config is not None
-            else set()
-        )
-        if set(self._toolbox_source_credentials) != expected_credential_refs:
-            raise ValueError("toolbox_source_credentials_invalid")
+        self._toolbox_artifact_sources: Dict[str, Path] = {}
+        self._toolbox_host_project_config = None
+        self._toolbox_trust_public_keys = None
+        self._toolbox_source_credentials: Dict[str, str] = {}
         current_target = detect_current_toolbox_target()
         configured_abi = ""
         configured_platform = ""
-        if self._toolbox_host_project_config is not None:
-            configured_abi = self._toolbox_host_project_config.target.python_abi
-            configured_platform = self._toolbox_host_project_config.target.platform
-            if toolbox_required_python_abi and toolbox_required_python_abi != configured_abi:
-                raise ValueError("toolbox_required_python_abi_conflict")
-            if toolbox_required_platform and toolbox_required_platform != configured_platform:
-                raise ValueError("toolbox_required_platform_conflict")
-            if toolbox_artifact_sources is not None:
-                configured_sources = {
-                    item.source_id
-                    for item in self._toolbox_host_project_config.sources
-                    if item.kind == "airgap_store"
-                }
-                if not configured_sources.issubset(set(toolbox_artifact_sources)):
-                    raise ValueError("toolbox_artifact_sources_incomplete")
-        if toolbox_template_materializer is not None and toolbox_artifact_sources is not None:
-            raise ValueError("toolbox_materializer_configuration_conflict")
-        self._hermetic_toolbox_environment_builder = (
-            HermeticToolboxEnvironmentBuilder(
-                self.hosting_root,
-                artifact_sources=self._toolbox_artifact_sources,
-                gc_grace_ms=(
-                    self._toolbox_host_project_config.retention.artifact_cache_grace_seconds * 1000
-                    if self._toolbox_host_project_config is not None
-                    else 24 * 60 * 60 * 1000
-                ),
-                build_timeout_seconds=(
-                    self._toolbox_host_project_config.resolution.timeout_seconds
-                    if self._toolbox_host_project_config is not None
-                    else 300
-                ),
-            )
-            if self._toolbox_host_project_config is not None
-            or toolbox_artifact_sources is not None
-            else None
-        )
+        self._hermetic_toolbox_environment_builder = None
         if toolbox_template_materializer is not None:
             self._toolbox_template_materializer = toolbox_template_materializer
         elif self._hermetic_toolbox_environment_builder is not None:
@@ -206,13 +129,7 @@ class EngineHostService(CoreMixin, MetricsMixin, StateMixin, ConfigMixin, Contro
         self._toolbox_confirmations = AtomicJsonToolboxConfirmationRepository(
             self.hosting_root / "state" / "toolbox_definition_confirmations.json"
         )
-        self._configured_toolbox_dependency_policy = (
-            toolbox_dependency_policy
-            if isinstance(toolbox_dependency_policy, ToolboxDependencyPolicy)
-            else ToolboxDependencyPolicy.from_dict(toolbox_dependency_policy)
-            if toolbox_dependency_policy is not None
-            else None
-        )
+        self._configured_toolbox_dependency_policy = None
         self._model_runtime_identity = (
             model_runtime_identity
             if isinstance(model_runtime_identity, ModelRuntimeIdentity)
