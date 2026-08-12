@@ -784,6 +784,9 @@ class AtomicJsonCompleteToolboxDefinitionPlanRepository:
             "owner_actor_id": str(owner_actor_id or "").strip(),
             "authority_id": str(authority_id or "").strip(),
         }
+        identity_profile_changes = identity_payload["profile_changes"]
+        if not isinstance(identity_profile_changes, list):
+            raise ValueError("toolbox_complete_plan_profile_changes_invalid")
         record = PersistedCompleteToolboxDefinitionPlan(
             plan_id=identity_digest(TOOLBOX_COMPLETE_PLAN_ID_DOMAIN, identity_payload),
             active_definition=active_definition,
@@ -797,7 +800,7 @@ class AtomicJsonCompleteToolboxDefinitionPlanRepository:
             parent_plan_id=parent_plan_id,
             reduction=reduction,
             draft_plan=draft.to_persisted_dict(),
-            profile_changes=tuple(identity_payload["profile_changes"]),
+            profile_changes=tuple(identity_profile_changes),
             created_at_ms=now_ms,
             expires_at_ms=now_ms + ttl_ms,
             owner_actor_id=owner_actor_id,

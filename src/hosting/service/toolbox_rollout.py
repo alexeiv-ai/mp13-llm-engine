@@ -245,15 +245,17 @@ class ToolboxDefinitionRolloutCoordinator:
             completed_units=0,
             total_units=len(changed),
         )
-        spawn_kwargs = {
-            "toolbox_id": tid,
-            "definition_revision": draft.definition.revision,
-            "assignments": assignments,
-            "resolved_environments": dict(resolved_environments or {}),
-        }
-        if planned_environment_records is not None:
-            spawn_kwargs["planned_environment_records"] = dict(planned_environment_records)
-        assignments = orchestrator.spawn_resolved_assignments(**spawn_kwargs)
+        assignments = orchestrator.spawn_resolved_assignments(
+            toolbox_id=tid,
+            definition_revision=draft.definition.revision,
+            assignments=assignments,
+            resolved_environments=dict(resolved_environments or {}),
+            planned_environment_records=(
+                dict(planned_environment_records)
+                if planned_environment_records is not None
+                else None
+            ),
+        )
         if preparation_state is not None:
             preparation_state["assignments"] = assignments
         candidates = [
