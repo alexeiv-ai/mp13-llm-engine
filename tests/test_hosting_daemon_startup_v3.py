@@ -109,3 +109,39 @@ def test_daemon_validates_configuration_before_initializing_pid_or_listener(tmp_
     with pytest.raises(HostingConfigurationError, match="mp13_configuration_missing"):
         EngineHostDaemon(mp13_config_file=missing, pid_file=tmp_path / "daemon.pid")
     assert not (tmp_path / "daemon.pid").exists()
+
+
+def test_background_launcher_never_serializes_configuration_or_secrets(monkeypatch, tmp_path: Path) -> None:
+    config_file = _write_configuration(tmp_path)
+    authority = tmp_path / "hosting" / "hosting_config.json"
+    payload = json.loads(authority.read_text(encoding="utf-8"))
+    payload["package_management"]["credentials"] = {"private": "SENTINEL_LAUNCH_SECRET"}
+    authority.write_text(json.dumps(payload), encoding="utf-8")
+    captured = {}
+
+    class FakePidFile:
+        path = tmp_path / "daemon.pid"
+        def __init__(self, _path=None): pass
+        def read(self): return {}
+        def process_alive(self): return False
+        def is_alive(self): return False
+
+    class FakeProcess:
+        pid = 43210
+        def poll(self): return None
+
+    ticks = iter((0.0, 2.0, 4.0, 6.0))
+    monkeypatch.setattr("hosting.daemon.background.DaemonPidFile", FakePidFile)
+    monkeypatch.setattr("hosting.daemon.background.time.time", lambda: next(ticks))
+    monkeypatch.setattr("hosting.daemon.background.time.sleep", lambda _seconds: None)
+    monkeypatch.setattr(
+        "hosting.daemon.background.subprocess.Popen",
+        lambda argv, **kwargs: captured.update(argv=list(argv), kwargs=kwargs) or FakeProcess(),
+    )
+    with pytest.raises(RuntimeError, match="did not become ready"):
+        start_daemon_background(mp13_config_file=config_file, wait_ready_seconds=0.01)
+    serialized = json.dumps(captured, default=str)
+    assert "SENTINEL_LAUNCH_SECRET" not in serialized
+    assert "package_management" not in serialized
+    assert "credentials" not in serialized
+    assert captured["argv"][-2:] == ["--mp13-config-file", str(config_file)]

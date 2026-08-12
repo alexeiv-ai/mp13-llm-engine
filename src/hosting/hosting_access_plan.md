@@ -818,7 +818,7 @@ exercise an admin-only call without another handshake.
   templates, environments, references, or GC.
 - [x] Prove equal roles granted by password and public key receive equal policy.
 - [x] Prove caller hashes cannot substitute for daemon-computed hashes.
-- [ ] Prove secrets and restricted local paths are absent from arguments,
+- [x] Prove secrets and restricted local paths are absent from arguments,
   process inspection fixtures, logs, audit, receipts, errors, and remote status.
 
 Proof: record the exact security suite and negative-path results in

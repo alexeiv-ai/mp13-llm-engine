@@ -584,6 +584,16 @@ the slice.
 - Remaining: complete the process-argument/log/audit/receipt/error/path sentinel
   sweep before closing R9.2
 
+### TEST-R9.2B — secret and path leakage acceptance
+
+- Date: 2026-08-11
+- Plan IDs: R9.2 redaction; P2; high expertise
+- Proof: 23 focused startup/configuration/package tests passed with sentinel
+  credential/query/path values; detached process arguments and environment
+  contained only the top-level configuration location, while configuration
+  bodies, credentials, and package policy were absent; remote inspection,
+  errors, receipts, and audit omitted secret values and resolved host paths
+
 Append one concise entry per completed slice. Include exact commands, counts,
 durations where useful, negative-path results, commit pin, and dependent receipt
 impact. Do not paste an unstructured full test transcript.
