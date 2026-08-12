@@ -631,6 +631,22 @@ class ToolboxRuntimeMixin:
         active_definition_model = ToolboxDefinitionSpec.from_dict(
             self.toolbox_get_definition(toolbox_id=model.toolbox_id)["definition"]
         )
+        changes = (
+            deterministic_definition_changes(active_definition_model, model)
+            if normalized_changes is None
+            else tuple(
+                item
+                if isinstance(item, NormalizedToolboxToolChange)
+                else NormalizedToolboxToolChange.from_dict(item)
+                for item in normalized_changes
+            )
+        )
+        change_ids_by_tool = {
+            key: item.change_id
+            for item in changes
+            for key in (item.prior_tool_key, item.tool_key)
+            if key is not None
+        }
         context = self._toolbox_definition_planning_context()
         configuration = context["configuration"]
         if configuration is None:
@@ -673,6 +689,7 @@ class ToolboxRuntimeMixin:
             candidates=candidates,
             active_environments=active_environments,
             dependency_approval_required=approval_required,
+            tool_change_ids=change_ids_by_tool,
         )
         # Environment references require an integer revision. Derive a stable,
         # JSON-safe value from the immutable definition identity rather than the
@@ -683,16 +700,6 @@ class ToolboxRuntimeMixin:
             environment_mutations=environment_mutations,
             platform=context["platform"],
             consumer_revision=consumer_revision,
-        )
-        changes = (
-            deterministic_definition_changes(active_definition_model, model)
-            if normalized_changes is None
-            else tuple(
-                item
-                if isinstance(item, NormalizedToolboxToolChange)
-                else NormalizedToolboxToolChange.from_dict(item)
-                for item in normalized_changes
-            )
         )
         tool_analysis = build_toolbox_tool_analysis(
             active_definition=active_definition_model,
@@ -727,8 +734,14 @@ class ToolboxRuntimeMixin:
             owner_actor_id=str(owner_actor_id or "").strip(),
             authority_id=str(authority_id or "").strip(),
         )
-        state = "confirmation_required"
-        code = "toolbox_definition_confirmation_required"
+        return self._toolbox_definition_plan_public_projection(
+            record, approval_required=approval_required
+        )
+
+    @staticmethod
+    def _toolbox_definition_plan_public_projection(
+        record: Any, *, approval_required: bool
+    ) -> Dict[str, Any]:
         return {
             "contract": "hosting.toolbox.definition_plan.v2",
             "plan_id": record.plan_id,
@@ -744,7 +757,9 @@ class ToolboxRuntimeMixin:
             "approval_required": approval_required,
             "changes": [item.to_dict() for item in record.changes],
             "tool_analysis": [item.to_dict() for item in record.tool_analysis],
-            "environment_mutations": [item.to_dict() for item in environment_mutations],
+            "environment_mutations": [
+                item.to_dict() for item in record.environment_mutations
+            ],
             "profile_diff": {
                 classification: sum(
                     item["classification"] == classification for item in record.profile_changes
@@ -754,8 +769,8 @@ class ToolboxRuntimeMixin:
             "reduction": record.reduction,
             "diagnostics": [],
             "user_projection": {
-                "state": state,
-                "code": code,
+                "state": "confirmation_required",
+                "code": "toolbox_definition_confirmation_required",
                 "summary": (
                     "Review and confirm the exact package alternatives before apply."
                 ),
@@ -946,6 +961,50 @@ class ToolboxRuntimeMixin:
             plan = self._toolbox_definition_plans.get(plan_id, now_ms=now_ms)
             if plan.owner_actor_id != owner_actor_id or plan.authority_id != authority_id:
                 raise PermissionError("toolbox_definition_plan_not_found")
+            choice_by_environment = {
+                item["environment_id"]: item for item in choices
+            }
+            rejected_environment_ids = set()
+            for offer in plan.environment_mutations:
+                choice = choice_by_environment.get(offer.environment_id)
+                if choice is None:
+                    continue
+                alternative = next(
+                    (
+                        item for item in offer.alternatives
+                        if item.alternative_id == choice.get("alternative_id")
+                    ),
+                    None,
+                )
+                if (
+                    alternative is not None
+                    and not bool(choice.get("accept_package_changes"))
+                    and any(
+                        item.mutation in {"addition", "transition"}
+                        for item in alternative.package_mutations
+                    )
+                ):
+                    rejected_environment_ids.add(offer.environment_id)
+            if rejected_environment_ids:
+                affected_change_ids = sorted({
+                    item.change_id for item in plan.tool_analysis
+                    if item.environment_id in rejected_environment_ids
+                })[:512]
+                return self._hosted_operations.finish(
+                    operation_id=operation_id,
+                    lifecycle=HostedOperationLifecycle.TERMINAL_FAILURE,
+                    envelope={
+                        "contract": "hosting.toolbox.definition_confirmation_failure.v1",
+                        "status": "failed",
+                        "code": "tool_change_revision_required",
+                        "affected_change_ids": affected_change_ids,
+                        "user_projection": {
+                            "state": "review_required",
+                            "code": "tool_change_revision_required",
+                            "summary": "Revise the plan to exclude rejected package changes.",
+                        },
+                    },
+                )
             reduction = reduce_toolbox_confirmation(
                 active_definition=plan.active_definition,
                 proposed_definition=plan.proposed_definition,
@@ -990,12 +1049,24 @@ class ToolboxRuntimeMixin:
                 expires_at_ms=plan.expires_at_ms,
             )
             result = {
-                "contract": "hosting.toolbox.definition_confirmation_result.v1",
-                "status": "confirmed",
+                "contract": "hosting.toolbox.confirmation_receipt.v1",
                 "confirmation_ref": confirmation_ref,
                 "plan_id": plan.plan_id,
+                "definition_revision": reduction.effective_definition.revision,
+                "accepted_change_ids": sorted(item.change_id for item in plan.changes),
+                "selected_alternatives": [
+                    dict(item) for item in reduction.selected_alternatives
+                ],
+                "package_mutations": [
+                    dict(item) for item in reduction.package_mutations
+                ],
+                "dependency_approval_required": reduction.dependency_approval_required,
                 "expires_at_ms": receipt.expires_at_ms,
-                **reduction.to_dict(),
+                "user_projection": {
+                    "state": "confirmed",
+                    "code": "toolbox_definition_confirmed",
+                    "summary": "The exact toolbox definition plan is confirmed.",
+                },
             }
             return self._hosted_operations.finish(
                 operation_id=operation_id,

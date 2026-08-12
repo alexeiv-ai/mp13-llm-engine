@@ -2,7 +2,7 @@
 
 Last updated: 2026-08-12
 
-Status: active on R7.1 exact public projections
+Status: active on R7.1 stale/retry/concurrency proofs
 
 This is the current execution ledger for
 [`hosting_access_plan.md`](hosting_access_plan.md). Detailed completed-slice
@@ -12,10 +12,10 @@ compact evidence index, and external completion gates.
 
 ## 1. Current gate and resume order
 
-Active slice: **R7.1 exact public projections**. Generic planning, CAS changes,
-per-tool evidence, and immutable selective child replanning are complete. The
-next boundary is replacing provisional plan/confirmation assertions with the
-frozen exact v2/v1 public shapes.
+Active slice: **R7.1 stale/retry/concurrency proofs**. Planning, CAS changes,
+per-tool evidence, child replanning, and exact public v2/v1 projections are
+complete. The remaining R7.1 boundary is proving stale approval/source and
+retry/restart/concurrent revision cannot execute unapproved bytes or leak refs.
 
 Resume in this order:
 
@@ -72,8 +72,8 @@ The pre-R7 P0 clean-cut items are complete.
 
 ### R7.1 planning and selective revision
 
-- Replace provisional field-level plan/confirmation assertions while retaining
-  the existing record identifiers.
+- Prove stale approval/source mutation and retry/restart/concurrent revision
+  cannot execute unapproved bytes or leak references.
 
 ### R7.2 candidate lifecycle
 
@@ -114,6 +114,7 @@ The pre-R7 P0 clean-cut items are complete.
 | CODE/TEST-R7.1C | Tool-change planning is exposed through authorized daemon/channel/CLI/reference surfaces and persists normalized proposal metadata; combined focused lane passed 109 tests (one removed-constructor fixture deselected). |
 | CODE/TEST-R7.1D | Immutable plans persist bounded per-change import evidence, mapped distributions, environment grouping, preferred exact package mutations, and approval flags; combined focused lane passed 110 tests. |
 | CODE/TEST-R7.1E | Authorized selective revision validates complete decisions/evidenced denials, preserves active exclusions, cascades dependents, and fully replans parent-bound immutable children (including empty results); expanded lane passed 143 tests. |
+| CODE/TEST-R7.1F | Public plans enforce the frozen exact v2 projection with nested change IDs; confirmation emits the exact v1 projection or revision-required failure without a receipt; expanded lane passed 153 tests. |
 | CODE-R8A–C | Versioned neutral state, Python/JS shared manager adoption, GC/repair controls passed focused coverage. |
 | CODE/TEST-R9 partial | Structured auth, role/hash authority, redaction, startup modes, generic lifecycle, and retry/restart identity passed focused coverage. |
 | TEST-R8.2C checkpoint | Workflow operation suite passed; full helper suite passed 116 tests on resume. |

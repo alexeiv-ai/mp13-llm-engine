@@ -131,9 +131,10 @@ def _complete_inputs(definition: dict):
         package_mutations=(mutation,),
     )
     tool_key = draft.definition.auto_requests[0].stable_key
+    change_id = deterministic_definition_changes(active, draft.definition)[0].change_id
     environment = ToolboxEnvironmentMutationSpec(
         environment_id=identity_digest("test.toolbox.complete.environment.v1", tool_key),
-        tool_mutations=(ToolboxToolMutationSpec(tool_key, "added"),),
+        tool_mutations=(ToolboxToolMutationSpec(tool_key, "added", change_id),),
         base_template_id=draft.profiles[0].template_id,
         base_template_revision="sha256:" + "4" * 64,
         alternatives=(alternative,),

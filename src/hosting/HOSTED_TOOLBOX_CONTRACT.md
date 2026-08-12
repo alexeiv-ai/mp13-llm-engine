@@ -341,6 +341,13 @@ cascade exclusions. The effective definition then passes through the complete
 planner, resolver, generic package-lock, and environment-request path again;
 the parent record and all parent locks remain immutable.
 
+Every changed nested tool mutation carries the same caller or host-generated
+change ID as its normalized change and per-tool analysis. Successful
+confirmation projects only `hosting.toolbox.confirmation_receipt.v1`'s frozen
+public fields. Declining an offered addition or transition creates no receipt;
+it returns `tool_change_revision_required` with the bounded affected change IDs
+so the caller must create and review a selective child plan.
+
 The resulting plan is stored in the process-safe atomic definition-plan
 repository. Its ID binds toolbox ID, definition revision, expected active
 revision, catalog revision, package-policy revision, resolved profiles, and

@@ -362,8 +362,7 @@ def reduce_toolbox_confirmation(
         for item in choices
     )
     if (
-        not offers
-        or len({item.environment_id for item in offers}) != len(offers)
+        len({item.environment_id for item in offers}) != len(offers)
         or len({item.environment_id for item in decisions}) != len(decisions)
         or {item.environment_id for item in offers} != {item.environment_id for item in decisions}
     ):
@@ -690,6 +689,7 @@ def build_toolbox_environment_mutations(
     candidates: Sequence[VerifiedToolboxResolutionCandidate],
     active_environments: Sequence[ActiveToolboxEnvironmentResolution] = (),
     dependency_approval_required: bool,
+    tool_change_ids: Mapping[str, str] | None = None,
 ) -> tuple[ToolboxEnvironmentMutationSpec, ...]:
     """Build bounded deterministic offers from already verified exact candidates."""
 
@@ -713,6 +713,25 @@ def build_toolbox_environment_mutations(
             ) else "updated"
         )
         for key in sorted(set(active_items) | set(proposed_items))
+    }
+    supplied_change_ids = dict(tool_change_ids or {})
+    change_ids = {
+        key: (
+            None
+            if change == "unchanged"
+            else supplied_change_ids.get(key)
+            or "host:" + identity_digest(
+                "hosting.toolbox.host_change_id.v1",
+                {
+                    "kind": {
+                        "added": "add", "updated": "update", "removed": "remove"
+                    }[change],
+                    "prior_tool_key": None if change == "added" else key,
+                    "tool_key": None if change == "removed" else key,
+                },
+            )
+        )
+        for key, change in actual_changes.items()
     }
     active_by_tool: dict[str, ActiveToolboxEnvironmentResolution] = {}
     for environment in active_environments:
@@ -783,7 +802,7 @@ def build_toolbox_environment_mutations(
                 )
             )
         tool_mutations = tuple(
-            ToolboxToolMutationSpec(key, actual_changes[key])
+            ToolboxToolMutationSpec(key, actual_changes[key], change_ids[key])
             for key in profile.assigned_tool_keys
         )
         required_distributions = tuple(
@@ -847,7 +866,8 @@ def build_toolbox_environment_mutations(
             ToolboxEnvironmentMutationSpec(
                 environment_id=environment.environment_id,
                 tool_mutations=tuple(
-                    ToolboxToolMutationSpec(key, "removed") for key in removed_keys
+                    ToolboxToolMutationSpec(key, "removed", change_ids[key])
+                    for key in removed_keys
                 ),
                 base_template_id=environment.base_template_id,
                 base_template_revision=environment.base_template_revision,

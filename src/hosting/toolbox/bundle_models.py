@@ -607,22 +607,40 @@ class ToolboxPackageMutationSpec:
 class ToolboxToolMutationSpec:
     tool_key: str
     change: str
+    change_id: str | None
 
     def __post_init__(self) -> None:
         key = _bounded_plan_text(self.tool_key, label="toolbox_plan_tool_key", maximum=512)
         change = _bounded_plan_text(self.change, label="toolbox_plan_tool_change", maximum=32)
         if change not in {"added", "updated", "unchanged", "removed"}:
             raise ValueError("toolbox_plan_tool_change_invalid")
+        change_id = (
+            None
+            if self.change_id is None
+            else _bounded_plan_text(
+                self.change_id, label="toolbox_plan_change_id", maximum=128
+            )
+        )
+        if (change == "unchanged") != (change_id is None):
+            raise ValueError("toolbox_plan_tool_change_id_invalid")
         object.__setattr__(self, "tool_key", key)
         object.__setattr__(self, "change", change)
+        object.__setattr__(self, "change_id", change_id)
 
     def to_dict(self) -> dict[str, str]:
-        return {"tool_key": self.tool_key, "change": self.change}
+        return {
+            "tool_key": self.tool_key,
+            "change": self.change,
+            "change_id": self.change_id,
+        }
 
     @classmethod
     def from_dict(cls, payload: Mapping[str, Any]) -> "ToolboxToolMutationSpec":
         row = dict(payload or {})
-        _strict_model_fields(row, {"tool_key", "change"}, label="toolbox_plan_tool_mutation")
+        _strict_model_fields(
+            row, {"tool_key", "change", "change_id"},
+            label="toolbox_plan_tool_mutation",
+        )
         return cls(**row)
 
 

@@ -511,6 +511,16 @@ class PersistedCompleteToolboxDefinitionPlan:
         }
         if actual_changed_keys != planned_changed_keys:
             raise ValueError("toolbox_complete_plan_change_coverage_invalid")
+        for environment in mutations:
+            for tool in environment.tool_mutations:
+                if tool.change == "unchanged":
+                    continue
+                matching = [
+                    item for item in changes
+                    if tool.tool_key in {item.prior_tool_key, item.tool_key}
+                ]
+                if len(matching) != 1 or tool.change_id != matching[0].change_id:
+                    raise ValueError("toolbox_complete_plan_change_id_mismatch")
         tool_analysis = tuple(sorted(self.tool_analysis, key=lambda item: item.change_id))
         if (
             any(not isinstance(item, ToolboxToolAnalysis) for item in tool_analysis)

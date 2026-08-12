@@ -326,14 +326,14 @@ def test_confirmation_decline_skips_new_preserves_update_and_applies_removal() -
     changed = _offer(
         "changed",
         tools=(
-            ToolboxToolMutationSpec("pkg.add:Add", "added"),
-            ToolboxToolMutationSpec("pkg.update:Update", "updated"),
+            ToolboxToolMutationSpec("pkg.add:Add", "added", "change-add"),
+            ToolboxToolMutationSpec("pkg.update:Update", "updated", "change-update"),
         ),
         mutations=(package_change,),
     )
     removed = _offer(
         "removed",
-        tools=(ToolboxToolMutationSpec("pkg.remove:Remove", "removed"),),
+        tools=(ToolboxToolMutationSpec("pkg.remove:Remove", "removed", "change-remove"),),
         mutations=(removal,),
     )
 
@@ -383,12 +383,12 @@ def test_confirmation_propagates_shared_environment_skip_and_rejects_unoffered_c
     )
     producer = _offer(
         "producer",
-        tools=(ToolboxToolMutationSpec("pkg.producer:Producer", "added"),),
+        tools=(ToolboxToolMutationSpec("pkg.producer:Producer", "added", "change-producer"),),
         mutations=(addition,),
     )
     consumer = _offer(
         "consumer",
-        tools=(ToolboxToolMutationSpec("pkg.consumer:Consumer", "added"),),
+        tools=(ToolboxToolMutationSpec("pkg.consumer:Consumer", "added", "change-consumer"),),
         mutations=(),
         required_tools={"pkg.consumer:Consumer": ("pkg.producer:Producer",)},
     )
@@ -445,7 +445,7 @@ def test_plan_offer_models_reject_source_secrets_and_more_than_three_alternative
     with pytest.raises(ValueError, match="toolbox_plan_alternatives_invalid"):
         ToolboxEnvironmentMutationSpec(
             environment_id="sha256:" + "1" * 64,
-            tool_mutations=(ToolboxToolMutationSpec("pkg.add:Add", "added"),),
+            tool_mutations=(ToolboxToolMutationSpec("pkg.add:Add", "added", "change-add"),),
             base_template_id="core",
             base_template_revision="sha256:" + "2" * 64,
             alternatives=(alternative, alternative, alternative, alternative),

@@ -337,7 +337,7 @@ def test_tool_analysis_binds_bounded_evidence_environment_packages_and_approval(
     environment_id = identity_digest("test.analysis.environment.v1", request)
     environment = ToolboxEnvironmentMutationSpec(
         environment_id=environment_id,
-        tool_mutations=(ToolboxToolMutationSpec("pkg.tools:Weather", "added"),),
+        tool_mutations=(ToolboxToolMutationSpec("pkg.tools:Weather", "added", changes[0].change_id),),
         base_template_id="core",
         base_template_revision="sha256:" + "a" * 64,
         alternatives=(alternative,),
@@ -382,7 +382,9 @@ def _offer(tool_key: str, change: str, *, required_tools=()):
     )
     return ToolboxEnvironmentMutationSpec(
         environment_id=environment_id,
-        tool_mutations=(ToolboxToolMutationSpec(tool_key, change),),
+        tool_mutations=(ToolboxToolMutationSpec(
+            tool_key, change, identity_digest("test.revision.change.v1", tool_key)
+        ),),
         base_template_id="core",
         base_template_revision="sha256:" + "a" * 64,
         alternatives=(alternative,),
@@ -564,3 +566,185 @@ def test_revision_worker_replans_child_with_parent_identity_and_fresh_closure() 
         "cascade_exclusions": [],
     }
     assert ToolboxDefinitionSpec.from_dict(service.replanned["definition"]).auto_requests == ()
+
+
+def test_confirmation_package_rejection_requires_child_revision_without_receipt() -> None:
+    mutation = ToolboxPackageMutationSpec(
+        "requests", "addition", "direct", None, "2.32.0"
+    )
+    alternative = ToolboxResolutionAlternativeSpec(
+        alternative_id="sha256:" + "1" * 64,
+        source_ids=("release",),
+        source_origins=("https://packages.example.invalid/simple",),
+        lock_digest="sha256:" + "2" * 64,
+        artifacts=(),
+        package_mutations=(mutation,),
+    )
+    offer = ToolboxEnvironmentMutationSpec(
+        environment_id="sha256:" + "3" * 64,
+        tool_mutations=(ToolboxToolMutationSpec("pkg.tools:Weather", "added", "change-weather"),),
+        base_template_id="core",
+        base_template_revision="sha256:" + "4" * 64,
+        alternatives=(alternative,),
+        preferred_alternative_id=alternative.alternative_id,
+        alternatives_truncated=False,
+        confirmation_required=True,
+        dependency_approval_required=False,
+        dependency_edges=(ToolboxDependencyEdgeSpec("pkg.tools:Weather", (), ("requests",)),),
+    )
+    parent = SimpleNamespace(
+        owner_actor_id="actor:one",
+        authority_id="workspace:one",
+        environment_mutations=(offer,),
+        tool_analysis=(SimpleNamespace(
+            change_id="change-weather", environment_id=offer.environment_id
+        ),),
+    )
+
+    class Operations:
+        def mark_dispatch_claimed(self, **_kwargs):
+            return None
+
+        def finish(self, *, lifecycle, envelope, **_kwargs):
+            return {"lifecycle": lifecycle.value, "result": envelope}
+
+    service = SimpleNamespace(
+        _hosted_operations=Operations(),
+        _toolbox_definition_plans=SimpleNamespace(get=lambda *_args, **_kwargs: parent),
+        _toolbox_confirmations=SimpleNamespace(
+            create=lambda **_kwargs: (_ for _ in ()).throw(
+                AssertionError("rejected confirmation created receipt")
+            )
+        ),
+    )
+    result = ToolboxRuntimeMixin._run_toolbox_definition_confirmation(
+        service,
+        operation_id="op-reject",
+        plan_id="sha256:" + "5" * 64,
+        choices=[{
+            "environment_id": offer.environment_id,
+            "alternative_id": alternative.alternative_id,
+            "accept_package_changes": False,
+        }],
+        owner_actor_id="actor:one",
+        authority_id="workspace:one",
+    )
+
+    assert result["lifecycle"] == HostedOperationLifecycle.TERMINAL_FAILURE.value
+    assert result["result"]["code"] == "tool_change_revision_required"
+    assert result["result"]["affected_change_ids"] == ["change-weather"]
+    assert "confirmation_ref" not in result["result"]
+
+
+def test_empty_confirmation_public_projection_is_exact_v1_shape() -> None:
+    definition = _definition()
+    revision = "sha256:" + "1" * 64
+    pins = SimpleNamespace(
+        configuration_revision=revision,
+        catalog_revision="sha256:" + "2" * 64,
+        host_config_revision="sha256:" + "3" * 64,
+        source_set_revision="sha256:" + "4" * 64,
+        dependency_policy_revision="sha256:" + "5" * 64,
+        target="cp312-win_amd64",
+    )
+    parent = SimpleNamespace(
+        plan_id="sha256:" + "6" * 64,
+        toolbox_id="demo",
+        owner_actor_id="actor:one",
+        authority_id="workspace:one",
+        active_definition=definition,
+        proposed_definition=definition,
+        environment_mutations=(),
+        tool_analysis=(),
+        changes=(),
+        pins=pins,
+        expires_at_ms=999_999_999_999_999,
+    )
+
+    class Operations:
+        def mark_dispatch_claimed(self, **_kwargs):
+            return None
+
+        def finish(self, *, lifecycle, envelope, **_kwargs):
+            return {"lifecycle": lifecycle.value, "result": envelope}
+
+    class Service(ToolboxRuntimeMixin):
+        hosting_configuration_revision = revision
+        _hosted_operations = Operations()
+        _toolbox_definition_plans = SimpleNamespace(get=lambda *_args, **_kwargs: parent)
+        _toolbox_confirmations = SimpleNamespace(create=lambda **_kwargs: (
+            "confirmation_empty",
+            SimpleNamespace(expires_at_ms=parent.expires_at_ms),
+        ))
+
+        def _toolbox_definition_planning_context(self):
+            return {
+                "configuration": SimpleNamespace(
+                    config_revision=pins.host_config_revision,
+                    source_set_revision=pins.source_set_revision,
+                ),
+                "catalog_revision": pins.catalog_revision,
+                "policy": SimpleNamespace(
+                    revision=pins.dependency_policy_revision,
+                    allow_custom=False,
+                    custom_requires_approval=False,
+                ),
+                    "target": pins.target,
+                    "catalog": {},
+                    "templates": (),
+                "python_abi": "cp312",
+                "platform": "win_amd64",
+                "runtime_identity": {
+                    "version": "3.12.7",
+                    "artifact_digest": "sha256:" + "7" * 64,
+                },
+            }
+
+        def _validate_definition_policy(self, *_args, **_kwargs):
+            return None
+
+    result = Service()._run_toolbox_definition_confirmation(
+        operation_id="op-confirm",
+        plan_id=parent.plan_id,
+        choices=[],
+        owner_actor_id="actor:one",
+        authority_id="workspace:one",
+    )
+    envelope = result["result"]
+    assert result["lifecycle"] == HostedOperationLifecycle.TERMINAL_SUCCESS.value
+    assert set(envelope) == {
+        "contract", "confirmation_ref", "plan_id", "definition_revision",
+        "accepted_change_ids", "selected_alternatives", "package_mutations",
+        "dependency_approval_required", "expires_at_ms", "user_projection",
+    }
+    assert envelope["contract"] == "hosting.toolbox.confirmation_receipt.v1"
+    assert envelope["accepted_change_ids"] == []
+
+
+def test_definition_plan_public_projection_has_frozen_exact_field_set() -> None:
+    record = SimpleNamespace(
+        plan_id="sha256:" + "1" * 64,
+        parent_plan_id=None,
+        toolbox_id="demo",
+        proposal_kind="tool_changes",
+        proposed_definition=_definition(),
+        pins=SimpleNamespace(to_dict=lambda: {"target": "cp312-win_amd64"}),
+        expires_at_ms=1234,
+        changes=(),
+        tool_analysis=(),
+        environment_mutations=(),
+        profile_changes=(),
+        reduction=None,
+    )
+    result = ToolboxRuntimeMixin._toolbox_definition_plan_public_projection(
+        record, approval_required=False
+    )
+
+    assert set(result) == {
+        "contract", "plan_id", "parent_plan_id", "toolbox_id", "proposal_kind",
+        "definition_hash", "expected_revision", "pins", "expires_at_ms",
+        "can_apply", "confirmation_required", "approval_required", "changes",
+        "tool_analysis", "environment_mutations", "profile_diff", "reduction",
+        "diagnostics", "user_projection",
+    }
+    assert result["contract"] == "hosting.toolbox.definition_plan.v2"

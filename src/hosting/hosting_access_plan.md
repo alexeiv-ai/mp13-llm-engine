@@ -173,7 +173,7 @@ R7 plan/confirmation field assertions are provisional and must be replaced.
   environment grouping, exact package mutations, and approval requirements.
 - [x] Build immutable child plans for selective rejection, recomputing the
   complete closure and locks and reporting preserved/skipped/cascade outcomes.
-- [ ] Replace provisional plan/confirmation field-level assertions while
+- [x] Replace provisional plan/confirmation field-level assertions while
   retaining the frozen v2/v1 identifiers and exact handoff schemas.
 - [ ] Prove stale approval, source mutation, retry, restart, and concurrent
   revision cannot execute unapproved bytes or leak references.
