@@ -333,11 +333,6 @@ class EngineHostControlChannel:
                 except Exception:
                     pass
                 self._connection = None
-        if ssh_key is not None:
-            try:
-                _ = self._invoke("set-control-config", {"ssh_key": str(ssh_key).strip() or None})
-            except Exception:
-                pass
         return self.get_target()
 
     def _cmd_env(self) -> Dict[str, str]:
@@ -3944,41 +3939,6 @@ class EngineHostControlChannel:
         if mode is not None:
             payload["mode"] = str(mode).strip().lower()
         res = self._invoke("set-endpoint-mode-override", payload)
-        return dict(res or {})
-
-    def set_control_config(
-        self,
-        *,
-        ssh_key: Optional[str] = None,
-        require_auth: Optional[bool] = None,
-        access_profile: Optional[Dict[str, Any]] = None,
-        endpoint_mode_default: Optional[str] = None,
-        lifecycle_profile: Optional[str] = None,
-        lifecycle_policy: Optional[Dict[str, Any]] = None,
-        traffic_policy: Optional[Dict[str, Any]] = None,
-        engine_traffic_policies: Optional[Dict[str, Dict[str, Any]]] = None,
-        claim_acl_policy: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
-        payload: Dict[str, Any] = {"ssh_key": str(ssh_key).strip() if ssh_key else None}
-        if require_auth is not None:
-            payload["require_auth"] = bool(require_auth)
-        if access_profile is not None:
-            payload["access_profile"] = dict(access_profile or {})
-        if endpoint_mode_default is not None:
-            payload["endpoint_mode_default"] = str(endpoint_mode_default).strip().lower()
-        if lifecycle_profile is not None:
-            payload["lifecycle_profile"] = str(lifecycle_profile).strip().lower()
-        if lifecycle_policy is not None:
-            payload["lifecycle_policy"] = dict(lifecycle_policy or {})
-        if traffic_policy is not None:
-            payload["traffic_policy"] = dict(traffic_policy or {})
-        if engine_traffic_policies is not None:
-            payload["engine_traffic_policies"] = {
-                str(k): dict(v or {}) for k, v in dict(engine_traffic_policies or {}).items()
-            }
-        if claim_acl_policy is not None:
-            payload["claim_acl_policy"] = dict(claim_acl_policy or {})
-        res = self._invoke("set-control-config", payload)
         return dict(res or {})
 
     def get_lifecycle_policy_effective(self) -> Dict[str, Any]:

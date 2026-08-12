@@ -879,6 +879,19 @@ the slice.
   tests/test_hosting_configuration_v3.py -q --maxfail=20` passed all 23 tests;
   `python -m py_compile src/app/config.py` also passed
 
+### TEST-R3.2L — public static-control writer removal
+
+- Date: 2026-08-12
+- Plan IDs: R3.2 and R9.1/R9.4 (partial); P0/P2; high expertise
+- Outcome: channel, CLI, daemon dispatch, role authorization, and command policy
+  no longer expose `set-control-config`; setting an SSH client target remains a
+  client-local action and cannot rewrite daemon authority
+- Removal proof: the five touched production surfaces contain zero command or
+  method matches; channel coverage asserts no mutation method is present
+- Proof: `python -m pytest tests/test_engine_host_channel.py
+  tests/test_engine_host_cli_remote_args.py tests/test_hosting_auth_roles.py -q
+  --maxfail=30` passed all 101 tests
+
 Append one concise entry per completed slice. Include exact commands, counts,
 durations where useful, negative-path results, commit pin, and dependent receipt
 impact. Do not paste an unstructured full test transcript.

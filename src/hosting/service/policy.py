@@ -141,7 +141,6 @@ class PolicyMixin:
             "sandbox-fs-stat",
             "sandbox-http-fetch",
             "get-control-config",
-            "set-control-config",
             "auth-upsert-key",
             "auth-status",
             "hosting-setup-status",

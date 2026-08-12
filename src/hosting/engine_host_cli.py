@@ -929,7 +929,6 @@ def _build_parser() -> argparse.ArgumentParser:
         "toolbox-repair",
         "toolbox-reconcile",
         "get-control-config",
-        "set-control-config",
         "auth-status",
         "daemon-status",
         "hosting-setup-status",
@@ -2292,21 +2291,6 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
             return 1
         if cmd == "get-control-config":
             _print_ok(svc.get_control_config())
-            return 0
-        if cmd == "set-control-config":
-            _print_ok(
-                svc.set_control_config(
-                    ssh_key=payload.get("ssh_key"),
-                    require_auth=payload.get("require_auth"),
-                    access_profile=dict(payload.get("access_profile") or {}),
-                    endpoint_mode_default=payload.get("endpoint_mode_default"),
-                    lifecycle_profile=payload.get("lifecycle_profile"),
-                    lifecycle_policy=dict(payload.get("lifecycle_policy") or {}),
-                    traffic_policy=dict(payload.get("traffic_policy") or {}),
-                    engine_traffic_policies=dict(payload.get("engine_traffic_policies") or {}),
-                    claim_acl_policy=dict(payload.get("claim_acl_policy") or {}),
-                )
-            )
             return 0
         if cmd == "get-lifecycle-policy-effective":
             _print_ok(svc.get_lifecycle_policy_effective())

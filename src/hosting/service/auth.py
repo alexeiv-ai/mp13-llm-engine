@@ -399,7 +399,6 @@ class AuthMixin:
             "toolbox-repair",
             "toolbox-reconcile",
             "get-control-config",
-            "set-control-config",
             "auth-status",
             "hosting-setup-status",
             "hosting-secure-state-status",

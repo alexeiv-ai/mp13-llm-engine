@@ -3437,18 +3437,6 @@ class EngineHostDaemon:
             )
         if cmd == "get-control-config":
             return svc.get_control_config()
-        if cmd == "set-control-config":
-            return svc.set_control_config(
-                ssh_key=payload.get("ssh_key"),
-                require_auth=payload.get("require_auth"),
-                access_profile=dict(payload.get("access_profile") or {}),
-                endpoint_mode_default=payload.get("endpoint_mode_default"),
-                lifecycle_profile=payload.get("lifecycle_profile"),
-                lifecycle_policy=dict(payload.get("lifecycle_policy") or {}),
-                traffic_policy=dict(payload.get("traffic_policy") or {}),
-                engine_traffic_policies=dict(payload.get("engine_traffic_policies") or {}),
-                claim_acl_policy=dict(payload.get("claim_acl_policy") or {}),
-            )
         if cmd == "get-lifecycle-policy-effective":
             return svc.get_lifecycle_policy_effective()
         if cmd == "auth-status":

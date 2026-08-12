@@ -489,31 +489,9 @@ def test_raw_auth_begin_challenge_includes_ssh_binding_for_remote_target() -> No
     assert target["target"] == "user@example-host"
 
 
-def test_set_control_config_forwards_lifecycle_fields() -> None:
-    fake = _FakeConn()
+def test_static_control_config_has_no_channel_mutation_surface() -> None:
     ch = EngineHostControlChannel({"engine_host_daemon_auto_bootstrap": False})
-    ch._get_connection = lambda: fake  # type: ignore[method-assign]
-    ch.set_session_token("tok-123")
-
-    out = ch.set_control_config(
-        lifecycle_profile="service_managed",
-        lifecycle_policy={
-            "on_terminal_disconnect": "keep_daemon_running",
-            "terminal_control_enabled": False,
-            "owner_disconnect_shutdown": False,
-        },
-    )
-    assert out == {}
-    assert fake.calls
-    cmd, payload = fake.calls[-1]
-    assert cmd == "set-control-config"
-    assert str(payload.get("lifecycle_profile") or "") == "service_managed"
-    assert dict(payload.get("lifecycle_policy") or {}) == {
-        "on_terminal_disconnect": "keep_daemon_running",
-        "terminal_control_enabled": False,
-        "owner_disconnect_shutdown": False,
-    }
-    assert str(payload.get("session_token") or "") == "tok-123"
+    assert not hasattr(ch, "set_control_config")
 
 
 def test_sandbox_fs_channel_methods_forward_expected_payloads() -> None:
