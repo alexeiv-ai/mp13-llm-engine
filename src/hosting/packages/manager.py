@@ -330,6 +330,47 @@ class PackageArtifactManager:
             os.replace(temporary, target)
         return lock.to_dict()
 
+    def artifact_path(self, artifact_id: str) -> Path:
+        """Return the immutable generic-CAS path for an artifact identity."""
+        digest = require_digest(artifact_id, "package_artifact_id")
+        return self.artifact_root / "sha256" / digest.split(":", 1)[1]
+
+    def source_artifacts(self, source_id: str) -> dict[str, Path]:
+        """Return daemon-indexed local artifacts for bounded offline resolution."""
+        source = self.sources.get(str(source_id))
+        if source is None or not source.enabled or source.source_id not in self.policy.allowed_source_ids:
+            raise PackageError("package_source_unavailable")
+        root = self.artifact_root / "by-source" / source.source_id
+        if not root.is_dir():
+            return {}
+        return {
+            path.name: path.resolve()
+            for path in sorted(root.iterdir(), key=lambda item: item.name)
+            if path.is_file() and path.parent == root
+        }
+
+    def source_artifact_path(
+        self, *, source_id: str, filename: str, artifact_id: str
+    ) -> Path:
+        """Resolve one indexed wheel and revalidate its generic-CAS identity."""
+        logical_filename = str(filename or "")
+        if (
+            Path(logical_filename).name != logical_filename
+            or not logical_filename.lower().endswith(".whl")
+        ):
+            raise PackageError("package_artifact_filename_invalid")
+        path = self.source_artifacts(source_id).get(logical_filename)
+        if path is None or not path.is_file():
+            raise PackageError("package_artifact_unavailable")
+        expected = require_digest(artifact_id, "package_artifact_id")
+        hasher = hashlib.sha256()
+        with path.open("rb") as handle:
+            while block := handle.read(1024 * 1024):
+                hasher.update(block)
+        if "sha256:" + hasher.hexdigest() != expected or not self.artifact_path(expected).is_file():
+            raise PackageError("package_artifact_hash_mismatch")
+        return path
+
     def import_verified_file(
         self, *, source_id: str, path: Path, expected_digest: str, actor_id: str, request_id: str
     ) -> dict[str, Any]:
@@ -342,6 +383,13 @@ class PackageArtifactManager:
         source_path = Path(path).resolve()
         if not source_path.is_file():
             raise PackageError("package_artifact_unavailable")
+        filename = source_path.name
+        if (
+            filename in {"", ".", ".."}
+            or Path(filename).name != filename
+            or not filename.lower().endswith(".whl")
+        ):
+            raise PackageError("package_artifact_filename_invalid")
         size = source_path.stat().st_size
         if size < 1 or size > self.policy.max_artifact_bytes:
             raise PackageError("package_upload_bounds_exceeded")
@@ -352,12 +400,26 @@ class PackageArtifactManager:
         digest = "sha256:" + hasher.hexdigest()
         if digest != require_digest(expected_digest, "package_expected_digest"):
             raise PackageError("package_artifact_hash_mismatch")
-        target = self.artifact_root / "sha256" / hasher.hexdigest()
+        target = self.artifact_path(digest)
         if not target.exists():
             target.parent.mkdir(parents=True, exist_ok=True)
             temporary = self.scratch_root / f"import-{secrets.token_hex(12)}.part"
             temporary.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(source_path, temporary)
             os.replace(temporary, target)
+        source_root = self.artifact_root / "by-source" / source.source_id
+        source_root.mkdir(parents=True, exist_ok=True)
+        alias = source_root / filename
+        if alias.exists():
+            alias_hasher = hashlib.sha256(alias.read_bytes()).hexdigest()
+            if alias_hasher != hasher.hexdigest():
+                raise PackageError("package_artifact_filename_conflict")
+        else:
+            temporary_alias = source_root / f".{filename}.{secrets.token_hex(8)}.tmp"
+            try:
+                os.link(target, temporary_alias)
+            except OSError:
+                shutil.copyfile(target, temporary_alias)
+            os.replace(temporary_alias, alias)
         self._audit(event="package_artifact_import", actor_id=actor_id, request_id=request_id, result="committed", artifact_id=digest)
         return {"artifact_id": digest, "size_bytes": size, "source_id": source.source_id}

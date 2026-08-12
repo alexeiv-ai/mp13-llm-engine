@@ -145,6 +145,13 @@ def test_daemon_local_import_rehashes_and_creates_generic_lock(tmp_path: Path) -
         source_id="ingress", path=local, expected_digest=_digest(content),
         actor_id="service:toolbox", request_id="toolbox-plan-1",
     )
+    indexed = service._package_manager.source_artifact_path(
+        source_id="ingress",
+        filename=local.name,
+        artifact_id=artifact["artifact_id"],
+    )
+    assert indexed.name == local.name
+    assert service._package_manager.source_artifacts("ingress") == {local.name: indexed}
     lock = service.package_lock_create(
         lock_id="toolbox-profile-1", revision=1, runtime_kind="python", platform="win_amd64",
         artifacts=[artifact],
@@ -156,6 +163,25 @@ def test_daemon_local_import_rehashes_and_creates_generic_lock(tmp_path: Path) -
         service._package_manager.import_verified_file(
             source_id="ingress", path=local, expected_digest=_digest(b"different"),
             actor_id="service:toolbox", request_id="toolbox-plan-2",
+        )
+
+
+def test_generic_source_index_rejects_filename_mutation(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    first = tmp_path / "demo-1.0-py3-none-any.whl"
+    first.write_bytes(b"first")
+    artifact = service._package_manager.import_verified_file(
+        source_id="ingress", path=first, expected_digest=_digest(b"first"),
+        actor_id="service:toolbox", request_id="source-index-first",
+    )
+    service._package_manager.source_artifact_path(
+        source_id="ingress", filename=first.name, artifact_id=artifact["artifact_id"]
+    )
+    first.write_bytes(b"different")
+    with pytest.raises(PackageError, match="filename_conflict"):
+        service._package_manager.import_verified_file(
+            source_id="ingress", path=first, expected_digest=_digest(b"different"),
+            actor_id="service:toolbox", request_id="source-index-second",
         )
 
 

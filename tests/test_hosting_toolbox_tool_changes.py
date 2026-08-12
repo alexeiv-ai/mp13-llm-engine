@@ -530,10 +530,8 @@ def test_revision_worker_replans_child_with_parent_identity_and_fresh_closure() 
 
         def _toolbox_definition_planning_context(self):
             return {
-                "configuration": SimpleNamespace(
-                    config_revision=pins.host_config_revision,
-                    source_set_revision=pins.source_set_revision,
-                ),
+                "host_config_revision": pins.host_config_revision,
+                "source_set_revision": pins.source_set_revision,
                 "catalog_revision": pins.catalog_revision,
                 "policy": SimpleNamespace(revision=pins.dependency_policy_revision),
                 "target": pins.target,
@@ -679,10 +677,8 @@ def test_empty_confirmation_public_projection_is_exact_v1_shape() -> None:
 
         def _toolbox_definition_planning_context(self):
             return {
-                "configuration": SimpleNamespace(
-                    config_revision=pins.host_config_revision,
-                    source_set_revision=pins.source_set_revision,
-                ),
+                "host_config_revision": pins.host_config_revision,
+                "source_set_revision": pins.source_set_revision,
                 "catalog_revision": pins.catalog_revision,
                 "policy": SimpleNamespace(
                     revision=pins.dependency_policy_revision,

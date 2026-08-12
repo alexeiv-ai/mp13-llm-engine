@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import base64
 import asyncio
 import hashlib
 import io
@@ -9,12 +8,10 @@ import zipfile
 from pathlib import Path
 
 import pytest
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from packaging.utils import parse_wheel_filename
 
 from hosting.service.host_service import EngineHostService
 from hosting.daemon.local_ipc import EngineHostDaemon
-from hosting.service.toolbox_artifact_store import BUNDLE_CONTRACT, SIGNATURE_CONTRACT
 from hosting.service.toolbox_definition_resolution import ConfiguredToolboxPlanResolver
 from hosting.toolbox.catalog import (
     ToolboxEnvironmentTemplateSpec,
@@ -30,12 +27,7 @@ from hosting.toolbox.definition_planner import (
 from hosting.toolbox.orchestration import ToolboxSandboxOrchestrator
 from hosting.toolbox.staging import ToolboxBundleStager
 from hosting.toolbox.identity import identity_digest
-from hosting.toolbox.host_project_config import ToolboxHostProjectConfiguration
 from tests.hosting_v3_fixtures import hosting_configuration, write_hosting_configuration
-
-
-def _b64(value: bytes) -> str:
-    return base64.urlsafe_b64encode(value).decode().rstrip("=")
 
 
 def _digest(value: bytes) -> str:
@@ -63,49 +55,6 @@ def _wheel(distribution: str, version: str, import_root: str, *, requires=()) ->
         )
         archive.writestr(f"{canonical}-{version}.dist-info/RECORD", "")
     return filename, output.getvalue()
-
-
-def _configuration() -> dict:
-    return {
-        "builtins": [
-            {
-                "template_id": "core",
-                "imports": ["packaging"],
-                "package_requirements": ["packaging==26.0"],
-                "sandbox_policy": "compute-only",
-                "required": True,
-                "prewarm": True,
-                "provenance": "definition-resolution-test",
-            }
-        ],
-        "sources": [
-            {
-                "source_id": "release",
-                "kind": "airgap_store",
-                "origin": "airgap://release",
-                "credential_ref": None,
-                "allowed_package_namespaces": ["*"],
-                "priority": 10,
-                "trust_key_ids": ["release-key"],
-                "maximum_download_bytes": 16 * 1024 * 1024,
-            }
-        ],
-        "resolution": {
-            "mode": "air_gapped",
-            "timeout_seconds": 60,
-            "maximum_bytes": 16 * 1024 * 1024,
-            "maximum_artifacts": 32,
-            "allowed_redirect_origins": [],
-            "wheel_only": True,
-        },
-        "retention": {
-            "artifact_cache_grace_seconds": 60,
-            "maximum_cache_bytes": 64 * 1024 * 1024,
-            "maximum_cache_artifacts": 128,
-            "protected_digests": [],
-            "remove_unreferenced_custom_revisions_on_apply": False,
-        },
-    }
 
 
 def _definition() -> dict:
@@ -151,8 +100,7 @@ def _definition() -> dict:
 def _service_with_verified_closure(
     tmp_path: Path, *, policy=None, require_auth: bool = False
 ):
-    private = Ed25519PrivateKey.generate()
-    public = _b64(private.public_key().public_bytes_raw())
+    del policy
     source = tmp_path / "source"
     source.mkdir(parents=True, exist_ok=True)
     service = EngineHostService(
@@ -180,85 +128,50 @@ def _service_with_verified_closure(
             },
         ),
     )
-    service._toolbox_host_project_config = ToolboxHostProjectConfiguration.from_dict(  # noqa: SLF001
-        _configuration()
-    )
-    service._toolbox_artifact_sources = {"release": source}  # noqa: SLF001
-    service._toolbox_trust_public_keys = {"release-key": public}  # noqa: SLF001
-    service._configured_toolbox_dependency_policy = policy  # noqa: SLF001
     wheels = [
         _wheel("packaging", "26.0", "packaging"),
         _wheel("requests", "2.32.5", "requests", requires=("urllib3==2.0.0",)),
         _wheel("urllib3", "2.0.0", "urllib3"),
     ]
-    configuration = service._toolbox_host_project_config  # noqa: SLF001
-    manifest = {
-        "contract": BUNDLE_CONTRACT,
-        "bundle_id": "definition-resolution",
-        "source_id": "release",
-        "source_set_revision": configuration.source_set_revision,
-        "target": {
-            "name": configuration.target.name,
-            "python_abi": configuration.target.python_abi,
-            "platform": configuration.target.platform,
-        },
-        "signing_key_id": "release-key",
-        "wheels": [],
-    }
+    wheel_rows = []
     for filename, content in wheels:
         name, version, _build, tags = parse_wheel_filename(filename)
-        manifest["wheels"].append(
-            {
-                "distribution": str(name).replace("_", "-"),
-                "version": str(version),
-                "filename": filename,
-                "size_bytes": len(content),
-                "sha256": _digest(content),
-                "tags": sorted(str(item) for item in tags),
-                "provenance": "definition-resolution-test",
-            }
+        path = source / filename
+        path.write_bytes(content)
+        service._package_manager.import_verified_file(  # noqa: SLF001
+            source_id="release",
+            path=path,
+            expected_digest=_digest(content),
+            actor_id="service:test-fixture",
+            request_id=f"seed-{name}-{version}",
         )
-    manifest["wheels"] = sorted(manifest["wheels"], key=lambda item: item["filename"])
-    raw = json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()
-    signature = {
-        "contract": SIGNATURE_CONTRACT,
-        "algorithm": "ed25519",
-        "key_id": "release-key",
-        "signature": _b64(private.sign(raw)),
-    }
-    bundle = tmp_path / "bundle.zip"
-    with zipfile.ZipFile(bundle, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        archive.writestr("manifest.json", raw)
-        archive.writestr(
-            "signature.json",
-            json.dumps(signature, sort_keys=True, separators=(",", ":")).encode(),
-        )
-        for filename, content in wheels:
-            archive.writestr(f"wheels/{filename}", content)
-    imported = service._toolbox_artifact_store.import_signed_bundle(  # noqa: SLF001
-        bundle,
-        configuration=configuration,
-        trust_public_keys={"release-key": public},
-        expected_source_id="release",
-    )
-    packaging_row = next(item for item in manifest["wheels"] if item["distribution"] == "packaging")
+        wheel_rows.append({
+            "distribution": str(name).replace("_", "-"),
+            "version": str(version),
+            "filename": filename,
+            "size_bytes": len(content),
+            "sha256": _digest(content),
+            "tags": sorted(str(item) for item in tags),
+        })
+    packaging_row = next(item for item in wheel_rows if item["distribution"] == "packaging")
+    target = service._toolbox_target  # noqa: SLF001
     template = ToolboxEnvironmentTemplateSpec(
         template_id="core",
         python_requires=">=3.12,<3.13",
-        python_abis=(configuration.target.python_abi,),
+        python_abis=(target.python_abi,),
         runtime_kind="toolbox_python",
         worker_protocol_version="1.0",
-        platforms=(configuration.target.platform,),
+        platforms=(target.platform,),
         locked_distributions=(ToolboxLockedDistributionSpec("packaging", "26.0"),),
         exposed_import_roots=("packaging",),
         lock_digest=identity_digest("test.definition.base.lock.v1", packaging_row),
         parent_worker_artifact_digest=packaging_row["sha256"],
         isolation_policy_version="compute-only-v1",
         provenance=ToolboxTemplateProvenance(
-            source="signed-airgap:release",
-            revision=imported["bundle_id"],
-            evidence_digest=imported["manifest_digest"],
-            verifier_id="release-key",
+            source="generic-package:release",
+            revision="definition-resolution",
+            evidence_digest=identity_digest("test.package.evidence.v1", wheel_rows),
+            verifier_id=None,
         ),
     )
     from hosting.service.toolbox_catalog import ToolboxTemplateArtifactReference
@@ -272,7 +185,7 @@ def _service_with_verified_closure(
                 "size_bytes": packaging_row["size_bytes"],
             }),
         ),
-        verification_evidence="s" * 64,
+        verification_evidence=None,
         actor_id="test:definition-resolution",
     )
     service.toolbox_template_activate(
@@ -287,20 +200,21 @@ def test_configured_resolver_builds_exact_direct_transitive_verified_cas_offer(
     tmp_path: Path,
 ) -> None:
     service, template = _service_with_verified_closure(tmp_path)
-    configuration = service._toolbox_host_project_config  # noqa: SLF001
+    target = service._toolbox_target  # noqa: SLF001
     draft = plan_toolbox_definition(
         _definition(),
         templates=(template,),
-        python_abi=configuration.target.python_abi,
-        platform=configuration.target.platform,
+        python_abi=target.python_abi,
+        platform=target.platform,
         runtime_identity={
             "version": "3.12.7",
             "artifact_digest": template.parent_worker_artifact_digest,
         },
     )
     resolver = ConfiguredToolboxPlanResolver(
-        configuration=configuration,
-        artifact_store=service._toolbox_artifact_store,  # noqa: SLF001
+        package_sources=service.hosting_configuration.package_management["sources"],
+        package_manager=service._package_manager,  # noqa: SLF001
+        target=target,
         catalog_state=service._toolbox_template_catalog.read(),  # noqa: SLF001
     )
 
@@ -337,20 +251,21 @@ def test_removed_custom_packages_recompute_to_exact_builtin_closure(
     tmp_path: Path,
 ) -> None:
     service, template = _service_with_verified_closure(tmp_path)
-    configuration = service._toolbox_host_project_config  # noqa: SLF001
+    target = service._toolbox_target  # noqa: SLF001
     custom_draft = plan_toolbox_definition(
         _definition(),
         templates=(template,),
-        python_abi=configuration.target.python_abi,
-        platform=configuration.target.platform,
+        python_abi=target.python_abi,
+        platform=target.platform,
         runtime_identity={
             "version": "3.12.7",
             "artifact_digest": template.parent_worker_artifact_digest,
         },
     )
     resolver = ConfiguredToolboxPlanResolver(
-        configuration=configuration,
-        artifact_store=service._toolbox_artifact_store,  # noqa: SLF001
+        package_sources=service.hosting_configuration.package_management["sources"],
+        package_manager=service._package_manager,  # noqa: SLF001
+        target=target,
         catalog_state=service._toolbox_template_catalog.read(),  # noqa: SLF001
     )
     active_candidate = resolver.candidates_for_draft(custom_draft)[0]
@@ -380,8 +295,8 @@ def test_removed_custom_packages_recompute_to_exact_builtin_closure(
     contracted_draft = plan_toolbox_definition(
         contracted_definition,
         templates=(template,),
-        python_abi=configuration.target.python_abi,
-        platform=configuration.target.platform,
+        python_abi=target.python_abi,
+        platform=target.platform,
         runtime_identity={
             "version": "3.12.7",
             "artifact_digest": template.parent_worker_artifact_digest,
@@ -414,7 +329,6 @@ def test_strict_v3_base_template_plan_does_not_require_legacy_host_project_confi
     tmp_path: Path,
 ) -> None:
     service, _template = _service_with_verified_closure(tmp_path)
-    service._toolbox_host_project_config = None  # noqa: SLF001
     definition = json.loads(json.dumps(_definition()))
     definition["auto_requests"][0]["files"] = [{
         "relative_path": "pkg/fetch.py",
@@ -546,7 +460,7 @@ def test_corrupt_confirmed_artifact_fails_before_atomic_publication(tmp_path: Pa
     )
     resolved = next(iter(receipt.resolved_environments.values()))
     corrupt = resolved["locked_artifacts"][-1]
-    service._toolbox_artifact_store.object_path(corrupt["sha256"]).write_bytes(b"corrupt")  # noqa: SLF001
+    service._package_manager.artifact_path(corrupt["sha256"]).write_bytes(b"corrupt")  # noqa: SLF001
     references = service.hosting_root / "toolbox_environment_cache" / "references.json"
 
     applied = service.toolbox_apply_definition(

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from packaging.utils import InvalidWheelFilename, parse_wheel_filename
 
-from ..toolbox.builtin_resolver import AirgapBuiltinWheelResolver
+from ..packages.manager import PackageArtifactManager
+from ..packages.wheel_resolver import GenericPackageWheelResolver
 from ..toolbox.bundle_models import ToolboxExactArtifactSpec
 from ..toolbox.catalog import PHASE0_REVIEWED_IMPORT_CATALOG, ToolboxEnvironmentTemplateSpec, normalize_distribution_name
 from ..toolbox.definition_planner import (
@@ -14,8 +16,7 @@ from ..toolbox.definition_planner import (
     VerifiedToolboxResolutionCandidate,
 )
 from ..toolbox.dependency_analysis import analyze_toolbox_bundle_imports, resolve_toolbox_dependencies
-from ..toolbox.host_project_config import ToolboxHostProjectConfiguration
-from .toolbox_artifact_store import AtomicToolboxArtifactStore
+from ..toolbox.target import ToolboxTargetIdentity
 
 
 class ConfiguredToolboxPlanResolver:
@@ -24,31 +25,22 @@ class ConfiguredToolboxPlanResolver:
     def __init__(
         self,
         *,
-        configuration: ToolboxHostProjectConfiguration | None,
         package_sources: Mapping[str, Any] | None = None,
-        artifact_store: AtomicToolboxArtifactStore,
+        package_manager: PackageArtifactManager,
+        target: ToolboxTargetIdentity,
         catalog_state: Mapping[str, Any],
     ) -> None:
-        self.configuration = configuration
         self.package_sources = {
             str(source_id): dict(source or {})
             for source_id, source in dict(package_sources or {}).items()
         }
-        self.artifact_store = artifact_store
+        self.package_manager = package_manager
+        self.target = target
         self.catalog_state = dict(catalog_state or {})
         self._source_paths: dict[str, dict[str, Path]] = {}
 
     def _source(self, source_id: str):
         logical = str(source_id or "").strip()
-        if isinstance(self.configuration, ToolboxHostProjectConfiguration):
-            try:
-                source = next(
-                    item for item in self.configuration.sources
-                    if item.source_id == logical
-                )
-                return {"origin": source.origin, "priority": source.priority}
-            except StopIteration:
-                pass
         source = self.package_sources.get(logical)
         if source is None or not bool(source.get("enabled", True)):
             raise ValueError("toolbox_plan_artifact_source_unconfigured")
@@ -60,7 +52,7 @@ class ConfiguredToolboxPlanResolver:
     def _paths(self, source_id: str) -> dict[str, Path]:
         logical = str(source_id or "").strip()
         if logical not in self._source_paths:
-            self._source_paths[logical] = self.artifact_store.source_artifacts(logical)
+            self._source_paths[logical] = self.package_manager.source_artifacts(logical)
         return self._source_paths[logical]
 
     def _entry(self, template_id: str) -> dict[str, Any]:
@@ -106,8 +98,8 @@ class ConfiguredToolboxPlanResolver:
             version = str(wheel_version)
             if locked.get(distribution) != version:
                 raise ValueError("toolbox_plan_template_artifact_lock_mismatch")
-            path = self._paths(source_id).get(filename)
-            if path is None or not path.is_file() or self.artifact_store.object_path(digest) != path:
+            path = self.package_manager.artifact_path(digest)
+            if not path.is_file():
                 raise ValueError("toolbox_plan_template_artifact_unavailable")
             artifacts.append(
                 ToolboxExactArtifactSpec(
@@ -240,28 +232,19 @@ class ConfiguredToolboxPlanResolver:
                 f"{item.name}=={item.version}" for item in template.locked_distributions
             )
             requirements = tuple(sorted({*pins, *custom_requirements}))
-            if not isinstance(self.configuration, ToolboxHostProjectConfiguration):
-                raise ValueError("toolbox_definition_exact_wheel_missing")
-            configured_ids = tuple(item.source_id for item in self.configuration.sources)
-            source_sets = {
-                tuple(sorted(base_sources | {source_id})) for source_id in configured_ids
-            }
-            source_sets.add(tuple(sorted(base_sources | set(configured_ids))))
+            resolver = GenericPackageWheelResolver(
+                self.package_manager,
+                target=self.target,
+            )
             seen: set[tuple[str, tuple[str, ...]]] = set()
-            for source_ids in sorted(source_sets, key=lambda item: (len(item), item)):
-                verified = {source_id: self._paths(source_id) for source_id in source_ids}
-                resolver = AirgapBuiltinWheelResolver(
-                    self.configuration,
-                    artifact_sources={},
-                    verified_artifacts=verified,
-                )
-                try:
-                    closure = resolver.resolve_requirements(
-                        template_id=profile.template_id,
-                        package_requirements=requirements,
-                    )
-                except RuntimeError:
-                    continue
+            try:
+                closures = (resolver.resolve_requirements(
+                    template_id=profile.template_id,
+                    package_requirements=requirements,
+                ),)
+            except (RuntimeError, subprocess.TimeoutExpired):
+                closures = ()
+            for closure in closures:
                 artifacts = self._closure_artifacts(
                     closure,
                     template=template,

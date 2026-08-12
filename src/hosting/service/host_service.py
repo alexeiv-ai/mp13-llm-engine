@@ -98,7 +98,11 @@ class EngineHostService(CoreMixin, MetricsMixin, StateMixin, ConfigMixin, Contro
         configured_abi = ""
         configured_platform = ""
         configured_sources = {
-            str(source_id): Path(hosting_configuration.resolved_paths["artifact_root"])
+            str(source_id): (
+                Path(hosting_configuration.resolved_paths["artifact_root"])
+                / "by-source"
+                / str(source_id)
+            )
             for source_id, source in dict(hosting_configuration.package_management.get("sources") or {}).items()
             if bool(dict(source).get("enabled", True))
         }

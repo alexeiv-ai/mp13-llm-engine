@@ -933,7 +933,11 @@ class ToolboxTemplateCatalogMixin:
                     "The confirmed environment does not cover all assigned imports.",
                 )
             builder.extend_verified_artifact_paths({
-                (item.source_id, item.filename): self._toolbox_artifact_store.object_path(item.sha256)
+                (item.source_id, item.filename): self._package_manager.source_artifact_path(
+                    source_id=item.source_id,
+                    filename=item.filename,
+                    artifact_id=item.sha256,
+                )
                 for item in resolved.locked_artifacts
             })
             return builder.materialize_environment(resolved)

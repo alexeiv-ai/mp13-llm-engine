@@ -29,7 +29,7 @@ from .errors import ToolboxRolloutError
 
 class ToolboxRuntimeMixin:
     def _toolbox_definition_planning_context(self) -> Dict[str, Any]:
-        from ..toolbox.catalog import ToolboxEnvironmentTemplateSpec, normalize_distribution_name
+        from ..toolbox.catalog import ToolboxEnvironmentTemplateSpec
         from ..toolbox.dependency_policy import ToolboxDependencyPolicy
         from ..toolbox.identity import identity_digest
         from ..toolbox.target import detect_current_toolbox_target
@@ -55,31 +55,26 @@ class ToolboxRuntimeMixin:
         current_target = detect_current_toolbox_target()
         python_abi = self._toolbox_required_python_abi or current_target.python_abi
         platform = self._toolbox_required_platform or current_target.platform
-        configured = getattr(self, "_configured_toolbox_dependency_policy", None)
-        if configured is None:
-            allowed_packages = sorted(
-                {
-                    normalize_distribution_name(distribution.name)
-                    for template in templates
-                    for distribution in template.locked_distributions
-                }
-            )
-            policy_payload = {
-                "allowed_template_ids": sorted(template.template_id for template in templates),
-                "allowed_targets": [f"{python_abi}-{platform}"],
-                "package_allowlist": allowed_packages,
-                "package_denylist": [],
-                "allow_custom": False,
-                "custom_requires_approval": True,
-                "online_resolution_allowed": False,
-                "allowed_index_origins": [],
-            }
-            configured = ToolboxDependencyPolicy(
-                revision=identity_digest("hosting.toolbox.package_policy.v1", policy_payload),
-                **policy_payload,
-            )
         package_sources = dict(
             self.hosting_configuration.package_management.get("sources") or {}
+        )
+        package_policy = self._package_manager.policy
+        policy_payload = {
+            "allowed_template_ids": sorted(template.template_id for template in templates),
+            "allowed_targets": [f"{python_abi}-{platform}"],
+            "package_allowlist": [],
+            "package_denylist": [],
+            "allow_custom": bool(package_policy.allowed_source_ids and "python" in package_policy.allowed_runtimes),
+            "custom_requires_approval": True,
+            "online_resolution_allowed": False,
+            "allowed_index_origins": [],
+        }
+        configured = ToolboxDependencyPolicy(
+            revision=identity_digest(
+                "hosting.toolbox.package_policy.v1",
+                {**policy_payload, "package_policy": package_policy.to_dict()},
+            ),
+            **policy_payload,
         )
         return {
             "templates": templates,
@@ -89,7 +84,6 @@ class ToolboxRuntimeMixin:
             "python_abi": python_abi,
             "platform": platform,
             "target": current_target.name,
-            "configuration": getattr(self, "_toolbox_host_project_config", None),
             "host_config_revision": self.hosting_configuration_revision,
             "source_set_revision": identity_digest(
                 "hosting.package_source_set.v1", package_sources
@@ -454,7 +448,6 @@ class ToolboxRuntimeMixin:
             if parent.owner_actor_id != owner_actor_id or parent.authority_id != authority_id:
                 raise PermissionError("toolbox_definition_plan_not_found")
             context = self._toolbox_definition_planning_context()
-            configuration = context["configuration"]
             if (
                 self.hosting_configuration_revision != parent.pins.configuration_revision
                 or context["catalog_revision"] != parent.pins.catalog_revision
@@ -539,26 +532,17 @@ class ToolboxRuntimeMixin:
             for alternative in environment.alternatives:
                 generic_artifacts = []
                 generic_dependencies = []
-                import_request_id = identity_digest(
-                    "hosting.toolbox.plan_package_import.v1",
-                    {
-                        "toolbox_id": definition.toolbox_id,
-                        "definition_revision": definition.revision,
-                        "environment_id": environment.environment_id,
-                        "alternative_id": alternative.alternative_id,
-                        "configuration_revision": self.hosting_configuration_revision,
-                    },
-                )
                 for artifact in alternative.artifacts:
-                    generic_artifacts.append(self._package_manager.import_verified_file(
-                        source_id=artifact.source_id,
-                        path=self._toolbox_artifact_store.object_path(
-                            artifact.artifact_digest
-                        ),
-                        expected_digest=artifact.artifact_digest,
-                        actor_id="service:toolbox-planner",
-                        request_id=import_request_id,
-                    ))
+                    artifact_path = self._package_manager.artifact_path(
+                        artifact.artifact_digest
+                    )
+                    if not artifact_path.is_file():
+                        raise ValueError("toolbox_plan_artifact_unavailable")
+                    generic_artifacts.append({
+                        "artifact_id": artifact.artifact_digest,
+                        "size_bytes": artifact_path.stat().st_size,
+                        "source_id": artifact.source_id,
+                    })
                     generic_dependencies.append({
                         "name": artifact.distribution,
                         "version": artifact.version,
@@ -656,7 +640,6 @@ class ToolboxRuntimeMixin:
             if key is not None
         }
         context = self._toolbox_definition_planning_context()
-        configuration = context["configuration"]
         draft = plan_toolbox_definition(
             model,
             templates=context["templates"],
@@ -680,9 +663,9 @@ class ToolboxRuntimeMixin:
                 )
             )
         resolver = ConfiguredToolboxPlanResolver(
-            configuration=configuration,
             package_sources=self.hosting_configuration.package_management.get("sources", {}),
-            artifact_store=self._toolbox_artifact_store,
+            package_manager=self._package_manager,
+            target=self._toolbox_target,
             catalog_state=context["catalog"],
         )
         candidates = resolver.candidates_for_draft(draft)
@@ -906,7 +889,7 @@ class ToolboxRuntimeMixin:
             template = ToolboxEnvironmentTemplateSpec.from_dict(entry["template"])
             locked_artifacts = []
             for artifact in alternative.artifacts:
-                path = self._toolbox_artifact_store.object_path(artifact.artifact_digest)
+                path = self._package_manager.artifact_path(artifact.artifact_digest)
                 if not path.is_file():
                     raise ValueError("toolbox_confirmation_artifact_missing")
                 planned_artifact = planned_artifacts.get(artifact.artifact_digest)
@@ -1055,7 +1038,6 @@ class ToolboxRuntimeMixin:
                 choices=choices,
             )
             context = self._toolbox_definition_planning_context()
-            configuration = context["configuration"]
             if (
                 self.hosting_configuration_revision != plan.pins.configuration_revision
                 or context["catalog_revision"] != plan.pins.catalog_revision
@@ -1175,7 +1157,6 @@ class ToolboxRuntimeMixin:
         )
         record = self._toolbox_definition_plans.get(receipt.plan_id, now_ms=now_ms)
         context = self._toolbox_definition_planning_context()
-        configuration = context["configuration"]
         if (
             self.hosting_configuration_revision != record.pins.configuration_revision
             or context["catalog_revision"] != record.pins.catalog_revision
@@ -1253,7 +1234,6 @@ class ToolboxRuntimeMixin:
 
             raise ToolboxRevisionConflictError("toolbox_revision_conflict")
         context = self._toolbox_definition_planning_context()
-        configuration = context["configuration"]
         if (
             self.hosting_configuration_revision != record.pins.configuration_revision
             or context["catalog_revision"] != record.pins.catalog_revision
@@ -1639,7 +1619,6 @@ class ToolboxRuntimeMixin:
         if dict(active or {}).get("active_revision") != candidate.pins.active_definition_revision:
             raise ValueError("candidate_stale")
         context = self._toolbox_definition_planning_context()
-        configuration = context["configuration"]
         if (
             self.hosting_configuration_revision != candidate.pins.configuration_revision
             or context["catalog_revision"] != candidate.pins.catalog_revision
