@@ -55,7 +55,10 @@ class HostedOperationsMixin:
             if target.kind != "toolbox_id":
                 raise ValueError("toolbox_definition_apply_selector_must_be_toolbox_id")
             namespace = f"toolbox-definition:{target.id}"
-        elif kind == HostedExecutionKind.TOOLBOX_DEFINITION_PLAN:
+        elif kind in {
+            HostedExecutionKind.TOOLBOX_DEFINITION_PLAN,
+            HostedExecutionKind.TOOLBOX_DEFINITION_PLAN_REVISION,
+        }:
             if target.kind != "toolbox_id":
                 raise ValueError("toolbox_definition_plan_selector_must_be_toolbox_id")
             namespace = f"toolbox-definition-plan:{target.id}"
@@ -192,6 +195,7 @@ class HostedOperationsMixin:
         if operation.execution_kind in {
             HostedExecutionKind.ENVIRONMENT_TEMPLATE_PREWARM,
             HostedExecutionKind.TOOLBOX_DEFINITION_PLAN,
+            HostedExecutionKind.TOOLBOX_DEFINITION_PLAN_REVISION,
             HostedExecutionKind.TOOLBOX_DEFINITION_CONFIRMATION,
         }:
             canceled = self._hosted_operations.cancel_before_dispatch(

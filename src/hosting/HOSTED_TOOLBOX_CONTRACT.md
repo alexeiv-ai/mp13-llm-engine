@@ -332,6 +332,15 @@ package mutations, and dependency-approval requirement. This analysis is part
 of the immutable plan record and is revalidated on restart; public projection
 does not reconstruct it from mutable source or package state.
 
+Selective revision requires exactly one accept/exclude decision per parent
+change. Accepted decisions cannot deny imports; excluded import roots must be
+present in that change's persisted evidence. Excluded adds are omitted, while
+excluded updates, renames, and removals preserve authoritative active state.
+Changes whose required tool edges point to an excluded change are reported as
+cascade exclusions. The effective definition then passes through the complete
+planner, resolver, generic package-lock, and environment-request path again;
+the parent record and all parent locks remain immutable.
+
 The resulting plan is stored in the process-safe atomic definition-plan
 repository. Its ID binds toolbox ID, definition revision, expected active
 revision, catalog revision, package-policy revision, resolved profiles, and

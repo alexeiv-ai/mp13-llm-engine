@@ -10,6 +10,7 @@ from .bundle_models import (
     ToolboxDefinitionSpec,
     ToolboxManualAssignmentRequestV2,
     ToolboxEnvironmentMutationSpec,
+    ToolboxIntrinsicSelection,
     ToolboxPackageMutationSpec,
 )
 from .dependency_analysis import ToolboxAnalyzedImport, analyze_toolbox_bundle_imports
@@ -222,6 +223,34 @@ class ToolboxToolAnalysis:
                 ),
             }
         )
+
+
+@dataclass(frozen=True)
+class ToolboxToolChangeDecision:
+    change_id: str
+    decision: str
+    denied_import_roots: tuple[str, ...]
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "ToolboxToolChangeDecision":
+        row = _strict(
+            payload,
+            {"change_id", "decision", "denied_import_roots"},
+            "tool_change_decision",
+        )
+        change_id = str(row["change_id"] or "")
+        if not _PRINTABLE_ID.fullmatch(change_id):
+            raise ValueError("tool_change_decision_id_invalid")
+        if row["decision"] not in {"accept", "exclude"}:
+            raise ValueError("tool_change_decision_invalid")
+        if not isinstance(row["denied_import_roots"], list):
+            raise ValueError("tool_change_denied_imports_invalid")
+        denied = tuple(sorted(str(item or "").strip() for item in row["denied_import_roots"]))
+        if any(not item for item in denied) or len(set(denied)) != len(denied):
+            raise ValueError("tool_change_denied_imports_invalid")
+        if row["decision"] == "accept" and denied:
+            raise ValueError("tool_change_accepted_import_denial")
+        return cls(change_id, row["decision"], denied)
 
 
 def _definition_requests(
@@ -445,11 +474,135 @@ def build_toolbox_tool_analysis(
     return tuple(sorted(rows, key=lambda item: item.change_id))
 
 
+def revise_toolbox_definition_plan(
+    *,
+    active_definition: ToolboxDefinitionSpec,
+    proposed_definition: ToolboxDefinitionSpec,
+    changes: Sequence[NormalizedToolboxToolChange],
+    tool_analysis: Sequence[ToolboxToolAnalysis],
+    environment_mutations: Sequence[ToolboxEnvironmentMutationSpec],
+    decisions: Sequence[ToolboxToolChangeDecision | Mapping[str, Any]],
+) -> tuple[
+    ToolboxDefinitionSpec,
+    tuple[NormalizedToolboxToolChange, ...],
+    dict[str, Any],
+]:
+    """Reduce a parent proposal while preserving active state for exclusions."""
+
+    parsed = tuple(
+        item if isinstance(item, ToolboxToolChangeDecision)
+        else ToolboxToolChangeDecision.from_dict(item)
+        for item in decisions
+    )
+    change_by_id = {item.change_id: item for item in changes}
+    analysis_by_id = {item.change_id: item for item in tool_analysis}
+    if (
+        len(change_by_id) != len(tuple(changes))
+        or len(analysis_by_id) != len(tuple(tool_analysis))
+        or len({item.change_id for item in parsed}) != len(parsed)
+        or {item.change_id for item in parsed} != set(change_by_id)
+        or set(analysis_by_id) != set(change_by_id)
+    ):
+        raise ValueError("tool_change_decisions_incomplete")
+    decision_by_id = {item.change_id: item for item in parsed}
+    for decision in parsed:
+        evidenced = {item.import_root for item in analysis_by_id[decision.change_id].imports}
+        if not set(decision.denied_import_roots) <= evidenced:
+            raise ValueError("tool_change_denied_import_not_evidenced")
+
+    excluded = {
+        item.change_id for item in parsed if item.decision == "exclude"
+    }
+    key_to_change = {
+        key: item.change_id
+        for item in changes
+        for key in (item.prior_tool_key, item.tool_key)
+        if key is not None
+    }
+    edges = {
+        edge.tool_key: edge.required_tool_keys
+        for environment in environment_mutations
+        for edge in environment.dependency_edges
+    }
+    cascade: set[str] = set()
+    changed = True
+    while changed:
+        changed = False
+        denied = excluded | cascade
+        for item in changes:
+            if item.change_id in denied:
+                continue
+            selected_key = item.tool_key or item.prior_tool_key or ""
+            required_change_ids = {
+                key_to_change[key]
+                for key in edges.get(selected_key, ())
+                if key in key_to_change
+            }
+            if required_change_ids & denied:
+                cascade.add(item.change_id)
+                changed = True
+
+    retained = tuple(
+        item for item in changes if item.change_id not in excluded | cascade
+    )
+    active_requests = _definition_requests(active_definition)
+    proposed_requests = _definition_requests(proposed_definition)
+    merged = dict(active_requests)
+    active_intrinsics = set(active_definition.intrinsics.names)
+    proposed_intrinsics = set(proposed_definition.intrinsics.names)
+    intrinsic_policy_accepted = False
+    for item in retained:
+        if item.prior_tool_key and item.prior_tool_key.startswith("intrinsic:"):
+            active_intrinsics.discard(item.prior_tool_key.split(":", 1)[1])
+            intrinsic_policy_accepted = True
+        elif item.prior_tool_key:
+            merged.pop(item.prior_tool_key, None)
+        if item.tool_key and item.tool_key.startswith("intrinsic:"):
+            name = item.tool_key.split(":", 1)[1]
+            if name in proposed_intrinsics:
+                active_intrinsics.add(name)
+            intrinsic_policy_accepted = True
+        elif item.tool_key:
+            request = proposed_requests.get(item.tool_key)
+            if request is None:
+                raise ValueError("tool_change_revised_request_missing")
+            merged[item.tool_key] = request
+
+    intrinsic_source = (
+        proposed_definition.intrinsics
+        if intrinsic_policy_accepted else active_definition.intrinsics
+    )
+    revised = ToolboxDefinitionSpec(
+        toolbox_id=active_definition.toolbox_id,
+        expected_revision=proposed_definition.expected_revision,
+        auto_requests=tuple(value for kind, value in merged.values() if kind == "auto"),
+        manual_requests=tuple(value for kind, value in merged.values() if kind == "manual"),
+        intrinsics=ToolboxIntrinsicSelection(
+            names=tuple(sorted(active_intrinsics)),
+            include_guides=intrinsic_source.include_guides,
+            sandbox_policy=intrinsic_source.sandbox_policy,
+        ),
+    )
+    preserved = sorted({
+        item.prior_tool_key
+        for item in changes
+        if item.change_id in excluded | cascade and item.prior_tool_key is not None
+    })
+    reduction = {
+        "excluded_changes": sorted(excluded),
+        "preserved_active_tool_keys": preserved,
+        "cascade_exclusions": sorted(cascade),
+    }
+    return revised, retained, reduction
+
+
 __all__ = [
     "NormalizedToolboxToolChange",
     "ToolboxToolChange",
+    "ToolboxToolChangeDecision",
     "ToolboxToolAnalysis",
     "build_toolbox_tool_analysis",
     "deterministic_definition_changes",
     "merge_toolbox_tool_changes",
+    "revise_toolbox_definition_plan",
 ]

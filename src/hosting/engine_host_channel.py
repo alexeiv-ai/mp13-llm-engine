@@ -3561,6 +3561,24 @@ class EngineHostControlChannel:
             },
         )
 
+    def toolbox_revise_definition_plan(
+        self,
+        *,
+        plan_id: str,
+        decisions: list[Dict[str, Any]],
+        request_id: str,
+        operator_details: bool = False,
+    ) -> Dict[str, Any]:
+        return self.start_host_operation(
+            command="toolbox-revise-definition-plan",
+            payload={
+                "plan_id": str(plan_id or "").strip(),
+                "decisions": [dict(item) for item in decisions],
+                "request_id": str(request_id or "").strip(),
+                "operator_details": bool(operator_details),
+            },
+        )
+
     def toolbox_confirm_definition_plan(
         self,
         *,

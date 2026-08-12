@@ -50,6 +50,15 @@ def test_definition_channel_forwards_exact_commands_and_payloads() -> None:
         }],
         request_id="changes-1",
     )
+    channel.toolbox_revise_definition_plan(
+        plan_id="plan-1",
+        decisions=[{
+            "change_id": "remove-old",
+            "decision": "exclude",
+            "denied_import_roots": [],
+        }],
+        request_id="revise-1",
+    )
     channel.toolbox_confirm_definition_plan(
         plan_id="plan-1", environment_choices=[], request_id="confirm-1"
     )
@@ -68,13 +77,15 @@ def test_definition_channel_forwards_exact_commands_and_payloads() -> None:
         "op-start",
         "op-start",
         "op-start",
+        "op-start",
         "toolbox-approve-confirmed-definition-plan",
         "op-start",
     ]
     assert all(payload["session_token"] == "token-1" for _, payload in connection.calls)
     assert connection.calls[1][1]["payload"]["ttl_ms"] == 42
     assert connection.calls[2][1]["command"] == "toolbox-plan-tool-changes"
-    assert connection.calls[5][1]["payload"]["dependency_approval_ref"] == "opaque-approval"
+    assert connection.calls[3][1]["command"] == "toolbox-revise-definition-plan"
+    assert connection.calls[6][1]["payload"]["dependency_approval_ref"] == "opaque-approval"
 
 
 def test_operation_watch_emits_changed_snapshots_and_stops_at_terminal() -> None:
@@ -124,6 +135,14 @@ def test_hosted_reference_exposes_only_definition_and_template_consumer_helpers(
         expected_revision="sha256:" + "a" * 64,
         request_id="changes-1",
     )
+    ref.revise_definition_plan(
+        plan_id="plan-1",
+        decisions=[{
+            "change_id": "remove-old", "decision": "exclude",
+            "denied_import_roots": [],
+        }],
+        request_id="revise-1",
+    )
     ref.confirm_definition_plan(
         plan_id="plan-1", environment_choices=[], request_id="confirm-1"
     )
@@ -140,12 +159,13 @@ def test_hosted_reference_exposes_only_definition_and_template_consumer_helpers(
         "toolbox_get_definition",
         "toolbox_plan_definition",
         "toolbox_plan_tool_changes",
+        "toolbox_revise_definition_plan",
         "toolbox_confirm_definition_plan",
         "toolbox_apply_definition",
         "toolbox_template_list",
         "toolbox_template_describe",
     ]
-    assert host.calls[4][1]["request_id"] == "request-1"
+    assert host.calls[5][1]["request_id"] == "request-1"
     assert not hasattr(type(ref), "publish_template")
 
 
@@ -154,6 +174,7 @@ def test_definition_role_separation() -> None:
         "toolbox-get-definition",
         "toolbox-plan-definition",
         "toolbox-plan-tool-changes",
+        "toolbox-revise-definition-plan",
         "toolbox-confirm-definition-plan",
         "toolbox-apply-definition",
     }
@@ -236,6 +257,12 @@ def test_remote_cli_routes_definition_commands(
             "request_id": "changes-1",
             "operator_details": False,
         },
+        "toolbox-revise-definition-plan": {
+            "plan_id": "plan-1",
+            "decisions": [],
+            "request_id": "revise-1",
+            "operator_details": False,
+        },
         "toolbox-approve-confirmed-definition-plan": {"confirmation_ref": "confirmation-1"},
         "toolbox-apply-definition": {
             "plan_id": "plan-1",
@@ -253,6 +280,7 @@ def test_remote_cli_routes_definition_commands(
         "toolbox-get-definition",
         "op-start",
         "op-start",
+        "op-start",
         "toolbox-approve-confirmed-definition-plan",
         "op-start",
     ]
@@ -264,10 +292,14 @@ def test_remote_cli_routes_definition_commands(
         "command": "toolbox-plan-tool-changes",
         "payload": payloads["toolbox-plan-tool-changes"],
     }
-    assert calls[4][1] == {
+    assert calls[3][1] == {
+        "command": "toolbox-revise-definition-plan",
+        "payload": payloads["toolbox-revise-definition-plan"],
+    }
+    assert calls[5][1] == {
         "command": "toolbox-apply-definition",
         "payload": payloads["toolbox-apply-definition"],
     }
     assert calls[0][1] == payloads["toolbox-get-definition"]
-    assert calls[3][1] == payloads["toolbox-approve-confirmed-definition-plan"]
-    assert capsys.readouterr().out.count('"ok": true') == 5
+    assert calls[4][1] == payloads["toolbox-approve-confirmed-definition-plan"]
+    assert capsys.readouterr().out.count('"ok": true') == 6

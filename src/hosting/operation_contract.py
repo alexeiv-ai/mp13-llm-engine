@@ -131,6 +131,7 @@ class HostedExecutionKind(StrEnum):
     TOOLBOX = "toolbox"
     TOOLBOX_DEFINITION_APPLY = "toolbox_definition_apply"
     TOOLBOX_DEFINITION_PLAN = "toolbox_definition_plan"
+    TOOLBOX_DEFINITION_PLAN_REVISION = "toolbox_definition_plan_revision"
     TOOLBOX_DEFINITION_CONFIRMATION = "toolbox_definition_confirmation"
     ENVIRONMENT_TEMPLATE_PREWARM = "environment_template_prewarm"
     TOOLBOX_SETUP = "toolbox_setup"
@@ -527,7 +528,10 @@ class HostedOperationStatus:
                     and self.progress.cancellable
                 ):
                     raise ValueError("toolbox_definition_apply_committed_progress_cancellable")
-            if self.operation.execution_kind == HostedExecutionKind.TOOLBOX_DEFINITION_PLAN:
+            if self.operation.execution_kind in {
+                HostedExecutionKind.TOOLBOX_DEFINITION_PLAN,
+                HostedExecutionKind.TOOLBOX_DEFINITION_PLAN_REVISION,
+            }:
                 if self.progress.phase not in TOOLBOX_DEFINITION_PLAN_PHASES:
                     raise ValueError("toolbox_definition_plan_progress_phase_invalid")
             if self.operation.execution_kind == HostedExecutionKind.TOOLBOX_DEFINITION_CONFIRMATION:

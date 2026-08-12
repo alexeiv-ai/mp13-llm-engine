@@ -120,6 +120,9 @@ EXAMPLES_BY_COMMAND = {
     "toolbox-plan-tool-changes": [
         "Get-Content toolbox-tool-changes.json | python -m hosting.engine_host_cli --payload-stdin toolbox-plan-tool-changes",
     ],
+    "toolbox-revise-definition-plan": [
+        "Get-Content toolbox-plan-decisions.json | python -m hosting.engine_host_cli --payload-stdin toolbox-revise-definition-plan",
+    ],
     "toolbox-confirm-definition-plan": [
         "Get-Content toolbox-confirmation.json | python -m hosting.engine_host_cli --payload-stdin toolbox-confirm-definition-plan",
     ],
@@ -916,6 +919,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "toolbox-get-definition",
         "toolbox-plan-definition",
         "toolbox-plan-tool-changes",
+        "toolbox-revise-definition-plan",
         "toolbox-confirm-definition-plan",
         "toolbox-approve-confirmed-definition-plan",
         "toolbox-apply-definition",
@@ -1181,6 +1185,7 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
     durable_toolbox_commands = {
         "toolbox-plan-definition",
         "toolbox-plan-tool-changes",
+        "toolbox-revise-definition-plan",
         "toolbox-confirm-definition-plan",
         "toolbox-apply-definition",
         "environment-template-construct",
@@ -2081,6 +2086,16 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
                     toolbox_id=str(payload.get("toolbox_id") or ""),
                     expected_revision=payload.get("expected_revision"),
                     changes=list(payload.get("changes") or []),
+                    request_id=str(payload.get("request_id") or ""),
+                    operator_details=bool(payload.get("operator_details", False)),
+                )
+            )
+            return 0
+        if cmd == "toolbox-revise-definition-plan":
+            _print_ok(
+                svc.toolbox_revise_definition_plan(
+                    plan_id=str(payload.get("plan_id") or ""),
+                    decisions=list(payload.get("decisions") or []),
                     request_id=str(payload.get("request_id") or ""),
                     operator_details=bool(payload.get("operator_details", False)),
                 )

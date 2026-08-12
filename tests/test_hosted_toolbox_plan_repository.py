@@ -682,3 +682,39 @@ def test_complete_plan_processes_do_not_lose_distinct_records(tmp_path: Path) ->
     assert all(item["ok"] for item in results), results
     assert len({item["plan_id"] for item in results}) == 2
     assert len(AtomicJsonCompleteToolboxDefinitionPlanRepository(path).list(now_ms=2_000)) == 2
+
+
+def test_selective_child_can_persist_an_empty_effective_definition(tmp_path: Path) -> None:
+    draft = _draft(_definition("empty-child", []))
+    active = ToolboxDefinitionSpec.from_dict(_definition("empty-child", []))
+    _unused_draft, _unused_active, pins, _environments, _planned = _complete_inputs(
+        _definition("complete", [_auto("Alpha")])
+    )
+    parent_id = "sha256:" + "8" * 64
+    record = AtomicJsonCompleteToolboxDefinitionPlanRepository(
+        tmp_path / "plans.json"
+    ).create(
+        draft,
+        active_definition=active,
+        pins=pins,
+        environment_mutations=(),
+        planned_environments=(),
+        proposal_kind="tool_changes",
+        changes=(),
+        tool_analysis=(),
+        parent_plan_id=parent_id,
+        reduction={
+            "excluded_changes": ["excluded-add"],
+            "preserved_active_tool_keys": [],
+            "cascade_exclusions": [],
+        },
+        active_profiles=(),
+        now_ms=1_000,
+        ttl_ms=60_000,
+        owner_actor_id="actor:one",
+        authority_id="workspace:one",
+    )
+
+    assert record.parent_plan_id == parent_id
+    assert record.environment_mutations == ()
+    assert record.proposed_definition.auto_requests == ()

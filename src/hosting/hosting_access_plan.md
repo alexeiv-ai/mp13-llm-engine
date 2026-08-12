@@ -171,7 +171,7 @@ R7 plan/confirmation field assertions are provisional and must be replaced.
   change IDs, atomic rename, and strict add/update/remove validation.
 - [x] Emit bounded per-tool import/source evidence, mapped distributions,
   environment grouping, exact package mutations, and approval requirements.
-- [ ] Build immutable child plans for selective rejection, recomputing the
+- [x] Build immutable child plans for selective rejection, recomputing the
   complete closure and locks and reporting preserved/skipped/cascade outcomes.
 - [ ] Replace provisional plan/confirmation field-level assertions while
   retaining the frozen v2/v1 identifiers and exact handoff schemas.

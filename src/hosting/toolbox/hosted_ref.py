@@ -119,6 +119,21 @@ class HostedToolBoxRef:
             operator_details=bool(operator_details),
         ) or {})
 
+    def revise_definition_plan(
+        self,
+        *,
+        plan_id: str,
+        decisions: list[Dict[str, Any]],
+        request_id: str,
+        operator_details: bool = False,
+    ) -> Dict[str, Any]:
+        return dict(self.host.toolbox_revise_definition_plan(
+            plan_id=str(plan_id or "").strip(),
+            decisions=[dict(item) for item in decisions],
+            request_id=str(request_id or "").strip(),
+            operator_details=bool(operator_details),
+        ) or {})
+
     def confirm_definition_plan(
         self,
         *,

@@ -2291,6 +2291,7 @@ class EngineHostDaemon:
                 if target_cmd in {
                     "toolbox-plan-definition",
                     "toolbox-plan-tool-changes",
+                    "toolbox-revise-definition-plan",
                     "toolbox-confirm-definition-plan",
                     "toolbox-apply-definition",
                     "environment-remove",
@@ -2485,6 +2486,7 @@ class EngineHostDaemon:
             if cmd in {
                 "toolbox-plan-definition",
                 "toolbox-plan-tool-changes",
+                "toolbox-revise-definition-plan",
                 "toolbox-confirm-definition-plan",
                 "toolbox-apply-definition",
                 "environment-template-construct",
@@ -3257,6 +3259,22 @@ class EngineHostDaemon:
                 toolbox_id=str(payload.get("toolbox_id") or ""),
                 expected_revision=payload.get("expected_revision"),
                 changes=list(payload.get("changes") or []),
+                request_id=str(payload.get("request_id") or ""),
+                operator_details=bool(payload.get("operator_details", False)),
+                owner_actor_id=actor,
+                authority_id=actor,
+            )
+        if cmd == "toolbox-revise-definition-plan":
+            allowed = {
+                "plan_id", "decisions", "request_id", "operator_details",
+                "_claim_actor_id",
+            }
+            if any(key not in allowed and not str(key).startswith("_claim_") for key in payload):
+                raise ValueError("tool_change_invalid")
+            actor = str(payload.get("_claim_actor_id") or "service:local")
+            return svc.toolbox_revise_definition_plan(
+                plan_id=str(payload.get("plan_id") or ""),
+                decisions=list(payload.get("decisions") or []),
                 request_id=str(payload.get("request_id") or ""),
                 operator_details=bool(payload.get("operator_details", False)),
                 owner_actor_id=actor,

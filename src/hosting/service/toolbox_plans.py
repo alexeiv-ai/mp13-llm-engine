@@ -414,7 +414,7 @@ class PersistedCompleteToolboxDefinitionPlan:
         if not isinstance(self.pins, ToolboxPlanPins):
             raise ValueError("toolbox_complete_plan_pins_invalid")
         mutations = tuple(sorted(self.environment_mutations, key=lambda item: item.environment_id))
-        if not mutations or len({item.environment_id for item in mutations}) != len(mutations):
+        if len({item.environment_id for item in mutations}) != len(mutations):
             raise ValueError("toolbox_complete_plan_environment_mutations_invalid")
         offered_tools = [
             tool.tool_key for environment in mutations for tool in environment.tool_mutations
@@ -486,7 +486,11 @@ class PersistedCompleteToolboxDefinitionPlan:
         if (
             any(not isinstance(item, NormalizedToolboxToolChange) for item in changes)
             or len({item.change_id for item in changes}) != len(changes)
-            or (self.proposal_kind == "tool_changes" and not changes)
+            or (
+                self.proposal_kind == "tool_changes"
+                and not changes
+                and self.parent_plan_id is None
+            )
             or (
                 self.proposal_kind == "complete_definition"
                 and any(not item.change_id.startswith("host:sha256:") for item in changes)
@@ -535,6 +539,25 @@ class PersistedCompleteToolboxDefinitionPlan:
             if set(reduction) != {
                 "excluded_changes", "preserved_active_tool_keys", "cascade_exclusions"
             }:
+                raise ValueError("toolbox_complete_plan_reduction_invalid")
+            if any(
+                not isinstance(reduction[key], list)
+                or any(not isinstance(item, str) for item in reduction[key])
+                or len(set(reduction[key])) != len(reduction[key])
+                for key in reduction
+            ):
+                raise ValueError("toolbox_complete_plan_reduction_invalid")
+            excluded_ids = set(reduction["excluded_changes"])
+            cascade_ids = set(reduction["cascade_exclusions"])
+            if (
+                excluded_ids & cascade_ids
+                or (excluded_ids | cascade_ids) & {item.change_id for item in changes}
+                or any(
+                    not (1 <= len(item) <= 128)
+                    or any(ord(char) < 33 or ord(char) > 126 for char in item)
+                    for item in excluded_ids | cascade_ids
+                )
+            ):
                 raise ValueError("toolbox_complete_plan_reduction_invalid")
         draft = dict(self.draft_plan or {})
         fields = {

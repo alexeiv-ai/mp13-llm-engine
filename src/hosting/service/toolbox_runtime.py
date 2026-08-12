@@ -362,6 +362,135 @@ class ToolboxRuntimeMixin:
                 },
             )
 
+    def toolbox_revise_definition_plan(
+        self,
+        *,
+        plan_id: str,
+        decisions: List[Dict[str, Any]],
+        request_id: str,
+        operator_details: bool = False,
+        owner_actor_id: str = "service:local",
+        authority_id: str = "authority:local",
+    ) -> Dict[str, Any]:
+        from ..toolbox.tool_changes import ToolboxToolChangeDecision
+
+        now_ms = int(time.time() * 1000)
+        parent = self._toolbox_definition_plans.get(plan_id, now_ms=now_ms)
+        actor = str(owner_actor_id or "").strip()
+        authority = str(authority_id or "").strip()
+        if parent.owner_actor_id != actor or parent.authority_id != authority:
+            raise PermissionError("toolbox_definition_plan_not_found")
+        parsed = tuple(
+            ToolboxToolChangeDecision.from_dict(item)
+            for item in list(decisions or [])
+        )
+        decision_payload = [
+            {
+                "change_id": item.change_id,
+                "decision": item.decision,
+                "denied_import_roots": list(item.denied_import_roots),
+            }
+            for item in sorted(parsed, key=lambda item: item.change_id)
+        ]
+        fingerprint = hosted_execution_fingerprint({
+            "plan_id": parent.plan_id,
+            "decisions": decision_payload,
+            "configuration_revision": parent.pins.configuration_revision,
+            "operator_details": bool(operator_details),
+            "authority_id": authority,
+        })
+        prepared = self._hosted_operations.prepare(
+            owner_actor_id=actor,
+            execution_kind=HostedExecutionKind.TOOLBOX_DEFINITION_PLAN_REVISION,
+            selector={"kind": "toolbox_id", "id": parent.toolbox_id},
+            namespace=f"toolbox-definition-plan:{parent.toolbox_id}",
+            request_id=str(request_id or "").strip(),
+            fingerprint=fingerprint,
+            metadata={
+                "toolbox_id": parent.toolbox_id,
+                "parent_plan_id": parent.plan_id,
+                "configuration_revision": parent.pins.configuration_revision,
+                "retain_terminal_result": True,
+            },
+        )
+        status = dict(prepared.get("status") or {})
+        if prepared.get("action") != "dispatch":
+            return status
+        operation_id = str(dict(status["operation"])["operation_id"])
+        worker = threading.Thread(
+            target=self._run_toolbox_definition_plan_revision,
+            kwargs={
+                "operation_id": operation_id,
+                "plan_id": parent.plan_id,
+                "decisions": decision_payload,
+                "operator_details": bool(operator_details),
+                "owner_actor_id": actor,
+                "authority_id": authority,
+            },
+            name=f"toolbox-definition-plan-revision-{operation_id[:12]}",
+            daemon=True,
+        )
+        worker.start()
+        return status
+
+    def _run_toolbox_definition_plan_revision(
+        self, *, operation_id: str, plan_id: str, decisions: List[Dict[str, Any]],
+        operator_details: bool, owner_actor_id: str, authority_id: str,
+    ) -> Dict[str, Any]:
+        from ..toolbox.tool_changes import revise_toolbox_definition_plan
+
+        self._hosted_operations.mark_dispatch_claimed(operation_id=operation_id)
+        try:
+            now_ms = int(time.time() * 1000)
+            parent = self._toolbox_definition_plans.get(plan_id, now_ms=now_ms)
+            if parent.owner_actor_id != owner_actor_id or parent.authority_id != authority_id:
+                raise PermissionError("toolbox_definition_plan_not_found")
+            context = self._toolbox_definition_planning_context()
+            configuration = context["configuration"]
+            if configuration is None or (
+                self.hosting_configuration_revision != parent.pins.configuration_revision
+                or context["catalog_revision"] != parent.pins.catalog_revision
+                or context["policy"].revision != parent.pins.dependency_policy_revision
+                or configuration.config_revision != parent.pins.host_config_revision
+                or configuration.source_set_revision != parent.pins.source_set_revision
+                or context["target"] != parent.pins.target
+            ):
+                raise ValueError("toolbox_definition_plan_pins_changed")
+            revised, retained, reduction = revise_toolbox_definition_plan(
+                active_definition=parent.active_definition,
+                proposed_definition=parent.proposed_definition,
+                changes=parent.changes,
+                tool_analysis=parent.tool_analysis,
+                environment_mutations=parent.environment_mutations,
+                decisions=decisions,
+            )
+            result = self._build_toolbox_definition_plan(
+                definition=revised.to_dict(),
+                proposal_kind=parent.proposal_kind,
+                normalized_changes=retained,
+                parent_plan_id=parent.plan_id,
+                reduction=reduction,
+                operator_details=operator_details,
+                owner_actor_id=owner_actor_id,
+                authority_id=authority_id,
+                ttl_ms=max(1, parent.expires_at_ms - now_ms),
+            )
+            return self._hosted_operations.finish(
+                operation_id=operation_id,
+                lifecycle=HostedOperationLifecycle.TERMINAL_SUCCESS,
+                envelope=result,
+            )
+        except Exception:
+            return self._hosted_operations.finish(
+                operation_id=operation_id,
+                lifecycle=HostedOperationLifecycle.TERMINAL_FAILURE,
+                envelope={
+                    "contract": "hosting.toolbox.definition_plan_failure.v1",
+                    "status": "failed",
+                    "code": "tool_change_invalid",
+                },
+            )
+
     def _run_toolbox_definition_plan(self, *, operation_id: str, **kwargs: Any) -> Dict[str, Any]:
         self._hosted_operations.mark_dispatch_claimed(operation_id=operation_id)
         try:
@@ -471,6 +600,8 @@ class ToolboxRuntimeMixin:
         definition: Dict[str, Any],
         proposal_kind: str = "complete_definition",
         normalized_changes: Any = None,
+        parent_plan_id: str | None = None,
+        reduction: Dict[str, Any] | None = None,
         operator_details: bool = False,
         owner_actor_id: str = "service:local",
         authority_id: str = "authority:local",
@@ -588,8 +719,8 @@ class ToolboxRuntimeMixin:
             proposal_kind=proposal_kind,
             changes=changes,
             tool_analysis=tool_analysis,
-            parent_plan_id=None,
-            reduction=None,
+            parent_plan_id=parent_plan_id,
+            reduction=reduction,
             active_profiles=active_profiles,
             now_ms=now_ms,
             ttl_ms=int(ttl_ms),

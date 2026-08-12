@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+from types import SimpleNamespace
 
 from hosting.operation_contract import HostedOperationLifecycle
 from hosting.service.toolbox_runtime import ToolboxRuntimeMixin
@@ -18,6 +19,7 @@ from hosting.toolbox.tool_changes import (
     build_toolbox_tool_analysis,
     deterministic_definition_changes,
     merge_toolbox_tool_changes,
+    revise_toolbox_definition_plan,
 )
 
 
@@ -366,3 +368,199 @@ def test_tool_analysis_binds_bounded_evidence_environment_packages_and_approval(
         "kind": "import",
     }
     assert imports["pkg"].classification == "local_staged"
+
+
+def _offer(tool_key: str, change: str, *, required_tools=()):
+    environment_id = identity_digest("test.revision.environment.v1", tool_key)
+    alternative = ToolboxResolutionAlternativeSpec(
+        alternative_id=identity_digest("test.revision.alternative.v1", tool_key),
+        source_ids=("release",),
+        source_origins=("https://packages.example.invalid/simple",),
+        lock_digest=identity_digest("test.revision.lock.v1", tool_key),
+        artifacts=(),
+        package_mutations=(),
+    )
+    return ToolboxEnvironmentMutationSpec(
+        environment_id=environment_id,
+        tool_mutations=(ToolboxToolMutationSpec(tool_key, change),),
+        base_template_id="core",
+        base_template_revision="sha256:" + "a" * 64,
+        alternatives=(alternative,),
+        preferred_alternative_id=alternative.alternative_id,
+        alternatives_truncated=False,
+        confirmation_required=False,
+        dependency_approval_required=False,
+        dependency_edges=(ToolboxDependencyEdgeSpec(tool_key, tuple(required_tools), ()),),
+    )
+
+
+def test_selective_revision_preserves_excluded_active_and_cascades_dependents() -> None:
+    active = _definition(autos=(_auto("Alpha"), _auto("Gamma")))
+    proposed = _definition(
+        autos=(_auto("Alpha", value=2), _auto("Beta")),
+        expected_revision=active.revision,
+    )
+    changes = deterministic_definition_changes(active, proposed)
+    offers = (
+        _offer("pkg.tools:Alpha", "updated"),
+        _offer("pkg.tools:Beta", "added", required_tools=("pkg.tools:Alpha",)),
+        _offer("pkg.tools:Gamma", "removed"),
+    )
+    analysis = build_toolbox_tool_analysis(
+        active_definition=active,
+        proposed_definition=proposed,
+        changes=changes,
+        environment_mutations=offers,
+    )
+    ids = {(item.kind, item.tool_key or item.prior_tool_key): item.change_id for item in changes}
+    revised, retained, reduction = revise_toolbox_definition_plan(
+        active_definition=active,
+        proposed_definition=proposed,
+        changes=changes,
+        tool_analysis=analysis,
+        environment_mutations=offers,
+        decisions=(
+            {"change_id": ids[("update", "pkg.tools:Alpha")], "decision": "exclude", "denied_import_roots": []},
+            {"change_id": ids[("add", "pkg.tools:Beta")], "decision": "accept", "denied_import_roots": []},
+            {"change_id": ids[("remove", "pkg.tools:Gamma")], "decision": "accept", "denied_import_roots": []},
+        ),
+    )
+
+    assert revised.expected_revision == active.revision
+    assert [item.stable_key for item in revised.auto_requests] == ["pkg.tools:Alpha"]
+    assert revised.auto_requests[0].to_dict() == _auto("Alpha")
+    assert [(item.kind, item.prior_tool_key) for item in retained] == [
+        ("remove", "pkg.tools:Gamma")
+    ]
+    assert reduction == {
+        "excluded_changes": [ids[("update", "pkg.tools:Alpha")]],
+        "preserved_active_tool_keys": ["pkg.tools:Alpha"],
+        "cascade_exclusions": [ids[("add", "pkg.tools:Beta")]],
+    }
+
+
+def test_selective_revision_requires_complete_decisions_and_evidenced_denials() -> None:
+    active = _definition()
+    request = _auto("Weather")
+    request["files"][0]["content"] = "import requests\ndef Weather():\n    return requests.__name__\n"
+    proposed = _definition(autos=(request,))
+    changes = deterministic_definition_changes(active, proposed)
+    offers = (_offer("pkg.tools:Weather", "added"),)
+    analysis = build_toolbox_tool_analysis(
+        active_definition=active,
+        proposed_definition=proposed,
+        changes=changes,
+        environment_mutations=offers,
+    )
+    with pytest.raises(ValueError, match="tool_change_decisions_incomplete"):
+        revise_toolbox_definition_plan(
+            active_definition=active,
+            proposed_definition=proposed,
+            changes=changes,
+            tool_analysis=analysis,
+            environment_mutations=offers,
+            decisions=(),
+        )
+    with pytest.raises(ValueError, match="tool_change_denied_import_not_evidenced"):
+        revise_toolbox_definition_plan(
+            active_definition=active,
+            proposed_definition=proposed,
+            changes=changes,
+            tool_analysis=analysis,
+            environment_mutations=offers,
+            decisions=({
+                "change_id": changes[0].change_id,
+                "decision": "exclude",
+                "denied_import_roots": ["not_evidenced"],
+            },),
+        )
+
+
+def test_revision_worker_replans_child_with_parent_identity_and_fresh_closure() -> None:
+    active = _definition()
+    proposed = _definition(autos=(_auto("Beta"),))
+    changes = deterministic_definition_changes(active, proposed)
+    offers = (_offer("pkg.tools:Beta", "added"),)
+    analysis = build_toolbox_tool_analysis(
+        active_definition=active,
+        proposed_definition=proposed,
+        changes=changes,
+        environment_mutations=offers,
+    )
+    revision = "sha256:" + "1" * 64
+    pins = SimpleNamespace(
+        configuration_revision=revision,
+        catalog_revision="sha256:" + "2" * 64,
+        dependency_policy_revision="sha256:" + "3" * 64,
+        host_config_revision="sha256:" + "4" * 64,
+        source_set_revision="sha256:" + "5" * 64,
+        target="cp312-win_amd64",
+    )
+    parent = SimpleNamespace(
+        plan_id="sha256:" + "6" * 64,
+        toolbox_id="demo",
+        owner_actor_id="actor:one",
+        authority_id="workspace:one",
+        active_definition=active,
+        proposed_definition=proposed,
+        changes=changes,
+        tool_analysis=analysis,
+        environment_mutations=offers,
+        proposal_kind="tool_changes",
+        pins=pins,
+        expires_at_ms=999_999_999_999,
+    )
+
+    class Operations:
+        def mark_dispatch_claimed(self, **_kwargs):
+            return None
+
+        def finish(self, *, lifecycle, envelope, **_kwargs):
+            return {"lifecycle": lifecycle.value, "result": envelope}
+
+    class Service(ToolboxRuntimeMixin):
+        hosting_configuration_revision = revision
+        _hosted_operations = Operations()
+        _toolbox_definition_plans = SimpleNamespace(get=lambda *_args, **_kwargs: parent)
+
+        def __init__(self):
+            self.replanned = None
+
+        def _toolbox_definition_planning_context(self):
+            return {
+                "configuration": SimpleNamespace(
+                    config_revision=pins.host_config_revision,
+                    source_set_revision=pins.source_set_revision,
+                ),
+                "catalog_revision": pins.catalog_revision,
+                "policy": SimpleNamespace(revision=pins.dependency_policy_revision),
+                "target": pins.target,
+            }
+
+        def _build_toolbox_definition_plan(self, **kwargs):
+            self.replanned = kwargs
+            return {"contract": "hosting.toolbox.definition_plan.v2", "plan_id": "child"}
+
+    service = Service()
+    result = service._run_toolbox_definition_plan_revision(
+        operation_id="op-child",
+        plan_id=parent.plan_id,
+        decisions=[{
+            "change_id": changes[0].change_id,
+            "decision": "exclude",
+            "denied_import_roots": [],
+        }],
+        operator_details=False,
+        owner_actor_id="actor:one",
+        authority_id="workspace:one",
+    )
+
+    assert result["lifecycle"] == HostedOperationLifecycle.TERMINAL_SUCCESS.value
+    assert service.replanned["parent_plan_id"] == parent.plan_id
+    assert service.replanned["normalized_changes"] == ()
+    assert service.replanned["reduction"] == {
+        "excluded_changes": [changes[0].change_id],
+        "preserved_active_tool_keys": [],
+        "cascade_exclusions": [],
+    }
+    assert ToolboxDefinitionSpec.from_dict(service.replanned["definition"]).auto_requests == ()
