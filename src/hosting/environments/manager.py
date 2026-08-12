@@ -118,25 +118,26 @@ class EnvironmentManager:
             temporary.unlink(missing_ok=True)
 
     def _locked(self):
+        manager = self
+
         class _Combined:
-            def __init__(inner, manager: "EnvironmentManager") -> None:
-                inner.manager = manager
-                inner.process = None
+            def __init__(self) -> None:
+                self.process = None
 
-            def __enter__(inner):
-                inner.manager._thread_lock.acquire()
-                inner.process = _exclusive_process_file_lock(inner.manager._lock_path)
-                inner.process.__enter__()
-                return inner
+            def __enter__(self):
+                manager._thread_lock.acquire()
+                self.process = _exclusive_process_file_lock(manager._lock_path)
+                self.process.__enter__()
+                return self
 
-            def __exit__(inner, exc_type, exc, tb):
+            def __exit__(self, exc_type, exc, tb):
                 try:
-                    assert inner.process is not None
-                    return inner.process.__exit__(exc_type, exc, tb)
+                    assert self.process is not None
+                    return self.process.__exit__(exc_type, exc, tb)
                 finally:
-                    inner.manager._thread_lock.release()
+                    manager._thread_lock.release()
 
-        return _Combined(self)
+        return _Combined()
 
     @staticmethod
     def _template_key(template_id: str, revision: int) -> str:
@@ -144,23 +145,26 @@ class EnvironmentManager:
 
     def _build_lock(self, content_key: str):
         digest = content_key.split(":", 1)[1]
+        manager = self
         with self._build_locks_guard:
             lock = self._build_locks.setdefault(digest, threading.Lock())
 
         class _BuildLock:
-            def __init__(inner) -> None:
-                inner.process = None
+            def __init__(self) -> None:
+                self.process = None
 
-            def __enter__(inner):
+            def __enter__(self):
                 lock.acquire()
-                inner.process = _exclusive_process_file_lock(self.root / "build-locks" / f"{digest}.lock")
-                inner.process.__enter__()
-                return inner
+                self.process = _exclusive_process_file_lock(
+                    manager.root / "build-locks" / f"{digest}.lock"
+                )
+                self.process.__enter__()
+                return self
 
-            def __exit__(inner, exc_type, exc, tb):
+            def __exit__(self, exc_type, exc, tb):
                 try:
-                    assert inner.process is not None
-                    return inner.process.__exit__(exc_type, exc, tb)
+                    assert self.process is not None
+                    return self.process.__exit__(exc_type, exc, tb)
                 finally:
                     lock.release()
 

@@ -1030,7 +1030,10 @@ class EngineHostDaemon:
             return None
         try:
             fd = int(handle)
-            sock = socket.fromfd(fd, socket.AF_UNIX, socket.SOCK_STREAM)
+            unix_family = getattr(socket, "AF_UNIX", None)
+            if unix_family is None:
+                return None
+            sock = socket.fromfd(fd, unix_family, socket.SOCK_STREAM)
             try:
                 if hasattr(socket, "SO_PEERCRED"):
                     creds = sock.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i"))

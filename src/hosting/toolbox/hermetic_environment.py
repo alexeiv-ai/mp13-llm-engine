@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import contextlib
+import importlib
 import json
 import os
 import re
@@ -71,7 +72,7 @@ def _environment_process_lock(path: Path, *, timeout_seconds: float = 120.0) -> 
                             raise TimeoutError("toolbox_environment_lock_timeout")
                         time.sleep(0.05)
             else:
-                import fcntl
+                fcntl = importlib.import_module("fcntl")
 
                 fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
             try:

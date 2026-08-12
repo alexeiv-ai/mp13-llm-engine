@@ -489,8 +489,10 @@ def _next_prefix_version(version: Version, *, compatible: bool = False) -> Versi
 
 
 def _range_conflicts(specifiers: Sequence[SpecifierSet]) -> bool:
-    lower: tuple[Version, bool] | None = None
-    upper: tuple[Version, bool] | None = None
+    lower_version: Version | None = None
+    lower_inclusive = False
+    upper_version: Version | None = None
+    upper_inclusive = False
     for specifier_set in specifiers:
         for specifier in specifier_set:
             operator = specifier.operator
@@ -512,29 +514,29 @@ def _range_conflicts(specifiers: Sequence[SpecifierSet]) -> bool:
             else:
                 continue
             if candidate_lower is not None and (
-                lower is None
-                or candidate_lower[0] > lower[0]
+                lower_version is None
+                or candidate_lower[0] > lower_version
                 or (
-                    candidate_lower[0] == lower[0]
+                    candidate_lower[0] == lower_version
                     and not candidate_lower[1]
-                    and lower[1]
+                    and lower_inclusive
                 )
             ):
-                lower = candidate_lower
+                lower_version, lower_inclusive = candidate_lower
             if candidate_upper is not None and (
-                upper is None
-                or candidate_upper[0] < upper[0]
+                upper_version is None
+                or candidate_upper[0] < upper_version
                 or (
-                    candidate_upper[0] == upper[0]
+                    candidate_upper[0] == upper_version
                     and not candidate_upper[1]
-                    and upper[1]
+                    and upper_inclusive
                 )
             ):
-                upper = candidate_upper
-    if lower is None or upper is None:
+                upper_version, upper_inclusive = candidate_upper
+    if lower_version is None or upper_version is None:
         return False
-    return lower[0] > upper[0] or (
-        lower[0] == upper[0] and not (lower[1] and upper[1])
+    return lower_version > upper_version or (
+        lower_version == upper_version and not (lower_inclusive and upper_inclusive)
     )
 
 

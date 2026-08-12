@@ -6,6 +6,7 @@ import json
 import secrets
 import threading
 import time
+from functools import partial
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
@@ -3267,7 +3268,9 @@ class WorkflowHelperMixin:
             total_mem = 0.0
             known_cpu = False
             known_mem = False
-            snapshot_fn = getattr(self, "_process_resource_snapshot", None)
+            snapshot_fn: Callable[[int], Dict[str, Any]] | None = getattr(
+                self, "_process_resource_snapshot", None
+            )
             active_ids = set()
             if pool is not None:
                 for worker in list(pool.resources().get("metrics", {}).get("workers", []) or []):
@@ -3283,7 +3286,7 @@ class WorkflowHelperMixin:
                 metrics: Dict[str, Any] = {}
                 if pid > 0 and callable(snapshot_fn):
                     try:
-                        metrics = dict(snapshot_fn(pid) or {})
+                        metrics = dict(partial(snapshot_fn, pid)() or {})
                     except Exception:
                         metrics = {}
                 if metrics.get("cpu_percent") is not None:
@@ -3939,13 +3942,15 @@ class WorkflowHelperMixin:
         total_mem = 0.0
         known_cpu = False
         known_mem = False
-        snapshot_fn = getattr(self, "_process_resource_snapshot", None)
+        snapshot_fn: Callable[[int], Dict[str, Any]] | None = getattr(
+            self, "_process_resource_snapshot", None
+        )
         for raw_proc in list(pool.get("processes") or []):
             proc = dict(raw_proc or {})
             pid = int(proc.get("pid") or 0)
             if pid > 0 and callable(snapshot_fn):
                 try:
-                    metrics = dict(snapshot_fn(pid) or {})
+                    metrics = dict(partial(snapshot_fn, pid)() or {})
                 except Exception:
                     metrics = {}
                 if metrics.get("cpu_percent") is not None:

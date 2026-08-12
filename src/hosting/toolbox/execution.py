@@ -174,13 +174,34 @@ class ToolboxExecutionHarness:
         call: ToolCall,
         *,
         semaphore: Optional[asyncio.Semaphore] = None,
-        **kwargs: Any,
+        timeout_seconds: float,
+        native_execute_kwargs: Dict[str, Any],
+        callback_processor: Optional[Callable[..., Any]] = None,
+        callback_context: Any = None,
+        host_api_approval: Optional[Dict[str, Any]] = None,
+        approval_state: Optional[Dict[str, Any]] = None,
     ) -> ToolCall:
         try:
             if semaphore is None:
-                return await self._execute_one(call, **kwargs)
+                return await self._execute_one(
+                    call,
+                    timeout_seconds=timeout_seconds,
+                    native_execute_kwargs=native_execute_kwargs,
+                    callback_processor=callback_processor,
+                    callback_context=callback_context,
+                    host_api_approval=host_api_approval,
+                    approval_state=approval_state,
+                )
             async with semaphore:
-                return await self._execute_one(call, **kwargs)
+                return await self._execute_one(
+                    call,
+                    timeout_seconds=timeout_seconds,
+                    native_execute_kwargs=native_execute_kwargs,
+                    callback_processor=callback_processor,
+                    callback_context=callback_context,
+                    host_api_approval=host_api_approval,
+                    approval_state=approval_state,
+                )
         except Exception as exc:
             envelope = getattr(call, "execution_envelope", None)
             request_id = envelope.get("request_id") if isinstance(envelope, dict) else ""

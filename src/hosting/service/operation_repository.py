@@ -4,6 +4,7 @@ from __future__ import annotations
 import copy
 import contextlib
 import hashlib
+import importlib
 import json
 import os
 import re
@@ -159,7 +160,7 @@ def _exclusive_process_file_lock(
                         raise TimeoutError(f"timed out acquiring hosted operation repository lock: {path}")
                     time.sleep(0.05)
         else:
-            import fcntl
+            fcntl = importlib.import_module("fcntl")
 
             fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
             locked = True
@@ -173,7 +174,7 @@ def _exclusive_process_file_lock(
                     handle.seek(0)
                     msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
                 else:
-                    import fcntl
+                    fcntl = importlib.import_module("fcntl")
 
                     fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 

@@ -3,8 +3,9 @@ from __future__ import annotations
 
 import threading
 import time
+from functools import partial
 from pathlib import Path
-from typing import Any, Dict, Mapping
+from typing import Any, Callable, Dict, Mapping
 
 from ..operation_contract import (
     TOOLBOX_DEFINITION_APPLY_COMMITTED_PHASES,
@@ -202,7 +203,9 @@ class HostedOperationsMixin:
                 return canceled
             return self._hosted_operations.status(ref=operation, owner_actor_id=owner)
         if operation.execution_kind == HostedExecutionKind.TOOLBOX_DEFINITION_APPLY:
-            cleanup = getattr(self, "_cleanup_toolbox_definition_apply_candidates", None)
+            cleanup: Callable[..., Mapping[str, Any]] | None = getattr(
+                self, "_cleanup_toolbox_definition_apply_candidates", None
+            )
 
             def cancellation_envelope() -> Dict[str, Any]:
                 cleanup_diagnostics: Mapping[str, Any] = {
@@ -210,7 +213,7 @@ class HostedOperationsMixin:
                     "candidate_count": 0,
                 }
                 if callable(cleanup):
-                    cleanup_diagnostics = dict(cleanup(record=record) or {})
+                    cleanup_diagnostics = dict(partial(cleanup, record=record)() or {})
                 return {
                     "contract": "hosting.toolbox.definition_apply_result",
                     "status": "canceled",

@@ -8,9 +8,10 @@ from ctypes import wintypes
 from typing import Any
 
 
+_SDDL_REVISION_1 = 1
+
 if os.name == "nt":
     _advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
-    _SDDL_REVISION_1 = 1
     _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
 
 

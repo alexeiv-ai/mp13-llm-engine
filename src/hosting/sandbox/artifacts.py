@@ -286,36 +286,124 @@ class HostedArtifactRow:
         )
 
 
-def artifact_inline_input(**kwargs: Any) -> Dict[str, Any]:
-    return HostedArtifactRow.inline_input(**kwargs).to_dict()
+def artifact_inline_input(
+    *,
+    name: str,
+    text: Optional[str] = None,
+    base64_data: str = "",
+    data: Any = None,
+    filename: str = "",
+    media_type: str = "text/plain",
+    encoding: str = "utf-8",
+    **metadata: Any,
+) -> Dict[str, Any]:
+    return HostedArtifactRow.inline_input(
+        name=name,
+        text=text,
+        base64_data=base64_data,
+        data=data,
+        filename=filename,
+        media_type=media_type,
+        encoding=encoding,
+        **metadata,
+    ).to_dict()
 
 
-def artifact_inline_zip_input(**kwargs: Any) -> Dict[str, Any]:
-    return HostedArtifactRow.inline_zip_input(**kwargs).to_dict()
+def artifact_inline_zip_input(
+    *, name: str, base64_data: str, filename: str = "", **metadata: Any
+) -> Dict[str, Any]:
+    return HostedArtifactRow.inline_zip_input(
+        name=name, base64_data=base64_data, filename=filename, **metadata
+    ).to_dict()
 
 
-def artifact_ref_input(**kwargs: Any) -> Dict[str, Any]:
-    return HostedArtifactRow.ref_input(**kwargs).to_dict()
+def artifact_ref_input(
+    *,
+    name: str,
+    ref: str,
+    filename: str = "",
+    media_type: str = "application/octet-stream",
+    **metadata: Any,
+) -> Dict[str, Any]:
+    return HostedArtifactRow.ref_input(
+        name=name, ref=ref, filename=filename, media_type=media_type, **metadata
+    ).to_dict()
 
 
-def artifact_masked_ref_input(**kwargs: Any) -> Dict[str, Any]:
-    return HostedArtifactRow.masked_ref_input(**kwargs).to_dict()
+def artifact_masked_ref_input(
+    *,
+    name: str,
+    ref: str,
+    path_mask: str = "*",
+    recursive: bool = True,
+    media_type: str = "application/octet-stream",
+    **metadata: Any,
+) -> Dict[str, Any]:
+    return HostedArtifactRow.masked_ref_input(
+        name=name,
+        ref=ref,
+        path_mask=path_mask,
+        recursive=recursive,
+        media_type=media_type,
+        **metadata,
+    ).to_dict()
 
 
-def artifact_file_output(**kwargs: Any) -> Dict[str, Any]:
-    return HostedArtifactRow.file_output(**kwargs).to_dict()
+def artifact_file_output(
+    *,
+    name: str,
+    filename: str = "",
+    media_type: str = "application/octet-stream",
+    **metadata: Any,
+) -> Dict[str, Any]:
+    return HostedArtifactRow.file_output(
+        name=name, filename=filename, media_type=media_type, **metadata
+    ).to_dict()
 
 
-def artifact_host_takeover_output(**kwargs: Any) -> Dict[str, Any]:
-    return HostedArtifactRow.host_takeover_output(**kwargs).to_dict()
+def artifact_host_takeover_output(
+    *,
+    name: str,
+    ref: str,
+    filename: str = "",
+    media_type: str = "application/octet-stream",
+    **metadata: Any,
+) -> Dict[str, Any]:
+    return HostedArtifactRow.host_takeover_output(
+        name=name, ref=ref, filename=filename, media_type=media_type, **metadata
+    ).to_dict()
 
 
-def artifact_producer_owned_output(**kwargs: Any) -> Dict[str, Any]:
-    return HostedArtifactRow.producer_owned_output(**kwargs).to_dict()
+def artifact_producer_owned_output(
+    *,
+    name: str,
+    ref: str,
+    filename: str = "",
+    media_type: str = "application/octet-stream",
+    **metadata: Any,
+) -> Dict[str, Any]:
+    return HostedArtifactRow.producer_owned_output(
+        name=name, ref=ref, filename=filename, media_type=media_type, **metadata
+    ).to_dict()
 
 
-def artifact_inline_zip_output(**kwargs: Any) -> Dict[str, Any]:
-    return HostedArtifactRow.inline_zip_output(**kwargs).to_dict()
+def artifact_inline_zip_output(
+    *,
+    name: str,
+    ref: str = "",
+    path_mask: str = "*",
+    recursive: bool = True,
+    filename: str = "",
+    **metadata: Any,
+) -> Dict[str, Any]:
+    return HostedArtifactRow.inline_zip_output(
+        name=name,
+        ref=ref,
+        path_mask=path_mask,
+        recursive=recursive,
+        filename=filename,
+        **metadata,
+    ).to_dict()
 
 
 def _zip_entries(data: bytes) -> list[tuple[str, bytes]]:
