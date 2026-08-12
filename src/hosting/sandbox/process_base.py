@@ -11,7 +11,7 @@ import time
 import uuid
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Deque, Dict, List, Optional
+from typing import Any, Deque, Dict, List, Optional
 
 from .runtime_base import (
     HOSTED_STREAM_LANES,
@@ -42,7 +42,7 @@ class HostedProcessStreamSession:
     request_id: str
     profile: str
     max_events: int = 256
-    events_by_lane: Dict[str, Deque[Dict[str, object]]] = field(
+    events_by_lane: Dict[str, Deque[Dict[str, Any]]] = field(
         default_factory=lambda: {lane: deque() for lane in HOSTED_STREAM_LANES}
     )
     closed: bool = False
@@ -75,7 +75,7 @@ class HostedProcessStreamSession:
             self.pending_loss[loss_lane] = max(0, int(self.pending_loss.get(loss_lane, 0))) + max(0, int(count or 0))
         self.dropped_frame_count += max(0, int(count or 0))
 
-    def _replacement_value(self, row: Dict[str, object]) -> str:
+    def _replacement_value(self, row: Dict[str, Any]) -> str:
         spec = hosted_stream_kind_spec(str(row.get("kind") or row.get("type") or ""))
         payload = self._payload_from_frame(row)
         if spec.queue_decision == "latest":
@@ -86,7 +86,7 @@ class HostedProcessStreamSession:
                 return f"{field_name}:{value}"
         return str(row.get("kind") or row.get("type") or "")
 
-    def _replace_existing_latest(self, lane: str, row: Dict[str, object]) -> bool:
+    def _replace_existing_latest(self, lane: str, row: Dict[str, Any]) -> bool:
         spec = hosted_stream_kind_spec(str(row.get("kind") or row.get("type") or ""))
         if spec.queue_decision not in {"latest", "latest_by_key"}:
             return False
@@ -110,7 +110,7 @@ class HostedProcessStreamSession:
                 return True
         return False
 
-    def _prepare_output_payload(self, event_type: str, payload: Dict[str, object]) -> Dict[str, object]:
+    def _prepare_output_payload(self, event_type: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         row = dict(payload or {})
         text_value = row.get("text")
         if text_value is None and event_type == "log":
@@ -125,14 +125,14 @@ class HostedProcessStreamSession:
             self.output_offsets[event_type] = offset + raw_len
         return row
 
-    def _requires_ack(self, payload: Dict[str, object]) -> bool:
+    def _requires_ack(self, payload: Dict[str, Any]) -> bool:
         return bool(payload.get("requires_ack") or payload.get("ack_id"))
 
-    def _output_length(self, payload: Dict[str, object]) -> int:
+    def _output_length(self, payload: Dict[str, Any]) -> int:
         row = self._payload_from_frame(payload) if "kind" in payload else dict(payload or {})
         return max(0, int(row.get("length") or 0))
 
-    def _consume_output_credit(self, payload: Dict[str, object]) -> None:
+    def _consume_output_credit(self, payload: Dict[str, Any]) -> None:
         if not self._requires_ack(payload):
             return
         if self.output_closed_by_client:
@@ -145,7 +145,7 @@ class HostedProcessStreamSession:
         self.output_credit_bytes -= length
         self.output_inflight_bytes += length
 
-    def accept_output_stream(self, *, credit_bytes: int, max_chunk_size: Optional[int] = None) -> Dict[str, object]:
+    def accept_output_stream(self, *, credit_bytes: int, max_chunk_size: Optional[int] = None) -> Dict[str, Any]:
         credit = max(0, int(credit_bytes or 0))
         self.accepted_output_stream = True
         self.output_closed_by_client = False
@@ -160,7 +160,7 @@ class HostedProcessStreamSession:
             "max_chunk_size": self.output_max_chunk_size,
         }
 
-    def ack_output_stream(self, *, consumed_bytes: int = 0, additional_credit_bytes: int = 0, ack_id: Optional[str] = None) -> Dict[str, object]:
+    def ack_output_stream(self, *, consumed_bytes: int = 0, additional_credit_bytes: int = 0, ack_id: Optional[str] = None) -> Dict[str, Any]:
         consumed = max(0, int(consumed_bytes or 0))
         additional = max(0, int(additional_credit_bytes or 0))
         self.output_inflight_bytes = max(0, int(self.output_inflight_bytes or 0) - consumed)
@@ -175,7 +175,7 @@ class HostedProcessStreamSession:
             "credit_bytes": max(0, int(self.output_credit_bytes or 0)),
         }
 
-    def abandon_output_stream(self, *, reason: Optional[str] = None) -> Dict[str, object]:
+    def abandon_output_stream(self, *, reason: Optional[str] = None) -> Dict[str, Any]:
         self.output_closed_by_client = True
         self.output_close_reason = str(reason or "").strip() or "stream_closed_by_client"
         return {
@@ -185,7 +185,7 @@ class HostedProcessStreamSession:
             "reason": self.output_close_reason,
         }
 
-    def _payload_from_frame(self, row: Dict[str, object]) -> Dict[str, object]:
+    def _payload_from_frame(self, row: Dict[str, Any]) -> Dict[str, Any]:
         return {
             key: value
             for key, value in dict(row or {}).items()
@@ -206,7 +206,7 @@ class HostedProcessStreamSession:
             }
         }
 
-    def _event_row(self, event_type: str, payload: Dict[str, object]) -> Dict[str, object]:
+    def _event_row(self, event_type: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         row = dict(payload or {})
         row.pop("kind", None)
         row.pop("type", None)
@@ -219,7 +219,7 @@ class HostedProcessStreamSession:
         )
         return batch.expanded_frames()[0]
 
-    def append(self, event_type: str, payload: Optional[Dict[str, object]] = None) -> Dict[str, object]:
+    def append(self, event_type: str, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         self.sequence += 1
         lane = hosted_stream_kind_lane(event_type)
         spec = hosted_stream_kind_spec(event_type)
@@ -248,9 +248,9 @@ class HostedProcessStreamSession:
                 break
         return row
 
-    def recv(self, max_items: int) -> List[Dict[str, object]]:
+    def recv(self, max_items: int) -> List[Dict[str, Any]]:
         limit = max(1, int(max_items or 1))
-        queued: List[tuple[str, Dict[str, object]]] = []
+        queued: List[tuple[str, Dict[str, Any]]] = []
         for lane in _PROCESS_STREAM_LANE_ORDER:
             queued.extend((lane, dict(row)) for row in self.events_by_lane.setdefault(lane, deque()))
         if len(queued) <= limit:
@@ -286,7 +286,7 @@ class HostedProcessStreamSession:
         self.pending_loss = {"output": 0, "event": 0, "audit": 0}
         return loss
 
-    def batch_from_events(self, events: List[Dict[str, object]], *, loss: HostedStreamLoss, more: bool) -> Dict[str, object]:
+    def batch_from_events(self, events: List[Dict[str, Any]], *, loss: HostedStreamLoss, more: bool) -> Dict[str, Any]:
         frames: List[HostedStreamFrame] = []
         sequence = 0
         timestamp_ms = int(time.time() * 1000)
@@ -339,7 +339,7 @@ class HostedProcessSandboxBase:
     def get_or_create_pool(self, environment_key: str, *, desired_capacity: int = 1) -> HostedProcessPool:
         return self.pool_registry.get_or_create(self.pool_key(environment_key), desired_capacity=desired_capacity)
 
-    def resources(self, environment_key: str) -> Dict[str, object]:
+    def resources(self, environment_key: str) -> Dict[str, Any]:
         pool = self.pool_registry.get(self.pool_key(environment_key))
         if pool is None:
             return {
@@ -349,7 +349,7 @@ class HostedProcessSandboxBase:
             }
         return pool.resources()
 
-    def set_capacity(self, environment_key: str, *, capacity: int) -> Dict[str, object]:
+    def set_capacity(self, environment_key: str, *, capacity: int) -> Dict[str, Any]:
         pool = self.get_or_create_pool(environment_key, desired_capacity=capacity)
         return {
             "status": "ok",
@@ -372,8 +372,8 @@ class HostedProcessSandboxBase:
         queue_policy: str = "fail_fast",
         queue_depth: int = 0,
         queue_timeout_seconds: float = 0.0,
-        concurrency: Optional[Dict[str, object]] = None,
-    ) -> Dict[str, object]:
+        concurrency: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         pool = self.pool_registry.get_or_create(
             self.pool_key(environment_key),
             desired_capacity=desired_capacity,
@@ -407,28 +407,28 @@ class HostedProcessSandboxBase:
         status: str = "ok",
         reason: Optional[str] = None,
         output_bytes: Optional[int] = None,
-    ) -> Dict[str, object]:
+    ) -> Dict[str, Any]:
         pool = self.pool_registry.get(self.pool_key(environment_key))
         if pool is None:
             return {"status": "not_found", "environment_key": str(environment_key or "").strip(), "request_id": str(request_id or "").strip()}
         return pool.finish_request(request_id, status=status, reason=reason, output_bytes=output_bytes)
 
-    def cancel_request(self, *, environment_key: str, request_id: str) -> Dict[str, object]:
+    def cancel_request(self, *, environment_key: str, request_id: str) -> Dict[str, Any]:
         pool = self.pool_registry.get(self.pool_key(environment_key))
         if pool is None:
             return {"status": "not_found", "environment_key": str(environment_key or "").strip(), "request_id": str(request_id or "").strip()}
         return pool.cancel_request(request_id)
 
-    def claim_dispatch(self, *, environment_key: str, request_id: str) -> Dict[str, object]:
+    def claim_dispatch(self, *, environment_key: str, request_id: str) -> Dict[str, Any]:
         pool = self.pool_registry.get(self.pool_key(environment_key))
         if pool is None:
             return {"status": "not_found", "environment_key": str(environment_key or "").strip(), "request_id": str(request_id or "").strip()}
         return pool.claim_dispatch(request_id)
 
-    def request_status(self, *, environment_key: str, request_id: str) -> Dict[str, object]:
+    def request_status(self, *, environment_key: str, request_id: str) -> Dict[str, Any]:
         return self.pool_registry.request_status(self.pool_key(environment_key), request_id)
 
-    def record_stream_event(self, *, environment_key: str, request_id: str, event: HostedStreamEvent | Dict[str, object]) -> Dict[str, object]:
+    def record_stream_event(self, *, environment_key: str, request_id: str, event: HostedStreamEvent | Dict[str, Any]) -> Dict[str, Any]:
         pool = self.pool_registry.get(self.pool_key(environment_key))
         if pool is None:
             return {"status": "not_found", "environment_key": str(environment_key or "").strip(), "request_id": str(request_id or "").strip()}
@@ -443,7 +443,7 @@ class HostedProcessSandboxBase:
         factory: Optional[WorkerFactory] = None,
         desired_capacity: int = 1,
         max_events: int = 256,
-    ) -> Dict[str, object]:
+    ) -> Dict[str, Any]:
         rid = str(request_id or "").strip() or f"{self.sandbox_kind}-stream-{int(time.time() * 1000)}"
         scheduled = self.submit_request(
             environment_key=environment_key,
@@ -467,7 +467,7 @@ class HostedProcessSandboxBase:
         self.record_stream_event(environment_key=session.environment_key, request_id=rid, event=started)
         return {"status": "ok", "stream_id": stream_id, "request_id": rid, "environment_key": session.environment_key}
 
-    def stream_emit(self, *, stream_id: str, event_type: str, payload: Optional[Dict[str, object]] = None) -> Dict[str, object]:
+    def stream_emit(self, *, stream_id: str, event_type: str, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         sid = str(stream_id or "").strip()
         session = self._streams.get(sid)
         if session is None:
@@ -479,7 +479,7 @@ class HostedProcessSandboxBase:
         self.record_stream_event(environment_key=session.environment_key, request_id=session.request_id, event=event)
         return {"status": "ok", "stream_id": sid, "event": event}
 
-    def event_subscribe(self, *, stream_id: str, max_items: int = 64) -> Dict[str, object]:
+    def event_subscribe(self, *, stream_id: str, max_items: int = 64) -> Dict[str, Any]:
         sid = str(stream_id or "").strip()
         session = self._streams.get(sid)
         if session is None:
@@ -497,7 +497,7 @@ class HostedProcessSandboxBase:
             "canceled": session.canceled,
         }
 
-    def stream_send(self, *, stream_id: str, message: Optional[Dict[str, object]] = None) -> Dict[str, object]:
+    def stream_send(self, *, stream_id: str, message: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         sid = str(stream_id or "").strip()
         session = self._streams.get(sid)
         if session is None:
@@ -530,7 +530,7 @@ class HostedProcessSandboxBase:
         pool_cancel = self.cancel_request(environment_key=session.environment_key, request_id=session.request_id)
         return {"status": "ok", "stream_id": sid, "accepted": True, "message": cancel, "workflow_pool_cancel": pool_cancel}
 
-    def stream_close(self, *, stream_id: str) -> Dict[str, object]:
+    def stream_close(self, *, stream_id: str) -> Dict[str, Any]:
         sid = str(stream_id or "").strip()
         session = self._streams.pop(sid, None)
         if session is None:
