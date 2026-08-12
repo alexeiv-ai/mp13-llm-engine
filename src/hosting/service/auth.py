@@ -85,6 +85,9 @@ _TOOLBOX_DEFINITION_COMMANDS = {
     "toolbox-revise-definition-plan",
     "toolbox-confirm-definition-plan",
     "toolbox-apply-definition",
+    "toolbox-prepare-definition-candidate",
+    "toolbox-get-definition-candidate",
+    "toolbox-renew-definition-candidate",
 }
 
 _TOOLBOX_DEPENDENCY_APPROVAL_COMMANDS = {

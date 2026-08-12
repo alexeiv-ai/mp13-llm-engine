@@ -17,8 +17,9 @@ generic locks/requests, CAS changes, evidence, child replanning, exact public
 projections, and stale/retry/restart/concurrency safety proofs are committed.
 The strict v3 candidate retention/quota policy, durable candidate repository,
 pre-publication rollout seam, candidate operation kinds, and shared validated
-candidate preparation are committed. Next, expose bounded get/renew, then wire
-candidate execution, exact publication, discard, and restart cleanup.
+candidate preparation and bounded get/renew surfaces are committed. Next, wire
+candidate execution, exact publication, discard, expiry cleanup, and restart
+reconciliation.
 
 Resume in this order:
 
@@ -75,10 +76,8 @@ The pre-R7 P0 clean-cut items are complete.
 
 ### R7.2 candidate lifecycle
 
-- Expose the committed candidate preparation through authorized daemon/channel/
-  CLI surfaces without adding a worker kind or generic code-execution endpoint.
-- Expose the committed bounded records, requested lifetime, renewal, and
-  in-flight lease primitives through get/renew/execute/publish/discard.
+- Expose candidate execution, exact publication, and discard through authorized
+  daemon/channel/CLI surfaces without adding a worker kind or generic endpoint.
 - Add restart reconciliation, resource cleanup, stale-pin revalidation, and
   exact warmed-candidate publication.
 - Enforce the same execution gates, sandbox, host-API/data/network approvals,
@@ -120,6 +119,7 @@ The pre-R7 P0 clean-cut items are complete.
 | CODE/TEST-R7.2C | Rollout preparation is split before publication while one-shot apply preserves atomic routing and failure cleanup; rollout/atomic lane passed 11 tests. |
 | CODE/TEST-R7.2D | Candidate prepare/publish/discard have distinct durable operation kinds and strict phase sets; operation contract/repository lane passed 55 tests. |
 | CODE/TEST-R7.2E | One-shot apply and candidate preparation share actor/revision/pin/exact-approval validation; selected generic records remap to confirmed profile IDs, preparation persists the exact warmed payload without publication, retry is stable, and approval cannot be reused; focused lane passed 21 tests (one recorded legacy daemon fixture deselected). |
+| CODE/TEST-R7.2F | Authorized prepare/get/renew daemon, channel, and CLI surfaces expose only bounded actor-scoped records; renewal is idempotent and revalidates active/config/catalog/host-policy/source pins plus candidate workers; combined transport/auth/service/repository/operation lane passed 89 tests with no deselections. |
 | CODE-R8A–C | Versioned neutral state, Python/JS shared manager adoption, GC/repair controls passed focused coverage. |
 | CODE/TEST-R9 partial | Structured auth, role/hash authority, redaction, startup modes, generic lifecycle, and retry/restart identity passed focused coverage. |
 | TEST-R8.2C checkpoint | Workflow operation suite passed; full helper suite passed 116 tests on resume. |

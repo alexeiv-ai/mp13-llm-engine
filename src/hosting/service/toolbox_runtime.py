@@ -1613,6 +1613,73 @@ class ToolboxRuntimeMixin:
                 reason=str(getattr(exc, "code", "") or "definition_candidate_prepare_failed"),
             )
 
+    def toolbox_get_definition_candidate(
+        self,
+        *,
+        candidate_ref: str,
+        owner_actor_id: str = "service:local",
+        authority_id: str = "authority:local",
+    ) -> Dict[str, Any]:
+        record = self._toolbox_definition_candidates.get(
+            candidate_ref,
+            owner_actor_id=owner_actor_id,
+            authority_id=authority_id,
+            now_ms=int(time.time() * 1000),
+        )
+        return record.public_projection(candidate_ref)
+
+    def _validate_toolbox_candidate_pins(self, candidate: Any) -> None:
+        active = self._toolbox_state_v2.get(candidate.toolbox_id)
+        if dict(active or {}).get("active_revision") != candidate.pins.active_definition_revision:
+            raise ValueError("candidate_stale")
+        context = self._toolbox_definition_planning_context()
+        configuration = context["configuration"]
+        if configuration is None or (
+            self.hosting_configuration_revision != candidate.pins.configuration_revision
+            or context["catalog_revision"] != candidate.pins.catalog_revision
+            or context["policy"].revision != candidate.pins.dependency_policy_revision
+            or configuration.config_revision != candidate.pins.host_config_revision
+            or configuration.source_set_revision != candidate.pins.source_set_revision
+            or context["target"] != candidate.pins.target
+        ):
+            raise ValueError("candidate_stale")
+        expected_engines = set(candidate.retained_payload["candidate_engine_ids"])
+        for engine_id in expected_engines:
+            registration = dict(self._find_registration(engine_id) or {})
+            if (
+                registration.get("routing_state") != "candidate"
+                or str(dict(registration.get("bundle") or {}).get("definition_revision") or "")
+                != candidate.definition_revision
+            ):
+                raise ValueError("candidate_stale")
+
+    def toolbox_renew_definition_candidate(
+        self,
+        *,
+        candidate_ref: str,
+        requested_lifetime_ms: int,
+        request_id: str,
+        owner_actor_id: str = "service:local",
+        authority_id: str = "authority:local",
+    ) -> Dict[str, Any]:
+        now_ms = int(time.time() * 1000)
+        candidate = self._toolbox_definition_candidates.get(
+            candidate_ref,
+            owner_actor_id=owner_actor_id,
+            authority_id=authority_id,
+            now_ms=now_ms,
+        )
+        self._validate_toolbox_candidate_pins(candidate)
+        renewed = self._toolbox_definition_candidates.renew(
+            candidate_ref,
+            owner_actor_id=owner_actor_id,
+            authority_id=authority_id,
+            request_id=request_id,
+            requested_lifetime_ms=requested_lifetime_ms,
+            now_ms=now_ms,
+        )
+        return renewed.public_projection(candidate_ref)
+
     def _apply_resolved_toolbox_definition(
         self,
         *,

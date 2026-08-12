@@ -3620,6 +3620,44 @@ class EngineHostControlChannel:
             },
         )
 
+    def toolbox_prepare_definition_candidate(
+        self,
+        *,
+        plan_id: str,
+        confirmation_ref: str,
+        request_id: str,
+        dependency_approval_ref: Optional[str] = None,
+        requested_lifetime_ms: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        return self.start_host_operation(
+            command="toolbox-prepare-definition-candidate",
+            payload={
+                "plan_id": str(plan_id or "").strip(),
+                "confirmation_ref": str(confirmation_ref or "").strip(),
+                "request_id": str(request_id or "").strip(),
+                "dependency_approval_ref": dependency_approval_ref,
+                "requested_lifetime_ms": requested_lifetime_ms,
+            },
+        )
+
+    def toolbox_get_definition_candidate(self, *, candidate_ref: str) -> Dict[str, Any]:
+        return dict(self._invoke(
+            "toolbox-get-definition-candidate",
+            {"candidate_ref": str(candidate_ref or "").strip()},
+        ) or {})
+
+    def toolbox_renew_definition_candidate(
+        self, *, candidate_ref: str, requested_lifetime_ms: int, request_id: str
+    ) -> Dict[str, Any]:
+        return dict(self._invoke(
+            "toolbox-renew-definition-candidate",
+            {
+                "candidate_ref": str(candidate_ref or "").strip(),
+                "requested_lifetime_ms": requested_lifetime_ms,
+                "request_id": str(request_id or "").strip(),
+            },
+        ) or {})
+
     def model_runtime_status(self) -> Dict[str, Any]:
         res = self._invoke("model-runtime-status", {})
         return dict(res or {})

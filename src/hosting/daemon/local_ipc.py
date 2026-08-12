@@ -2294,6 +2294,7 @@ class EngineHostDaemon:
                     "toolbox-revise-definition-plan",
                     "toolbox-confirm-definition-plan",
                     "toolbox-apply-definition",
+                    "toolbox-prepare-definition-candidate",
                     "environment-remove",
                     "environment-template-construct",
                     "toolbox-gc",
@@ -2489,6 +2490,7 @@ class EngineHostDaemon:
                 "toolbox-revise-definition-plan",
                 "toolbox-confirm-definition-plan",
                 "toolbox-apply-definition",
+                "toolbox-prepare-definition-candidate",
                 "environment-template-construct",
                 "toolbox-gc",
                 "toolbox-repair",
@@ -3303,6 +3305,39 @@ class EngineHostDaemon:
                 confirmation_ref=str(payload.get("confirmation_ref") or ""),
                 request_id=str(payload.get("request_id") or ""),
                 dependency_approval_ref=payload.get("dependency_approval_ref"),
+                owner_actor_id=actor,
+                authority_id=actor,
+            )
+        if cmd == "toolbox-prepare-definition-candidate":
+            actor = str(payload.get("_claim_actor_id") or "service:local")
+            return svc.toolbox_prepare_definition_candidate(
+                plan_id=str(payload.get("plan_id") or ""),
+                confirmation_ref=str(payload.get("confirmation_ref") or ""),
+                request_id=str(payload.get("request_id") or ""),
+                dependency_approval_ref=payload.get("dependency_approval_ref"),
+                requested_lifetime_ms=payload.get("requested_lifetime_ms"),
+                owner_actor_id=actor,
+                authority_id=actor,
+            )
+        if cmd == "toolbox-get-definition-candidate":
+            if set(payload) - {"candidate_ref", "_claim_actor_id"}:
+                raise ValueError("candidate_request_fields_invalid")
+            actor = str(payload.get("_claim_actor_id") or "service:local")
+            return svc.toolbox_get_definition_candidate(
+                candidate_ref=str(payload.get("candidate_ref") or ""),
+                owner_actor_id=actor,
+                authority_id=actor,
+            )
+        if cmd == "toolbox-renew-definition-candidate":
+            if set(payload) - {
+                "candidate_ref", "requested_lifetime_ms", "request_id", "_claim_actor_id"
+            }:
+                raise ValueError("candidate_request_fields_invalid")
+            actor = str(payload.get("_claim_actor_id") or "service:local")
+            return svc.toolbox_renew_definition_candidate(
+                candidate_ref=str(payload.get("candidate_ref") or ""),
+                requested_lifetime_ms=payload.get("requested_lifetime_ms"),
+                request_id=str(payload.get("request_id") or ""),
                 owner_actor_id=actor,
                 authority_id=actor,
             )

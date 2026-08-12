@@ -597,6 +597,43 @@ def test_confirmed_plan_prepares_durable_candidate_without_publication(tmp_path:
     assert service._toolbox_state_v2.get("custom-demo") is None  # noqa: SLF001
     registrations = service._toolbox_executor_registrations("custom-demo")  # noqa: SLF001
     assert registrations and {item["routing_state"] for item in registrations} == {"candidate"}
+    assert service.toolbox_get_definition_candidate(
+        candidate_ref=candidate["candidate_ref"],
+        owner_actor_id="actor:a",
+        authority_id="workspace:a",
+    ) == candidate
+    with pytest.raises(PermissionError, match="candidate_not_found"):
+        service.toolbox_get_definition_candidate(
+            candidate_ref=candidate["candidate_ref"],
+            owner_actor_id="actor:other",
+            authority_id="workspace:a",
+        )
+    renewed = service.toolbox_renew_definition_candidate(
+        candidate_ref=candidate["candidate_ref"],
+        requested_lifetime_ms=900_000,
+        request_id="renew-candidate",
+        owner_actor_id="actor:a",
+        authority_id="workspace:a",
+    )
+    assert renewed["expires_at_ms"] > candidate["expires_at_ms"]
+    assert service.toolbox_renew_definition_candidate(
+        candidate_ref=candidate["candidate_ref"],
+        requested_lifetime_ms=900_000,
+        request_id="renew-candidate",
+        owner_actor_id="actor:a",
+        authority_id="workspace:a",
+    ) == renewed
+    original_configuration_revision = service.hosting_configuration_revision
+    service.hosting_configuration_revision = "sha256:" + "9" * 64
+    with pytest.raises(ValueError, match="candidate_stale"):
+        service.toolbox_renew_definition_candidate(
+            candidate_ref=candidate["candidate_ref"],
+            requested_lifetime_ms=900_000,
+            request_id="renew-stale-candidate",
+            owner_actor_id="actor:a",
+            authority_id="workspace:a",
+        )
+    service.hosting_configuration_revision = original_configuration_revision
     duplicate = service.toolbox_prepare_definition_candidate(
         plan_id=plan["plan_id"],
         confirmation_ref=confirmation["confirmation_ref"],

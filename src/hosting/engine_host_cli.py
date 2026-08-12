@@ -923,6 +923,9 @@ def _build_parser() -> argparse.ArgumentParser:
         "toolbox-confirm-definition-plan",
         "toolbox-approve-confirmed-definition-plan",
         "toolbox-apply-definition",
+        "toolbox-prepare-definition-candidate",
+        "toolbox-get-definition-candidate",
+        "toolbox-renew-definition-candidate",
         "environment-template-list",
         "environment-template-describe",
         "environment-template-construct",
@@ -1188,6 +1191,7 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
         "toolbox-revise-definition-plan",
         "toolbox-confirm-definition-plan",
         "toolbox-apply-definition",
+        "toolbox-prepare-definition-candidate",
         "environment-template-construct",
         "toolbox-gc",
         "toolbox-repair",
@@ -2128,6 +2132,27 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
                     dependency_approval_ref=payload.get("dependency_approval_ref"),
                 )
             )
+            return 0
+        if cmd == "toolbox-prepare-definition-candidate":
+            _print_ok(svc.toolbox_prepare_definition_candidate(
+                plan_id=str(payload.get("plan_id") or ""),
+                confirmation_ref=str(payload.get("confirmation_ref") or ""),
+                request_id=str(payload.get("request_id") or ""),
+                dependency_approval_ref=payload.get("dependency_approval_ref"),
+                requested_lifetime_ms=payload.get("requested_lifetime_ms"),
+            ))
+            return 0
+        if cmd == "toolbox-get-definition-candidate":
+            _print_ok(svc.toolbox_get_definition_candidate(
+                candidate_ref=str(payload.get("candidate_ref") or ""),
+            ))
+            return 0
+        if cmd == "toolbox-renew-definition-candidate":
+            _print_ok(svc.toolbox_renew_definition_candidate(
+                candidate_ref=str(payload.get("candidate_ref") or ""),
+                requested_lifetime_ms=payload.get("requested_lifetime_ms"),
+                request_id=str(payload.get("request_id") or ""),
+            ))
             return 0
         if cmd == "environment-template-list":
             _print_ok(svc.environment_template_list(include_revoked=bool(payload.get("include_revoked", False))))
