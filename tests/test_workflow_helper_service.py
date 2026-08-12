@@ -76,7 +76,6 @@ class EngineHostService(_EngineHostService):
 
 def test_spawn_workflow_python_helper_uses_existing_spawn_model(tmp_path: Path, monkeypatch) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     seen = {}
@@ -121,7 +120,6 @@ def test_spawn_workflow_python_helper_uses_existing_spawn_model(tmp_path: Path, 
 
 def test_host_capability_audit_event_persists_in_control_state(tmp_path: Path) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
 
@@ -155,7 +153,6 @@ def test_host_capability_audit_event_persists_in_control_state(tmp_path: Path) -
 
 def test_host_capability_audit_list_filters_rows(tmp_path: Path) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     svc._append_host_capability_audit_event(
@@ -189,7 +186,6 @@ def test_host_capability_audit_list_filters_rows(tmp_path: Path) -> None:
 
 def test_workflow_node_service_owned_fallback_policy_is_ignored(tmp_path: Path) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     root = tmp_path / "artifacts"
@@ -236,7 +232,6 @@ def _service_broker_session(*, workflow_id: str, approval: dict | None = None) -
 
 def test_workflow_node_uses_service_broker_host_capability_session(tmp_path: Path) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     root = tmp_path / "artifacts"
@@ -271,7 +266,6 @@ def test_workflow_node_uses_service_broker_host_capability_session(tmp_path: Pat
 
 def test_workflow_node_service_broker_approval_denies_before_io(tmp_path: Path) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     root = tmp_path / "artifacts"
@@ -310,7 +304,6 @@ def test_workflow_node_service_broker_approval_denies_before_io(tmp_path: Path) 
 
 def test_workflow_node_service_broker_keeps_sandbox_policy_boundary(tmp_path: Path) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     root = tmp_path / "artifacts"
@@ -342,7 +335,6 @@ def test_workflow_node_service_broker_keeps_sandbox_policy_boundary(tmp_path: Pa
 
 def test_workflow_node_service_broker_respects_host_api_namespace_policy(tmp_path: Path) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     root = tmp_path / "artifacts"
@@ -375,7 +367,6 @@ def test_workflow_node_service_broker_respects_host_api_namespace_policy(tmp_pat
 
 def test_workflow_node_uses_toolbox_host_capability_session(tmp_path: Path, monkeypatch) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     calls: list[dict] = []
@@ -428,7 +419,6 @@ def test_workflow_node_uses_toolbox_host_capability_session(tmp_path: Path, monk
 
 def test_workflow_node_uses_client_host_capability_callback_session(tmp_path: Path) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     relay = HostCapabilityProviderCallbackRelay()
@@ -890,7 +880,6 @@ def test_daemon_dispatches_workflow_js_facade() -> None:
 
 def test_workflow_js_facade_reserves_environment_keyed_node_pool(tmp_path: Path) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
 
@@ -915,7 +904,6 @@ def test_workflow_js_facade_reserves_environment_keyed_node_pool(tmp_path: Path)
 
 def test_workflow_js_facade_isolates_node_pools_by_policy(tmp_path: Path) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
 
@@ -937,7 +925,6 @@ def test_workflow_js_facade_isolates_node_pools_by_policy(tmp_path: Path) -> Non
 
 def test_workflow_python_helper_resources_include_child_process_metrics(tmp_path: Path, monkeypatch) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
 
@@ -980,7 +967,6 @@ def test_workflow_python_helper_resources_include_child_process_metrics(tmp_path
 
 def test_workflow_python_helper_proxy_realizes_runtime_environment(tmp_path: Path, monkeypatch) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     svc.spawn(
@@ -1035,7 +1021,6 @@ def test_workflow_python_helper_proxy_realizes_runtime_environment(tmp_path: Pat
 
 def test_workflow_python_helper_spawn_and_rpc_round_trip(tmp_path: Path) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     reg = svc.spawn_workflow_python_helper(
@@ -1088,7 +1073,6 @@ def test_workflow_python_helper_spawn_and_rpc_round_trip(tmp_path: Path) -> None
 
 def test_workflow_python_environment_spec_facade(tmp_path: Path) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
 
@@ -1106,7 +1090,6 @@ def test_workflow_python_environment_spec_facade(tmp_path: Path) -> None:
 
 def test_ensure_workflow_python_helper_spawns_environment_keyed_worker(tmp_path: Path, monkeypatch) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     seen = {}
@@ -1144,7 +1127,6 @@ def test_ensure_workflow_python_helper_spawns_environment_keyed_worker(tmp_path:
 
 def test_ensure_workflow_python_annotates_existing_registration(tmp_path: Path, monkeypatch) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     svc.register_spawned(
@@ -1174,7 +1156,6 @@ def test_ensure_workflow_python_annotates_existing_registration(tmp_path: Path, 
 
 def test_ensure_workflow_python_rejects_environment_key_mismatch(tmp_path: Path) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
 
@@ -1191,7 +1172,6 @@ def test_ensure_workflow_python_rejects_environment_key_mismatch(tmp_path: Path)
 
 def test_workflow_python_facade_isolates_pools_by_environment_key(tmp_path: Path, monkeypatch) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     spawned = []
@@ -1230,7 +1210,6 @@ def test_workflow_python_facade_isolates_pools_by_environment_key(tmp_path: Path
 
 def test_workflow_python_capacity_and_cancel_infer_environment_key_from_registration(tmp_path: Path, monkeypatch) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     svc.register_spawned(
@@ -1264,7 +1243,6 @@ def test_workflow_python_capacity_and_cancel_infer_environment_key_from_registra
 
 def test_old_python_helper_resource_alias_reports_workflow_pool_for_annotated_registration(tmp_path: Path, monkeypatch) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     svc.register_spawned(
@@ -1294,7 +1272,6 @@ def test_old_python_helper_resource_alias_reports_workflow_pool_for_annotated_re
 
 def test_old_python_helper_capacity_and_cancel_alias_update_workflow_pool(tmp_path: Path, monkeypatch) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     svc.register_spawned(
@@ -1333,7 +1310,6 @@ def test_old_python_helper_capacity_and_cancel_alias_update_workflow_pool(tmp_pa
 
 def test_execute_workflow_python_helper_facade_uses_existing_rpc(tmp_path: Path, monkeypatch) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     calls = {}
@@ -1379,7 +1355,6 @@ def test_execute_workflow_python_helper_facade_uses_existing_rpc(tmp_path: Path,
 
 def test_execute_workflow_js_facade_uses_quickjs_node_runtime(tmp_path: Path) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     source = "exports.run = function(input, api) { return { output: { accepted: input.value === 7 }, state_patch: { seen: true } }; };"
@@ -1410,7 +1385,6 @@ def test_execute_workflow_js_facade_uses_quickjs_node_runtime(tmp_path: Path) ->
 
 def test_workflow_js_node_instance_routes_sequential_calls_to_pinned_worker(tmp_path: Path) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     source = "exports.run = function(input) { return { output: { value: input.value } }; };"
@@ -1457,7 +1431,6 @@ def test_workflow_js_node_instance_routes_sequential_calls_to_pinned_worker(tmp_
 
 def test_workflow_js_node_instance_reuses_worker_process_after_code_edit(tmp_path: Path) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     first_source = "exports.run = function(input) { return { output: { version: 1, value: input.value } }; };"
@@ -1510,7 +1483,6 @@ def test_workflow_js_node_instance_reuses_worker_process_after_code_edit(tmp_pat
 
 def test_workflow_js_node_persistent_module_instance_preserves_globals(tmp_path: Path) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     source = """
@@ -1556,7 +1528,6 @@ exports.run = function(input) {
 
 def test_workflow_js_node_persistent_module_requires_explicit_replace_for_code_edit(tmp_path: Path) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
 
@@ -1604,7 +1575,6 @@ def test_execute_workflow_js_node_runs_project_from_ref(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     out = svc.execute_workflow_js(
@@ -1632,7 +1602,6 @@ def test_workflow_js_node_project_instance_requires_explicit_policy(tmp_path: Pa
     (project_root / "src").mkdir(parents=True)
     (project_root / "src" / "runner.js").write_text("exports.run = function(payload) { return {output: payload}; };\n", encoding="utf-8")
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
 
@@ -1671,7 +1640,6 @@ def test_workflow_js_node_project_instance_routes_with_isolated_context(tmp_path
         encoding="utf-8",
     )
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     project_policy = {
@@ -1722,7 +1690,6 @@ def test_workflow_js_node_project_instance_routes_with_isolated_context(tmp_path
 
 def test_workflow_python_node_action_manifest_discovers_and_routes_exports(tmp_path: Path) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     source = (
@@ -1766,7 +1733,6 @@ def test_workflow_python_node_action_manifest_discovers_and_routes_exports(tmp_p
 
 def test_workflow_python_node_dynamic_action_discovery_routes_exports(tmp_path: Path) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     source = (
@@ -1810,7 +1776,6 @@ def test_workflow_python_node_dynamic_action_discovery_routes_exports(tmp_path: 
 
 def test_workflow_python_dynamic_action_discovery_can_target_pinned_instance(tmp_path: Path) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     source = (
@@ -1845,7 +1810,6 @@ def test_workflow_python_dynamic_action_discovery_can_target_pinned_instance(tmp
 
 def test_workflow_js_node_action_manifest_routes_exports(tmp_path: Path) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     source = (
@@ -1880,7 +1844,6 @@ def test_workflow_js_node_action_manifest_routes_exports(tmp_path: Path) -> None
 
 def test_workflow_js_node_dynamic_action_discovery_routes_exports(tmp_path: Path) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     source = (
@@ -1921,7 +1884,6 @@ def test_workflow_js_node_dynamic_action_discovery_routes_exports(tmp_path: Path
 
 def test_execute_workflow_js_rejects_missing_contract_fields(tmp_path: Path) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     source = "exports.run = function() { return {output: true}; };"
@@ -1944,7 +1906,6 @@ def test_execute_workflow_js_rejects_missing_contract_fields(tmp_path: Path) -> 
 
 def test_workflow_js_node_resources_report_terminal_metrics(tmp_path: Path) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     env = svc.workflow_js_environment_spec(profile="node", environment_name="workflow-js-node", javascript={})
@@ -2021,7 +1982,6 @@ def test_workflow_js_node_resources_report_terminal_metrics(tmp_path: Path) -> N
 
 def test_workflow_js_stream_emits_terminal_events_and_artifacts(tmp_path: Path) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     source = """
@@ -2073,7 +2033,6 @@ exports.run = function(input, api) {
 
 def test_workflow_js_stream_retention_reports_dropped_events(tmp_path: Path) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     source = """
@@ -2115,7 +2074,6 @@ exports.run = function(input, api) {
 
 def test_workflow_js_stream_cancel_routes_to_worker_cancel(tmp_path: Path) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     source = "exports.run = function() { while (true) {} };"
@@ -2162,7 +2120,6 @@ def test_workflow_js_stream_cancel_routes_to_worker_cancel(tmp_path: Path) -> No
 
 def test_execute_workflow_python_node_returns_contract_envelope(tmp_path: Path) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     source = "def run(payload):\n    return {'output': {'accepted': payload['value'] == 7}, 'state_patch': {'seen': True}}\n"
@@ -2199,7 +2156,6 @@ def test_execute_workflow_python_node_keeps_and_reaps_warm_child_process(tmp_pat
     from hosting.sandbox.workflow_python_node_runtime import _ACTIVE_NODE_PROCS
 
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     source = "def run(payload):\n    return {'output': {'done': True}}\n"
@@ -2229,7 +2185,6 @@ def test_execute_workflow_python_node_keeps_and_reaps_warm_child_process(tmp_pat
 
 def test_execute_workflow_python_node_does_not_call_helper_proxy(tmp_path: Path, monkeypatch) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     source = "def run(payload):\n    return {'output': {'value': payload['value']}}\n"
@@ -2260,7 +2215,6 @@ def test_execute_workflow_python_node_does_not_call_helper_proxy(tmp_path: Path,
 
 def test_execute_workflow_python_node_enforces_import_allowlist(tmp_path: Path) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     source = "import math\n\ndef run(payload):\n    return {'output': math.sqrt(payload['value'])}\n"
@@ -2299,7 +2253,6 @@ def test_execute_workflow_python_node_enforces_import_allowlist(tmp_path: Path) 
 
 def test_execute_workflow_python_node_rejects_environment_key_mismatch(tmp_path: Path) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     source = "def run(payload):\n    return {'output': {'ok': True}}\n"
@@ -2326,7 +2279,6 @@ def test_execute_workflow_python_node_rejects_environment_key_mismatch(tmp_path:
 
 def test_execute_workflow_python_node_rejects_dependency_execution_without_verified_environment(tmp_path: Path) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     source = "def run(payload):\n    return {'output': {'ok': True}}\n"
@@ -2354,7 +2306,6 @@ def test_execute_workflow_python_node_rejects_dependency_execution_without_verif
 
 def test_execute_workflow_python_node_rejects_uv_execution_without_verified_environment(tmp_path: Path) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     source = "def run(payload):\n    return {'output': {'ok': True}}\n"
@@ -2381,7 +2332,6 @@ def test_execute_workflow_python_node_rejects_uv_execution_without_verified_envi
 
 def test_execute_workflow_python_node_rejects_dependency_execution_without_install_receipt(tmp_path: Path) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     python = {"package_pins": {"demo-dependency": "1.0.0"}}
@@ -2423,7 +2373,6 @@ def test_execute_workflow_python_node_rejects_dependency_execution_without_insta
 
 def test_execute_workflow_python_node_uses_selected_verified_dependency_runtime(tmp_path: Path, monkeypatch) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     selected = {"python_executable": sys.executable, "python_source": "venv"}
@@ -2477,7 +2426,6 @@ def test_execute_workflow_python_node_uses_selected_verified_dependency_runtime(
 
 def test_execute_workflow_python_node_uses_selected_verified_uv_runtime(tmp_path: Path, monkeypatch) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     selected = {"python_executable": sys.executable, "python_source": "uv"}
@@ -2531,7 +2479,6 @@ def test_execute_workflow_python_node_uses_selected_verified_uv_runtime(tmp_path
 
 def test_execute_workflow_python_node_uses_separate_pools_for_incompatible_identities(tmp_path: Path) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     source = "def run(payload):\n    return {'output': {'value': payload['value']}}\n"
@@ -2568,7 +2515,6 @@ def test_execute_workflow_python_node_uses_separate_pools_for_incompatible_ident
 
 def test_execute_workflow_python_node_runs_same_code_concurrently_by_capacity(tmp_path: Path) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     source = "import time\n\ndef run(payload):\n    progress({'slot': payload['slot']})\n    time.sleep(0.75)\n    return {'output': {'slot': payload['slot']}}\n"
@@ -2615,7 +2561,6 @@ def test_execute_workflow_python_node_runs_same_code_concurrently_by_capacity(tm
 
 def test_execute_workflow_python_node_routes_different_jobs_through_same_capacity_pool(tmp_path: Path) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     source_a = "import time\n\ndef run(payload):\n    time.sleep(0.25)\n    return {'output': {'job': 'a'}}\n"
@@ -2656,7 +2601,6 @@ def test_execute_workflow_python_node_routes_different_jobs_through_same_capacit
 
 def test_execute_workflow_python_node_reuses_warm_worker_for_compatible_sequential_requests(tmp_path: Path) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     source = "import os\n\ndef run(payload):\n    return {'output': {'pid': os.getpid(), 'value': payload['value']}}\n"
@@ -2691,7 +2635,6 @@ def test_execute_workflow_python_node_reuses_warm_worker_for_compatible_sequenti
 
 def test_execute_workflow_python_node_approval_requester_receives_normalized_payload(tmp_path: Path) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     source = (
@@ -2745,7 +2688,6 @@ def test_execute_workflow_python_node_approval_requester_receives_normalized_pay
 
 def test_execute_workflow_js_node_approval_requester_receives_normalized_payload(tmp_path: Path) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     source = (
@@ -2797,7 +2739,6 @@ def test_execute_workflow_js_node_approval_requester_receives_normalized_payload
 
 def test_workflow_python_stream_open_uses_approval_requester_before_subscription(tmp_path: Path) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     source = (
@@ -2857,7 +2798,6 @@ def test_workflow_python_stream_open_uses_approval_requester_before_subscription
 
 def test_workflow_python_node_instance_routes_sequential_calls_to_pinned_worker(tmp_path: Path) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     source = (
@@ -2911,7 +2851,6 @@ def test_workflow_python_node_instance_routes_sequential_calls_to_pinned_worker(
 
 def test_workflow_python_node_persistent_module_instance_preserves_globals(tmp_path: Path) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     source = (
@@ -2961,7 +2900,6 @@ def test_workflow_python_node_persistent_module_instance_preserves_globals(tmp_p
 
 def test_workflow_python_node_persistent_module_requires_explicit_replace_for_code_edit(tmp_path: Path) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
 
@@ -3004,7 +2942,6 @@ def test_workflow_python_node_project_instance_requires_explicit_policy(tmp_path
     (project_root / "src" / "pkg" / "__init__.py").write_text("", encoding="utf-8")
     (project_root / "src" / "pkg" / "runner.py").write_text("def run(payload):\n    return {'output': payload}\n", encoding="utf-8")
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     request = {
@@ -3047,7 +2984,6 @@ def test_workflow_python_node_project_instance_routes_with_isolated_process_stat
         encoding="utf-8",
     )
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     project_policy = {
@@ -3101,7 +3037,6 @@ def test_workflow_python_node_project_instance_routes_with_isolated_process_stat
 
 def test_execute_workflow_python_node_routes_edited_code_to_new_revision_worker(tmp_path: Path) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     source_a = "import os\n\ndef run(payload):\n    return {'output': {'pid': os.getpid(), 'version': 'a'}}\n"
@@ -3138,7 +3073,6 @@ def test_execute_workflow_python_node_trims_idle_warm_workers_on_capacity_shrink
     tmp_path: Path, request: pytest.FixtureRequest
 ) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     request.addfinalizer(lambda: svc._workflow_python_node_runtime_registry().shutdown())
@@ -3189,7 +3123,6 @@ def test_execute_workflow_python_node_trims_idle_warm_workers_on_capacity_shrink
 
 def test_execute_workflow_python_node_recycles_idle_worker_when_policy_identity_changes(tmp_path: Path) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     source = "import os\n\ndef run(payload):\n    return {'output': {'pid': os.getpid()}}\n"
@@ -3232,7 +3165,6 @@ def test_execute_workflow_python_node_recycles_idle_worker_when_policy_identity_
 
 def test_workflow_python_node_resources_recycle_unhealthy_idle_workers(tmp_path: Path) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     source = "import os\n\ndef run(payload):\n    return {'output': {'pid': os.getpid()}}\n"
@@ -3273,7 +3205,6 @@ def test_workflow_python_node_resources_recycle_unhealthy_idle_workers(tmp_path:
 
 def test_execute_workflow_python_node_does_not_promote_untrusted_artifact_refs(tmp_path: Path) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     source = (
@@ -3307,7 +3238,6 @@ def test_execute_workflow_python_node_does_not_promote_untrusted_artifact_refs(t
 
 def test_execute_workflow_python_node_collects_declared_output_artifact(tmp_path: Path) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     source = (
@@ -3352,7 +3282,6 @@ def test_execute_workflow_python_node_collects_declared_output_artifact(tmp_path
 
 def test_execute_workflow_python_node_failure_exposes_artifact_recovery(tmp_path: Path) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     source = (
@@ -3401,7 +3330,6 @@ def test_execute_workflow_python_node_failure_exposes_artifact_recovery(tmp_path
 
 def test_execute_workflow_python_node_reads_declared_input_artifact_ref(tmp_path: Path) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     write_source = (
@@ -3455,7 +3383,6 @@ def test_execute_workflow_python_node_reads_declared_input_artifact_ref(tmp_path
 
 def test_execute_workflow_python_node_rejects_undeclared_artifact_file_access(tmp_path: Path) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     source = (
@@ -3489,7 +3416,6 @@ def test_execute_workflow_python_node_rejects_undeclared_artifact_file_access(tm
 
 def test_execute_workflow_python_node_reads_inline_input_artifact(tmp_path: Path) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     source = (
@@ -3614,7 +3540,6 @@ def test_workflow_python_node_preserves_structured_host_api_error_reason() -> No
 
 def test_execute_workflow_python_node_host_api_respects_disabled_fs_namespace(tmp_path: Path) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     describe_source = (
@@ -3679,7 +3604,6 @@ def test_execute_workflow_python_node_host_api_respects_disabled_fs_namespace(tm
 
 def test_execute_workflow_python_node_exposes_sandbox_describe(tmp_path: Path) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     source = (
@@ -3711,7 +3635,6 @@ def test_execute_workflow_python_node_exposes_sandbox_describe(tmp_path: Path) -
 
 def test_execute_workflow_python_node_state_api_persists_only_sandbox_state(tmp_path: Path) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     write_source = (
@@ -3787,7 +3710,6 @@ def test_execute_workflow_python_node_state_api_persists_only_sandbox_state(tmp_
 
 def test_execute_workflow_python_node_state_api_is_disabled_by_default(tmp_path: Path) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     source = (
@@ -3824,7 +3746,6 @@ def test_execute_workflow_python_node_state_api_is_disabled_by_default(tmp_path:
 
 def test_sandbox_state_snapshot_and_restore_instance_partition(tmp_path: Path) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     svc.sandbox_state_set(
@@ -3882,7 +3803,6 @@ def test_sandbox_state_snapshot_and_restore_instance_partition(tmp_path: Path) -
 
 def test_execute_workflow_python_node_host_api_http_fetch_requires_broker_policy(tmp_path: Path) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     describe_source = (
@@ -3947,7 +3867,6 @@ def test_execute_workflow_python_node_host_api_http_fetch_requires_broker_policy
 
 def test_execute_workflow_python_node_collects_declared_inline_output_artifact(tmp_path: Path) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     source = (
@@ -3993,7 +3912,6 @@ def test_execute_workflow_python_node_uses_policy_artifact_root_refs(tmp_path: P
     seed = project_root / "seed.txt"
     seed.write_text("project seed", encoding="utf-8")
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     source = (
@@ -4037,7 +3955,6 @@ def test_execute_workflow_python_node_reads_recursive_masked_input_artifacts(tmp
     (project_root / "data" / "nested" / "b.txt").write_text("b", encoding="utf-8")
     (project_root / "data" / "skip.bin").write_text("skip", encoding="utf-8")
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     source = (
@@ -4076,7 +3993,6 @@ def test_execute_workflow_python_node_collects_recursive_masked_output_artifacts
     project_root = tmp_path / "project"
     project_root.mkdir()
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     source = (
@@ -4120,7 +4036,6 @@ def test_execute_workflow_python_node_reads_inline_zip_input_artifact(tmp_path: 
         zf.writestr("a.txt", "a")
         zf.writestr("nested/b.txt", "b")
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     source = (
@@ -4164,7 +4079,6 @@ def test_execute_workflow_python_node_reads_inline_zip_input_artifact(tmp_path: 
 
 def test_execute_workflow_python_node_runs_snippet_without_export(tmp_path: Path) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     source = "progress({'phase': 'snippet'})\nresult = {'output': {'value': payload['value'] + 1}, 'state_patch': {'mode': 'snippet'}}\n"
@@ -4191,7 +4105,6 @@ def test_execute_workflow_python_node_runs_snippet_without_export(tmp_path: Path
 
 def test_execute_workflow_python_node_runs_snippet_builder_request(tmp_path: Path) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     request = build_workflow_python_node_snippet_request(
@@ -4221,7 +4134,6 @@ def test_execute_workflow_python_node_runs_multi_module_project_from_ref(tmp_pat
         encoding="utf-8",
     )
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
 
@@ -4258,7 +4170,6 @@ def test_execute_workflow_python_node_project_imports_cannot_escape_staged_root(
     )
     (project_root / "outside_helper.py").write_text("VALUE = 9\n", encoding="utf-8")
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
 
@@ -4287,7 +4198,6 @@ def test_execute_workflow_python_node_exports_many_outputs_as_inline_zip_without
     project_root = tmp_path / "project"
     project_root.mkdir()
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     source = (
@@ -4340,7 +4250,6 @@ def test_execute_workflow_python_node_host_takeover_copies_ref_outputs_to_host_s
     project_root = tmp_path / "project"
     project_root.mkdir()
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     source = (
@@ -4382,7 +4291,6 @@ def test_execute_workflow_python_node_host_takeover_copies_ref_outputs_to_host_s
 
 def test_execute_workflow_python_node_rejects_non_alias_artifact_refs(tmp_path: Path) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     source = "def run(payload):\n    return {'output': {'done': True}}\n"
@@ -4408,7 +4316,6 @@ def test_execute_workflow_python_node_rejects_non_alias_artifact_refs(tmp_path: 
 
 def test_workflow_python_node_stream_returns_pending_worker_events(tmp_path: Path) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     source = "def run(payload):\n    return {'output': {'accepted': payload['value'] == 7}, 'progress': {'message': 'finished'}}\n"
@@ -4454,7 +4361,6 @@ def test_workflow_python_node_stream_returns_pending_worker_events(tmp_path: Pat
 
 def test_workflow_python_node_stream_emits_runtime_progress_and_stdout(tmp_path: Path) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     source = "def run(payload):\n    progress({'message': 'halfway'})\n    print('node stdout')\n    return {'output': {'done': True}}\n"
@@ -4494,7 +4400,6 @@ def test_workflow_python_node_stream_emits_runtime_progress_and_stdout(tmp_path:
 
 def test_workflow_python_node_stream_emits_opt_in_heartbeats_for_long_running_request(tmp_path: Path) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     source = "import time\n\ndef run(payload):\n    time.sleep(0.35)\n    return {'output': {'done': True}}\n"
@@ -4541,7 +4446,6 @@ def test_workflow_python_node_stream_emits_opt_in_heartbeats_for_long_running_re
 
 def test_workflow_python_node_stream_reports_bounded_retention_drops(tmp_path: Path) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     source = "def run(payload):\n    for i in range(5):\n        progress({'value': i})\n    return {'output': {'done': True}}\n"
@@ -4584,7 +4488,6 @@ def test_workflow_python_node_stream_reports_bounded_retention_drops(tmp_path: P
 
 def test_workflow_python_node_stream_does_not_emit_untrusted_artifact_events(tmp_path: Path) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     source = (
@@ -4631,7 +4534,6 @@ def test_workflow_python_node_stream_does_not_emit_untrusted_artifact_events(tmp
 
 def test_workflow_python_node_stream_emits_declared_output_artifact_event(tmp_path: Path) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     source = (
@@ -4684,7 +4586,6 @@ def test_workflow_python_node_stream_emits_declared_output_artifact_event(tmp_pa
 
 def test_execute_workflow_python_node_reports_structured_runtime_error(tmp_path: Path) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     source = "def run(payload):\n    raise ValueError('bad node')\n"
@@ -4717,7 +4618,6 @@ def test_execute_workflow_python_node_reports_structured_runtime_error(tmp_path:
 
 def test_execute_workflow_python_node_reports_timeout(tmp_path: Path) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     source = "def run(payload):\n    while True:\n        pass\n"
@@ -4748,7 +4648,6 @@ def test_execute_workflow_python_node_reports_timeout(tmp_path: Path) -> None:
 
 def test_execute_workflow_python_node_reports_output_limit(tmp_path: Path) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     source = "def run(payload):\n    return {'output': 'x' * 256}\n"
@@ -4777,7 +4676,6 @@ def test_execute_workflow_python_node_reports_output_limit(tmp_path: Path) -> No
 
 def test_execute_workflow_python_node_truncates_stdout_and_stderr_logs(tmp_path: Path) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     source = (
@@ -4814,7 +4712,6 @@ def test_execute_workflow_python_node_truncates_stdout_and_stderr_logs(tmp_path:
 
 def test_workflow_python_stream_cancel_routes_to_worker_cancel(tmp_path: Path, monkeypatch) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     base = svc._workflow_python_stream_base()
@@ -4856,7 +4753,6 @@ def test_cancel_workflow_python_node_interrupts_active_execution(
     tmp_path: Path, request: pytest.FixtureRequest
 ) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     request.addfinalizer(lambda: svc._workflow_python_node_runtime_registry().shutdown())
@@ -4917,7 +4813,6 @@ def test_cancel_workflow_python_node_interrupts_active_execution(
 
 def test_workflow_python_node_stream_cancel_interrupts_active_execution(tmp_path: Path) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     source = "def run(payload):\n    while True:\n        pass\n"
@@ -4976,7 +4871,6 @@ def test_workflow_python_node_stream_cancel_interrupts_active_execution(tmp_path
 
 def test_workflow_python_node_stream_reports_capacity_pressure_and_recovers_after_cancel(tmp_path: Path) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     source = "def run(payload):\n    while True:\n        pass\n"
@@ -5055,7 +4949,6 @@ def test_workflow_python_node_stream_reports_capacity_pressure_and_recovers_afte
 
 def test_workflow_python_node_resources_report_terminal_metrics(tmp_path: Path) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     env = svc.workflow_python_environment_spec(profile="node", environment_name="workflow-python-node", python={})
@@ -5133,7 +5026,6 @@ def test_workflow_python_node_resources_report_terminal_metrics(tmp_path: Path) 
 
 def test_workflow_python_node_resources_include_active_process_metrics(tmp_path: Path, monkeypatch) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     monkeypatch.setattr(svc, "_process_resource_snapshot", lambda pid: {"pid": pid, "cpu_percent": 3.5, "memory_mb": 9.25})
