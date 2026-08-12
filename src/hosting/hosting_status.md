@@ -811,6 +811,19 @@ the slice.
 - Remaining: R4.2 remains open until repository-wide fixture/doc removal searches
   clear; the generic builder still bridges retained toolbox internals under R7
 
+### TEST-R4.1F — HTTP ingress fixture clean cut
+
+- Date: 2026-08-12
+- Plan IDs: R4.1/R4.2 and R9.2/R9.4 (partial); P0/P2; high expertise
+- Outcome: authenticated HTTP proxying, engine-specific traffic overrides, and
+  cross-transport daemon-version checks now use the same immutable v3 hosting
+  configuration as local IPC startup
+- Removal proof: the HTTP ingress suite contains zero `control_state_file`,
+  `set_control_config`, or `access_control.json` matches
+- Proof: `python -m pytest tests/test_hosting_http_ingress.py -q --maxfail=20`
+  passed all three tests, including 401/403 enforcement and static per-engine
+  path-policy behavior
+
 Append one concise entry per completed slice. Include exact commands, counts,
 durations where useful, negative-path results, commit pin, and dependent receipt
 impact. Do not paste an unstructured full test transcript.

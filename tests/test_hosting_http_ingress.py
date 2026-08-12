@@ -13,6 +13,7 @@ from pathlib import Path
 
 from hosting.daemon import EngineHostDaemon, EngineHostHttpIngressDaemon
 from hosting.service.host_service import EngineHostService
+from tests.hosting_v3_fixtures import hosting_configuration, write_hosting_configuration
 
 
 def _free_port() -> int:
@@ -71,11 +72,13 @@ def _install_ipc_http_stub(monkeypatch) -> None:
 
 def test_http_ingress_proxy_with_traffic_auth(tmp_path: Path, monkeypatch) -> None:
     engines_state = tmp_path / "managed_engines.json"
-    control_state = tmp_path / "access_control.json"
     pid_file = tmp_path / "daemon_http.pid"
 
     _install_ipc_http_stub(monkeypatch)
-    svc = EngineHostService(engines_state_file=engines_state, control_state_file=control_state)
+    svc = EngineHostService(
+        engines_state_file=engines_state,
+        hosting_configuration=hosting_configuration(tmp_path, require_auth=True),
+    )
     svc.register_spawned(
         engine_id="worker1",
         pid=os.getpid(),
@@ -87,7 +90,6 @@ def test_http_ingress_proxy_with_traffic_auth(tmp_path: Path, monkeypatch) -> No
         role="model_user",
         allowed_engines=["worker1"],
     )
-    svc.set_control_config(require_auth=True)
     issued = svc.auth_issue_session(
         key_id="traffic1",
         key_secret="secret1",
@@ -102,7 +104,6 @@ def test_http_ingress_proxy_with_traffic_auth(tmp_path: Path, monkeypatch) -> No
         port=ingress_port,
         pid_file=pid_file,
         engines_state_file=engines_state,
-        control_state_file=control_state,
         service=svc,
     )
     t = threading.Thread(target=daemon.run, daemon=True)
@@ -163,11 +164,26 @@ def test_http_ingress_proxy_with_traffic_auth(tmp_path: Path, monkeypatch) -> No
 
 def test_http_ingress_per_engine_traffic_policy_override(tmp_path: Path, monkeypatch) -> None:
     engines_state = tmp_path / "managed_engines.json"
-    control_state = tmp_path / "access_control.json"
     pid_file = tmp_path / "daemon_http.pid"
 
     _install_ipc_http_stub(monkeypatch)
-    svc = EngineHostService(engines_state_file=engines_state, control_state_file=control_state)
+    svc = EngineHostService(
+        engines_state_file=engines_state,
+        hosting_configuration=hosting_configuration(
+            tmp_path,
+            require_auth=True,
+            traffic_policy={
+                "allowed_methods": ["GET"],
+                "allowed_path_prefixes": ["/health"],
+            },
+            engine_traffic_policies={
+                "worker2": {
+                    "allowed_methods": ["GET"],
+                    "allowed_path_prefixes": ["/other"],
+                }
+            },
+        ),
+    )
     svc.register_spawned(
         engine_id="worker1",
         pid=os.getpid(),
@@ -184,19 +200,6 @@ def test_http_ingress_per_engine_traffic_policy_override(tmp_path: Path, monkeyp
         role="model_user",
         allowed_engines=["worker1", "worker2"],
     )
-    svc.set_control_config(
-        require_auth=True,
-        traffic_policy={
-            "allowed_methods": ["GET"],
-            "allowed_path_prefixes": ["/health"],
-        },
-        engine_traffic_policies={
-            "worker2": {
-                "allowed_methods": ["GET"],
-                "allowed_path_prefixes": ["/other"],
-            }
-        },
-    )
     issued = svc.auth_issue_session(
         key_id="traffic1",
         key_secret="secret1",
@@ -211,7 +214,6 @@ def test_http_ingress_per_engine_traffic_policy_override(tmp_path: Path, monkeyp
         port=ingress_port,
         pid_file=pid_file,
         engines_state_file=engines_state,
-        control_state_file=control_state,
         service=svc,
     )
     t = threading.Thread(target=daemon.run, daemon=True)
@@ -260,14 +262,14 @@ def test_http_ingress_per_engine_traffic_policy_override(tmp_path: Path, monkeyp
 
 def test_daemon_version_contract_semver_and_path_consistency(tmp_path: Path) -> None:
     engines_state = tmp_path / "managed_engines.json"
-    control_state = tmp_path / "access_control.json"
     pid_file = tmp_path / "daemon_http.pid"
+    mp13_config = write_hosting_configuration(tmp_path)
 
     daemon_rpc = EngineHostDaemon(
         port=0,
         pid_file=tmp_path / "daemon.pid",
         engines_state_file=engines_state,
-        control_state_file=control_state,
+        mp13_config_file=mp13_config,
     )
     req = json.dumps({"seq": 1, "cmd": "auth-status", "payload": {}})
     rpc_out = asyncio.run(daemon_rpc._dispatch(req, peer_host="127.0.0.1"))
@@ -282,7 +284,7 @@ def test_daemon_version_contract_semver_and_path_consistency(tmp_path: Path) -> 
         port=ingress_port,
         pid_file=pid_file,
         engines_state_file=engines_state,
-        control_state_file=control_state,
+        mp13_config_file=mp13_config,
     )
     t = threading.Thread(target=daemon_http.run, daemon=True)
     t.start()
