@@ -15,6 +15,7 @@ from hosting.daemon import (
     start_daemon_background,
     start_http_ingress_background,
 )
+from tests.hosting_v3_fixtures import write_hosting_configuration
 
 
 def test_pid_alive_returns_true_on_system_error(monkeypatch) -> None:
@@ -109,7 +110,7 @@ def test_start_daemon_background_uses_protocol_ping_for_readiness(monkeypatch) -
     assert result == {"pid": 55555, "port": 19876}
 
 
-def test_start_daemon_background_transports_toolbox_inputs_without_argv_secrets(
+def test_start_daemon_background_transports_only_mp13_configuration(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -147,45 +148,25 @@ def test_start_daemon_background_transports_toolbox_inputs_without_argv_secrets(
         def close(self) -> None:
             return
 
-    def _write(path: Path, payload: dict[str, Any]) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(payload), encoding="utf-8")
-
     def _popen(argv, **_kwargs):
         captured["argv"] = list(argv)
-        config_index = argv.index("--toolbox-config-file") + 1
-        config_path = Path(argv[config_index])
-        captured["config_path"] = config_path
-        captured["config"] = json.loads(config_path.read_text(encoding="utf-8"))
         return _FakeProc()
 
-    monkeypatch.setattr("hosting.daemon.toolbox_launch_config._default_state_dir", lambda: tmp_path)
-    monkeypatch.setattr("hosting.daemon.toolbox_launch_config._atomic_write_secure_json", _write)
     monkeypatch.setattr("hosting.daemon.background.subprocess.Popen", _popen)
     monkeypatch.setattr("hosting.daemon.background.DaemonPidFile", _FakePidFile)
     monkeypatch.setattr("hosting.daemon.background.time.sleep", lambda _sec: None)
     monkeypatch.setattr("hosting.engine_host_connection.LocalSocketConnection", _FakeConn)
 
+    mp13_config = write_hosting_configuration(tmp_path)
     result = start_daemon_background(
         port=19876,
         wait_ready_seconds=1.0,
-        toolbox_host_project_configuration={"revision": "config-r1"},
-        toolbox_artifact_sources={"release": tmp_path / "artifacts"},
-        toolbox_trust_public_keys={"release-key": "public-value"},
-        toolbox_source_credentials={"credential:index": "Bearer secret-value"},
-        toolbox_dependency_policy={"revision": "policy-r1"},
+        mp13_config_file=mp13_config,
     )
 
-    argv_text = " ".join(str(value) for value in captured["argv"])
-    assert "secret-value" not in argv_text
-    assert captured["config"] == {
-        "toolbox_host_project_configuration": {"revision": "config-r1"},
-        "toolbox_artifact_sources": {"release": str(tmp_path / "artifacts")},
-        "toolbox_trust_public_keys": {"release-key": "public-value"},
-        "toolbox_source_credentials": {"credential:index": "Bearer secret-value"},
-        "toolbox_dependency_policy": {"revision": "policy-r1"},
-    }
-    assert not Path(captured["config_path"]).exists()
+    argv = list(captured["argv"])
+    assert argv[argv.index("--mp13-config-file") + 1] == str(mp13_config)
+    assert not any("toolbox" in str(value) for value in argv)
     assert result == {"pid": 55555, "port": 19876}
 
 
@@ -337,7 +318,7 @@ def test_start_daemon_background_refuses_live_shutting_down_pid(monkeypatch) -> 
 
 
 def test_foreground_daemon_rejects_existing_reachable_pidfile(monkeypatch, tmp_path: Path) -> None:
-    daemon = EngineHostDaemon(pid_file=tmp_path / "daemon.pid")
+    daemon = EngineHostDaemon(pid_file=tmp_path / "daemon.pid", mp13_config_file=write_hosting_configuration(tmp_path))
     started_listener = {"called": False}
 
     class _FakePidFile:
@@ -483,7 +464,7 @@ def test_daemon_shutdown_progress_updates_pidfile_and_crash_report(tmp_path: Pat
         port=0,
         pid_file=tmp_path / "daemon.pid",
         engines_state_file=tmp_path / "engines.json",
-        control_state_file=tmp_path / "access_control.json",
+        mp13_config_file=write_hosting_configuration(tmp_path),
     )
     daemon.pid_file.write(pid=1234, port=19876, shutdown_token=daemon.shutdown_token)
     daemon.pid_file.mark_shutting_down(reason="unit_test_shutdown", requested_by="unit-test")
@@ -794,12 +775,11 @@ def test_apply_foreground_terminal_disconnect_policy_ignores_sighup_when_configu
         port=0,
         pid_file=tmp_path / "daemon.pid",
         engines_state_file=tmp_path / "engines.json",
-        control_state_file=tmp_path / "control.json",
+        mp13_config_file=write_hosting_configuration(
+            tmp_path,
+            lifecycle={"profile": "foreground_terminal_bound", "on_terminal_disconnect": "keep_daemon_running"},
+        ),
         runtime_profile="foreground_terminal_bound",
-    )
-    daemon.svc.set_control_config(
-        lifecycle_profile="foreground_terminal_bound",
-        lifecycle_policy={"on_terminal_disconnect": "keep_daemon_running"},
     )
     captured: dict[str, object] = {}
 
@@ -819,7 +799,9 @@ def test_apply_foreground_terminal_disconnect_policy_noop_for_detached(monkeypat
         port=0,
         pid_file=tmp_path / "daemon.pid",
         engines_state_file=tmp_path / "engines.json",
-        control_state_file=tmp_path / "control.json",
+        mp13_config_file=write_hosting_configuration(
+            tmp_path, lifecycle={"profile": "detached_user_process"}
+        ),
         runtime_profile="detached_user_process",
     )
     called: dict[str, object] = {}
@@ -839,7 +821,7 @@ def test_execute_shutdown_checkpoints_orders_managed_shutdowns(tmp_path: Path) -
         port=0,
         pid_file=tmp_path / "daemon.pid",
         engines_state_file=tmp_path / "engines.json",
-        control_state_file=tmp_path / "control.json",
+        mp13_config_file=write_hosting_configuration(tmp_path),
         runtime_profile="detached_user_process",
     )
     shutdown_calls: list[str] = []
@@ -868,7 +850,7 @@ def test_execute_shutdown_checkpoints_handles_discovery_failure(tmp_path: Path) 
         port=0,
         pid_file=tmp_path / "daemon.pid",
         engines_state_file=tmp_path / "engines.json",
-        control_state_file=tmp_path / "control.json",
+        mp13_config_file=write_hosting_configuration(tmp_path),
     )
 
     def _raise_discovery(**_kwargs):
@@ -885,7 +867,7 @@ def test_drain_inflight_operations_completes_pending_tasks(tmp_path: Path) -> No
         port=0,
         pid_file=tmp_path / "daemon.pid",
         engines_state_file=tmp_path / "engines.json",
-        control_state_file=tmp_path / "control.json",
+        mp13_config_file=write_hosting_configuration(tmp_path),
     )
 
     async def _run() -> None:

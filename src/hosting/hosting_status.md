@@ -791,6 +791,26 @@ the slice.
   passed three tests, including local/remote path projection and restrictive
   state-file handling
 
+### TEST-R4.1E — daemon startup and pidfile fixture clean cut
+
+- Date: 2026-08-12
+- Plan IDs: R4.1/R4.2 and R9.2/R9.3/R9.4 (partial); P0/P2; high expertise
+- Outcome: foreground/background startup, PID lifecycle, shutdown checkpoints,
+  terminal-disconnect policy, and startup recovery tests now pass one MP13
+  configuration path; former launcher tests instead prove exact v3 package
+  source/policy wiring, secret-free argv, and generic readiness degradation
+- Removal proof: both startup files contain zero `control_state_file`,
+  `access_control.json`, removed launcher-file, trust-key, source-credential, or
+  five toolbox startup-mapping matches
+- Proof: `python -m pytest tests/test_hosting_daemon_pidfile.py
+  tests/test_hosting_daemon_startup.py tests/test_hosting_daemon_startup_v3.py
+  -q --maxfail=30` passed 43 tests, including listener-before-PID ordering,
+  duplicate-daemon rejection, background ping readiness, crash progress,
+  lifecycle signal behavior, exact foreground handoff, strict signature
+  rejection, and bounded package/environment readiness
+- Remaining: R4.2 remains open until repository-wide fixture/doc removal searches
+  clear; the generic builder still bridges retained toolbox internals under R7
+
 Append one concise entry per completed slice. Include exact commands, counts,
 durations where useful, negative-path results, commit pin, and dependent receipt
 impact. Do not paste an unstructured full test transcript.

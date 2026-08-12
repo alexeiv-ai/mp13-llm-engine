@@ -17,6 +17,9 @@ def hosting_configuration(
     claims: dict | None = None,
     traffic_policy: dict | None = None,
     engine_traffic_policies: dict | None = None,
+    package_sources: dict | None = None,
+    package_credentials: dict | None = None,
+    dependency_policy: dict | None = None,
 ):
     root = Path(root).resolve()
     _, resolver = resolve_config_paths(
@@ -46,12 +49,12 @@ def hosting_configuration(
         },
         "package_management": {
             "artifact_root": "@packages/artifacts", "lock_root": "@packages/locks",
-            "sources": {}, "credentials": {},
-            "dependency_policy": {
+            "sources": dict(package_sources or {}), "credentials": dict(package_credentials or {}),
+            "dependency_policy": dict(dependency_policy or {
                 "policy_id": "default", "revision": 1, "allowed_source_ids": [],
                 "allowed_platforms": ["*"], "allowed_runtimes": ["python", "javascript"],
                 "max_artifact_bytes": 67108864, "require_sha256": True, "optional_verifier": None,
-            }, "verification": {"hash_algorithm": "sha256"},
+            }), "verification": {"hash_algorithm": "sha256"},
         },
         "environment_management": {
             "environment_root": "@environments", "scratch_root": "@hosting/scratch",
@@ -70,6 +73,9 @@ def write_hosting_configuration(
     claims: dict | None = None,
     traffic_policy: dict | None = None,
     engine_traffic_policies: dict | None = None,
+    package_sources: dict | None = None,
+    package_credentials: dict | None = None,
+    dependency_policy: dict | None = None,
 ) -> Path:
     root = Path(root).resolve()
     config = root / "mp13_config.json"
@@ -88,6 +94,9 @@ def write_hosting_configuration(
         claims=claims,
         traffic_policy=traffic_policy,
         engine_traffic_policies=engine_traffic_policies,
+        package_sources=package_sources,
+        package_credentials=package_credentials,
+        dependency_policy=dependency_policy,
     )
     def plain(value):
         if isinstance(value, Mapping):

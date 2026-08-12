@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import base64
 import asyncio
 import json
 import os
@@ -8,13 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from hosting.daemon import EngineHostDaemon, run_daemon_foreground
-from hosting.toolbox.identity import identity_digest
-from hosting.toolbox.target import detect_current_toolbox_target
-
-
-TRUST_PUBLIC_KEYS = {
-    "parent-release-toolbox-v1": base64.urlsafe_b64encode(bytes(32)).decode().rstrip("=")
-}
+from tests.hosting_v3_fixtures import write_hosting_configuration
 
 
 class _FakePidFile:
@@ -28,73 +21,12 @@ class _FakePidFile:
         self._events.append("pid_remove")
 
 
-def _toolbox_configuration() -> dict[str, Any]:
-    return {
-        "builtins": [
-            {
-                "template_id": template_id,
-                "imports": ["hosting"],
-                "package_requirements": [],
-                "sandbox_policy": "compute-only",
-                "required": True,
-                "prewarm": False,
-                "provenance": "parent-release",
-            }
-            for template_id in ("core", "py-compute")
-        ],
-        "sources": [
-            {
-                "source_id": "parent-release-resources",
-                "kind": "airgap_store",
-                "origin": "airgap://parent-release-resources",
-                "credential_ref": None,
-                "allowed_package_namespaces": ["*"],
-                "priority": 100,
-                "trust_key_ids": ["parent-release-toolbox-v1"],
-                "maximum_download_bytes": 536_870_912,
-            }
-        ],
-        "resolution": {
-            "mode": "air_gapped",
-            "timeout_seconds": 300,
-            "maximum_bytes": 536_870_912,
-            "maximum_artifacts": 256,
-            "allowed_redirect_origins": [],
-            "wheel_only": True,
-        },
-        "retention": {
-            "artifact_cache_grace_seconds": 604_800,
-            "maximum_cache_bytes": 10_737_418_240,
-            "maximum_cache_artifacts": 4096,
-            "protected_digests": [],
-            "remove_unreferenced_custom_revisions_on_apply": False,
-        },
-    }
-
-
-def _toolbox_dependency_policy() -> dict[str, Any]:
-    target = detect_current_toolbox_target()
-    body = {
-        "allowed_template_ids": ["core", "py-compute"],
-        "allowed_targets": [target.name],
-        "package_allowlist": [],
-        "package_denylist": [],
-        "allow_custom": False,
-        "custom_requires_approval": True,
-        "online_resolution_allowed": False,
-        "allowed_index_origins": [],
-    }
-    return {
-        "revision": identity_digest("hosting.toolbox.test.policy.v1", body),
-        **body,
-    }
-
-
-def test_daemon_run_writes_pid_after_local_listener_ready(monkeypatch) -> None:
+def test_daemon_run_writes_pid_after_local_listener_ready(monkeypatch, tmp_path: Path) -> None:
     events: list[str] = []
     daemon = EngineHostDaemon(
         port=0,
-        pid_file=Path("X:/tmp/daemon.pid"),
+        pid_file=tmp_path / "daemon.pid",
+        mp13_config_file=write_hosting_configuration(tmp_path),
     )
     daemon.pid_file = _FakePidFile(events)  # type: ignore[assignment]
 
@@ -118,7 +50,12 @@ def test_daemon_tcp_control_listener_is_not_supported_even_with_remote_roles(tmp
     daemon = EngineHostDaemon(
         port=0,
         pid_file=tmp_path / "daemon.pid",
-        control_state_file=tmp_path / "control.json",
+        mp13_config_file=write_hosting_configuration(
+            tmp_path,
+            require_auth=True,
+            connectivity_mode="ssh_tunnel_only",
+            lifecycle={"profile": "detached_user_process"},
+        ),
     )
     daemon.svc.auth_upsert_key(
         key_id="admin",
@@ -132,17 +69,14 @@ def test_daemon_tcp_control_listener_is_not_supported_even_with_remote_roles(tmp
         auth_method="public_key",
         public_key="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAtransport transport@example",
     )
-    daemon.svc.set_control_config(
-        require_auth=True,
-        access_profile={"connectivity_mode": "ssh_tunnel_only"},
-        lifecycle_profile="detached_user_process",
-    )
-
     assert daemon._should_enable_tcp() is False  # noqa: SLF001
 
 
 def test_daemon_status_control_command_reports_start_time_and_uptime(monkeypatch, tmp_path: Path) -> None:
-    daemon = EngineHostDaemon(pid_file=tmp_path / "daemon.pid")
+    daemon = EngineHostDaemon(
+        pid_file=tmp_path / "daemon.pid",
+        mp13_config_file=write_hosting_configuration(tmp_path),
+    )
     daemon._started_at = 100.0  # noqa: SLF001
     daemon._started_monotonic = 10.0  # noqa: SLF001
     monkeypatch.setattr("hosting.daemon.local_ipc.time.time", lambda: 125.0)
@@ -179,7 +113,7 @@ def test_daemon_startup_recovery_stops_foreign_owner_registrations(
         port=0,
         pid_file=tmp_path / "daemon.pid",
         engines_state_file=tmp_path / "managed_engines.json",
-        control_state_file=tmp_path / "control.json",
+        mp13_config_file=write_hosting_configuration(tmp_path),
     )
     daemon.svc.register_spawned(
         engine_id="foreign-worker",
@@ -204,41 +138,46 @@ def test_daemon_startup_recovery_stops_foreign_owner_registrations(
     assert calls == [("foreign-worker", 3.0)]
 
 
-def test_normal_daemon_wires_strict_toolbox_configuration_sources_and_policy(
-    tmp_path: Path,
-) -> None:
-    target = detect_current_toolbox_target()
-    source_root = tmp_path / "airgap"
-    source_root.mkdir()
-    configuration = _toolbox_configuration()
-    dependency_policy = _toolbox_dependency_policy()
-
+def test_normal_daemon_wires_generic_package_sources_and_policy(tmp_path: Path) -> None:
+    mp13_config = write_hosting_configuration(
+        tmp_path,
+        package_sources={
+            "release": {
+                "kind": "airgap_store",
+                "locator": "@packages/artifacts",
+                "enabled": True,
+                "priority": 1,
+            }
+        },
+        dependency_policy={
+            "policy_id": "release-only",
+            "revision": 3,
+            "allowed_source_ids": ["release"],
+            "allowed_platforms": ["*"],
+            "allowed_runtimes": ["python"],
+            "max_artifact_bytes": 4096,
+            "require_sha256": True,
+            "optional_verifier": None,
+        },
+    )
     daemon = EngineHostDaemon(
         pid_file=tmp_path / "daemon.pid",
         engines_state_file=tmp_path / "engines.json",
-        control_state_file=tmp_path / "control.json",
-        toolbox_host_project_configuration=configuration,
-        toolbox_artifact_sources={"parent-release-resources": source_root},
-        toolbox_dependency_policy=dependency_policy,
-        toolbox_trust_public_keys=TRUST_PUBLIC_KEYS,
-    )
-    operation = daemon.svc._toolbox_setup_operation  # noqa: SLF001
-    terminal = daemon.svc._hosted_operations.wait_for_terminal(  # noqa: SLF001
-        operation_id=operation["operation"]["operation_id"], timeout_seconds=10
+        mp13_config_file=mp13_config,
     )
 
-    assert daemon.svc._toolbox_target == target  # noqa: SLF001
+    package = dict(daemon.svc.hosting_configuration.package_management)
+    assert dict(package["sources"])["release"]["kind"] == "airgap_store"
+    assert dict(package["dependency_policy"])["policy_id"] == "release-only"
     assert daemon.svc._hermetic_toolbox_environment_builder is not None  # noqa: SLF001
-    assert daemon.svc._configured_toolbox_dependency_policy.to_dict() == dependency_policy  # noqa: SLF001
-    assert terminal["lifecycle"] == "terminal_failure"
-    assert daemon.svc._toolbox_startup["status"] == "not_ready"  # noqa: SLF001
     summary = daemon.svc.hosting_setup_summary()
-    assert summary["toolbox_readiness"]["status"] == "degraded"
-    assert summary["toolbox_host_project"]["target"]["platform"] == target.platform
-    assert "credential_ref" not in str(summary["toolbox_host_project"])
+    assert summary["configuration"]["source_availability"] == {
+        "release": {"configured": True, "enabled": True}
+    }
+    assert "toolbox_host_project" not in summary
 
 
-def test_foreground_production_launcher_forwards_all_toolbox_inputs(
+def test_foreground_production_launcher_forwards_only_mp13_configuration(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -257,42 +196,22 @@ def test_foreground_production_launcher_forwards_all_toolbox_inputs(
         lambda _daemon: None,
     )
 
-    run_daemon_foreground(
-        port=0,
-        toolbox_host_project_configuration={"revision": "config-r1"},
-        toolbox_artifact_sources={"release": tmp_path / "artifacts"},
-        toolbox_trust_public_keys={"release-key": "public-value"},
-        toolbox_source_credentials={"credential:index": "Bearer secret-value"},
-        toolbox_dependency_policy={"revision": "policy-r1"},
-    )
+    mp13_config = write_hosting_configuration(tmp_path)
+    run_daemon_foreground(port=0, mp13_config_file=mp13_config)
 
-    assert captured["toolbox_host_project_configuration"] == {"revision": "config-r1"}
-    assert captured["toolbox_artifact_sources"] == {"release": tmp_path / "artifacts"}
-    assert captured["toolbox_trust_public_keys"] == {"release-key": "public-value"}
-    assert captured["toolbox_source_credentials"] == {
-        "credential:index": "Bearer secret-value"
-    }
-    assert captured["toolbox_dependency_policy"] == {"revision": "policy-r1"}
+    assert captured["mp13_config_file"] == mp13_config
+    assert not any(key.startswith("toolbox_") for key in captured)
     assert captured["ran"] is True
 
 
-def test_foreground_production_launcher_loads_secure_toolbox_configuration_file(
+def test_foreground_production_launcher_uses_configuration_path_without_loading_secrets(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
     captured: dict[str, Any] = {}
-    config_file = tmp_path / "toolbox-launch.json"
-    config_file.write_text(
-        json.dumps(
-            {
-                "toolbox_host_project_configuration": {"revision": "config-r1"},
-                "toolbox_artifact_sources": {"release": str(tmp_path / "artifacts")},
-                "toolbox_trust_public_keys": {"release-key": "public-value"},
-                "toolbox_source_credentials": {"credential:index": "Bearer secret-value"},
-                "toolbox_dependency_policy": {"revision": "policy-r1"},
-            }
-        ),
-        encoding="utf-8",
+    config_file = write_hosting_configuration(
+        tmp_path,
+        package_credentials={"private": "SENTINEL_SECRET"},
     )
 
     class _FakeDaemon:
@@ -308,50 +227,19 @@ def test_foreground_production_launcher_loads_secure_toolbox_configuration_file(
         lambda _daemon: None,
     )
 
-    run_daemon_foreground(toolbox_config_file=config_file)
+    run_daemon_foreground(mp13_config_file=config_file)
 
-    assert captured["toolbox_artifact_sources"] == {"release": tmp_path / "artifacts"}
-    assert captured["toolbox_source_credentials"] == {
-        "credential:index": "Bearer secret-value"
-    }
+    assert captured["mp13_config_file"] == config_file
+    assert "SENTINEL_SECRET" not in str(captured)
 
 
-def test_missing_partial_and_invalid_toolbox_setup_are_bounded_and_publish_nothing(
-    tmp_path: Path,
-) -> None:
-    cases = [
-        ({}, "toolbox_configuration_missing"),
-        (
-            {"toolbox_host_project_configuration": _toolbox_configuration()},
-            "toolbox_configuration_incomplete",
-        ),
-        (
-            {
-                "toolbox_host_project_configuration": {
-                    **_toolbox_configuration(),
-                    "credential": "must-not-leak",
-                },
-                "toolbox_artifact_sources": {
-                    "parent-release-resources": tmp_path / "secret-packages"
-                },
-                "toolbox_dependency_policy": _toolbox_dependency_policy(),
-                "toolbox_trust_public_keys": TRUST_PUBLIC_KEYS,
-            },
-            "toolbox_configuration_invalid",
-        ),
-    ]
-    for index, (kwargs, expected_code) in enumerate(cases):
-        daemon = EngineHostDaemon(
-            pid_file=tmp_path / f"daemon-{index}.pid",
-            engines_state_file=tmp_path / f"engines-{index}.json",
-            control_state_file=tmp_path / f"control-{index}.json",
-            **kwargs,
-        )
-        summary = daemon.svc.hosting_setup_summary()
-        readiness = summary["toolbox_readiness"]
-        assert readiness["status"] == "unavailable"
-        assert readiness["code"] == expected_code
-        assert readiness["templates"] == []
-        assert "must-not-leak" not in str(readiness)
-        assert "secret-packages" not in str(readiness)
-        assert daemon.svc._toolbox_template_catalog.read()["entries"] == []  # noqa: SLF001
+def test_missing_package_source_and_environment_template_are_bounded(tmp_path: Path) -> None:
+    daemon = EngineHostDaemon(
+        pid_file=tmp_path / "daemon.pid",
+        engines_state_file=tmp_path / "engines.json",
+        mp13_config_file=write_hosting_configuration(tmp_path),
+    )
+    readiness = {row["subsystem"]: row for row in daemon.svc.hosting_setup_summary()["readiness"]}
+    assert readiness["control"]["code"] == "ready"
+    assert readiness["package"]["code"] == "package_source_unavailable"
+    assert readiness["environment"]["code"] == "environment_template_unavailable"
