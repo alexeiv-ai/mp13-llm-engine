@@ -698,7 +698,7 @@ def test_r7_real_daemon_no_double_acceptance(tmp_path: Path) -> None:
         _start(
             restarted,
             seq=44,
-            command="toolbox-gc",
+            command="hosting-gc",
             payload={"request_id": "r7-gc"},
             token=restarted_tokens["administrator"],
         ),

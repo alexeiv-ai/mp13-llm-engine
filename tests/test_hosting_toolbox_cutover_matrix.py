@@ -10,6 +10,8 @@ from hosting.service.host_service import EngineHostService
 from hosting.service.toolbox_state_v2 import AtomicJsonToolboxStateV2Repository
 from hosting.toolbox.bundle_models import ToolboxDefinitionSpec
 from hosting.toolbox.hosted_ref import HostedToolBoxRef
+from hosting.toolbox.target import detect_current_toolbox_target
+from tests.hosting_v3_fixtures import hosting_configuration
 
 
 def test_removed_public_payload_and_state_shapes_are_rejected() -> None:
@@ -88,3 +90,19 @@ def test_only_explicit_release_archival_can_reference_version_one_state() -> Non
         if "toolbox_sandboxes.json" in text and path not in allowed:
             offenders.append(str(path.relative_to(root)))
     assert offenders == []
+
+
+def test_unconfigured_toolbox_readiness_uses_generic_hosting_code(tmp_path: Path) -> None:
+    service = EngineHostService(
+        engines_state_file=tmp_path / "engines.json",
+        hosting_configuration=hosting_configuration(tmp_path),
+    )
+    target = detect_current_toolbox_target()
+
+    readiness = service.toolbox_required_template_status(
+        python_abi=target.python_abi,
+        platform=target.platform,
+    )
+
+    assert readiness["code"] == "hosting_configuration_missing"
+    assert readiness["diagnostics"][0]["code"] == "hosting_configuration_missing"

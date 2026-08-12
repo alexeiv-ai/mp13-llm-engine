@@ -42,7 +42,7 @@ class _FakeHost:
         )
         return {"status": "ok", "summary": {"before_issue_count": 1, "after_issue_count": 0}}
 
-    def toolbox_gc(self, *, request_id):
+    def hosting_gc(self, *, request_id):
         self.calls.append(("gc", {"request_id": request_id}))
         return {"status": "ok", "summary": {"removed_engine_count": 0}}
 

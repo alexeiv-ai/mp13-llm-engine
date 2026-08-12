@@ -82,6 +82,10 @@ class HostedOperationsMixin:
             if target.kind != "template_id":
                 raise ValueError("environment_template_construct_selector_must_be_template_id")
             namespace = f"environment_template_construct:{target.id}"
+        elif kind == HostedExecutionKind.HOSTING_GC:
+            if target.kind != "host_scope" or target.id != "hosting":
+                raise ValueError("hosting_gc_selector_must_be_host_scope")
+            namespace = "hosting_gc:hosting"
         elif kind == HostedExecutionKind.TOOLBOX_MAINTENANCE:
             if target.kind != "host_scope" or target.id != "toolbox-host":
                 raise ValueError("toolbox_maintenance_selector_must_be_host_scope")

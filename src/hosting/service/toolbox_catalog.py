@@ -734,15 +734,15 @@ class ToolboxTemplateCatalogMixin:
         if not isinstance(configured, ToolboxHostProjectConfiguration):
             return {
                 "status": "unavailable",
-                "code": "toolbox_configuration_missing",
+                "code": "hosting_configuration_missing",
                 "config_revision": None,
                 "catalog_revision": self._toolbox_template_catalog.read()["catalog_revision"],
                 "target": target,
                 "templates": [],
                 "diagnostics": [
                     {
-                        "code": "toolbox_configuration_missing",
-                        "summary": "Toolbox hosting configuration is not available.",
+                        "code": "hosting_configuration_missing",
+                        "summary": "Hosting configuration is not available.",
                     }
                 ],
             }
@@ -770,13 +770,13 @@ class ToolboxTemplateCatalogMixin:
                 None,
             )
             if entry is None:
-                code = "required_template_missing"
+                code = "environment_template_unavailable"
                 ready = False
                 template_digest = None
                 manifest_digest = None
                 lock_digest = None
             elif entry["lifecycle"] == "revoked":
-                code = "required_template_lock_invalid"
+                code = "environment_template_unavailable"
                 ready = False
                 template_digest = entry["template_digest"]
                 manifest_digest = entry["template"]["provenance"]["manifest_digest"]
@@ -795,7 +795,7 @@ class ToolboxTemplateCatalogMixin:
                     ).issubset(configured_trust_keys)
                 )
             ):
-                code = "required_template_signature_invalid"
+                code = "package_policy_rejected"
                 ready = False
                 template_digest = entry["template_digest"]
                 manifest_digest = entry["template"]["provenance"]["manifest_digest"]
@@ -810,7 +810,7 @@ class ToolboxTemplateCatalogMixin:
                     platform=platform,
                 )
                 ready = receipt is not None
-                code = "required_template_ready" if ready else "required_template_materialization_failed"
+                code = "ready" if ready else "environment_build_failed"
             templates.append(
                 {
                     "template_id": template_id,
@@ -834,7 +834,7 @@ class ToolboxTemplateCatalogMixin:
         ) == required_ids
         return {
             "status": "ready" if ready else "degraded",
-            "code": "required_templates_ready" if ready else diagnostics[0]["code"],
+            "code": "ready" if ready else diagnostics[0]["code"],
             "config_revision": config_revision,
             "catalog_revision": state["catalog_revision"],
             "target": target,

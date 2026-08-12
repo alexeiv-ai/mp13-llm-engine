@@ -176,7 +176,7 @@ class PolicyMixin:
             "hosted-operation-resolve-request",
             "hosted-operation-result",
             "hosted-operation-cancel",
-            "toolbox-gc",
+            "hosting-gc",
             "environment-remove",
             "package-artifact-upload-begin",
             "package-artifact-upload-chunk",

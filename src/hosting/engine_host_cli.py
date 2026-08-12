@@ -108,8 +108,8 @@ EXAMPLES_BY_COMMAND = {
     "toolbox-state-archive-v1": [
         "Get-Content toolbox-state-archive-v1.json | python -m hosting.engine_host_cli --payload-stdin toolbox-state-archive-v1",
     ],
-    "toolbox-gc": [
-        "'{\"request_id\":\"gc-1\"}' | python -m hosting.engine_host_cli --payload-stdin toolbox-gc",
+    "hosting-gc": [
+        "'{\"request_id\":\"gc-1\"}' | python -m hosting.engine_host_cli --payload-stdin hosting-gc",
     ],
     "toolbox-get-definition": [
         "'{\"toolbox_id\":\"toolbox-demo\"}' | python -m hosting.engine_host_cli --payload-stdin toolbox-get-definition",
@@ -927,7 +927,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "hosted-operation-cancel",
         "hosting-receipt-ledger-cutover",
         "toolbox-state-archive-v1",
-        "toolbox-gc",
+        "hosting-gc",
         "environment-remove",
         "environment-reference-list",
         "environment-reference-release",
@@ -1216,7 +1216,7 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
         "toolbox-publish-definition-candidate",
         "toolbox-discard-definition-candidate",
         "environment-template-construct",
-        "toolbox-gc",
+        "hosting-gc",
         "toolbox-repair",
         "toolbox-reconcile",
         "toolbox-describe-refresh",
@@ -1276,7 +1276,7 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
     if cmd_name in {
         "environment-template-prewarm",
         "environment-template-construct",
-        "toolbox-gc",
+        "hosting-gc",
         "toolbox-repair",
         "toolbox-reconcile",
     }:
@@ -2068,8 +2068,8 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
                 )
             )
             return 0
-        if cmd == "toolbox-gc":
-            _print_ok(svc.toolbox_gc(request_id=str(payload.get("request_id") or "")))
+        if cmd == "hosting-gc":
+            _print_ok(svc.hosting_gc(request_id=str(payload.get("request_id") or "")))
             return 0
         if cmd == "environment-remove":
             _print_ok(svc.environment_remove(environment_id=str(payload.get("environment_id") or "")))

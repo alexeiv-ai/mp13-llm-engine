@@ -200,10 +200,9 @@ def test_contract_freezes_initial_environment_catalog_and_config() -> None:
         "built-in `sandbox_policy` reference is `compute-only`",
             "`hosting.configuration.v3`",
             "`environment_template_unavailable`",
-        "`required_template_lock_invalid`",
-        "`required_template_artifact_unavailable`",
-        "`required_template_materialization_failed`",
-        "`required_template_probe_failed`",
+        "`package_source_unavailable`",
+        "`environment_build_failed`",
+        "`package_policy_rejected`",
         "`compute_only_policy_unenforceable`",
         "Selection always chooses the smallest allowed complete template.",
     ]:

@@ -588,7 +588,7 @@ and becomes GC-eligible only after the last active/history retention reference
 and grace period expire.
 
 Environment removal is an administrator-only durable operation,
-`toolbox_environment_remove`, selected by one canonical `environment_digest`.
+`environment_remove`, selected by one canonical `environment_digest`.
 The digest is the exact immutable environment key; paths, globs, logical
 template IDs, and force flags are invalid. The operation validates the current
 configuration revision, reports progress through `validation`,
@@ -600,18 +600,18 @@ built-in references, protected digests, and any live
 environment manager, uses the revisioned retention policy, and never bypasses
 those checks.
 
-Mutating `toolbox-gc`, `toolbox-repair`, and `toolbox-reconcile` are
-administrator-only `toolbox_maintenance` hosted operations. Each is submitted
-through `op-start` with a stable `request_id`, uses the `host_scope` selector
-`toolbox-host`, and returns canonical operation status immediately. Repair and
-reconcile may also carry bounded `toolbox_ids`, `only_inconsistent`, and
-`details`; no command accepts a path or force bypass. Fixed progress phases are
-`validation`, `recovery`, `repair`, `gc`, and `cleanup`. Cancellation may commit
-only before recovery/mutation starts and always returns immediately; once a
-non-cancellable recovery or mutation checkpoint is durable, the caller keeps
-watching the same operation. An identical retry after a lost response or daemon
-restart attaches to and safely resumes the same idempotent operation. Read-only
-reference, consistency, and review commands remain bounded synchronous calls.
+Mutating `hosting-gc` is an administrator-only `hosting_gc` operation with
+`host_scope=hosting` and fixed `validation`, `mark`, `sweep`, and `cleanup`
+phases. `toolbox-repair` and `toolbox-reconcile` remain administrator-only
+`toolbox_maintenance` operations with `host_scope=toolbox-host` and fixed
+`validation`, `recovery`, `repair`, `gc`, and `cleanup` phases. Each is
+submitted through `op-start` with a stable `request_id` and returns canonical
+operation status immediately. Repair and reconcile may also carry bounded
+`toolbox_ids`, `only_inconsistent`, and `details`; no command accepts a path or
+force bypass. Cancellation may commit only before marking/recovery/mutation
+starts. An identical retry after a lost response or daemon restart attaches to
+and safely resumes the same idempotent operation. Read-only reference,
+consistency, and review commands remain bounded synchronous calls.
 
 ## Initial environment catalog
 
@@ -950,13 +950,13 @@ and no replacement or parallel setup record is created. The sanitized canonical
 status is projected as `toolbox_setup_operation` in the hosting setup summary.
 
 The daemon control plane remains available when toolbox setup is absent,
-partial, or invalid. `toolbox_readiness` is then `unavailable`, contains no
-template entries, and uses exactly one of `toolbox_configuration_missing`,
-`toolbox_configuration_incomplete`, `toolbox_configuration_invalid`, or
-`toolbox_source_binding_invalid`. The normal projection contains a bounded
-summary and detected target but no parser exception, credential, signed query,
-origin path, or daemon path. No built-in catalog entry is published from an
-invalid or incomplete setup.
+partial, or invalid. `toolbox_readiness` then uses only the generic hosting
+readiness codes: `hosting_configuration_missing`,
+`environment_template_unavailable`, `environment_build_failed`, or
+`package_policy_rejected`; ready state uses `ready`. The normal projection
+contains a bounded summary and detected target but no parser exception,
+credential, signed query, origin path, or daemon path. No built-in catalog
+entry is published from an invalid or incomplete setup.
 
 The required built-in `sandbox_policy` reference is `compute-only`. Its exact
 effective policy is:
@@ -995,11 +995,11 @@ policy, the host neither advertises nor launches the affected revision. A
 required intent with `prewarm: false` is an explicit non-standard deployment;
 it reports degraded readiness until that built-in has passed the same checks.
 
-Readiness diagnostics use the stable codes `environment_template_unavailable`,
-`required_template_lock_invalid`,
-`required_template_artifact_unavailable`,
-`required_template_materialization_failed`, `required_template_probe_failed`,
-and `compute_only_policy_unenforceable`. Normal projections contain only the
+Readiness diagnostics use the generic stable codes
+`environment_template_unavailable`, `package_source_unavailable`,
+`environment_build_failed`, and `package_policy_rejected`, plus the
+toolbox-sandbox-specific `compute_only_policy_unenforceable`. Normal
+projections contain only the
 template ID, target, state, stable code, bounded summary, catalog revision, and
 manifest/lock digests. Authorized operator projections may include bounded
 artifact and probe diagnostics but never credentials, approval values, host

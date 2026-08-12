@@ -118,7 +118,7 @@ def test_diagnostic_user_toolbox_authority_is_observe_only() -> None:
         for cmd in [
             "toolbox-execute",
             "hosted-operation-cancel",
-            "toolbox-gc",
+            "hosting-gc",
             "toolbox-repair",
             "toolbox-reconcile",
             "sandbox-fs-write-text",

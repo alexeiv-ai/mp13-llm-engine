@@ -201,7 +201,7 @@ def test_configured_intents_remain_unpublished_until_exact_resolution(
     assert service._toolbox_template_catalog.read()["entries"] == []  # noqa: SLF001
     summary = service.hosting_setup_summary()
     assert summary["toolbox_readiness"]["status"] == "degraded"
-    assert summary["toolbox_readiness"]["code"] == "required_template_missing"
+    assert summary["toolbox_readiness"]["code"] == "environment_template_unavailable"
     parsed = ToolboxHostProjectConfiguration.from_dict(_configuration())
     assert summary["toolbox_host_project"] == parsed.public_dict()
     assert "credential_ref" not in str(summary["toolbox_host_project"])

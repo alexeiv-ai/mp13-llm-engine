@@ -3481,9 +3481,9 @@ class EngineHostControlChannel:
         )
         return dict(res or {})
 
-    def toolbox_gc(self, *, request_id: str) -> Dict[str, Any]:
+    def hosting_gc(self, *, request_id: str) -> Dict[str, Any]:
         return self.start_host_operation(
-            command="toolbox-gc",
+            command="hosting-gc",
             payload={"request_id": str(request_id or "").strip()},
         )
 

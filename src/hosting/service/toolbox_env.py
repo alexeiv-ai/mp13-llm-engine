@@ -632,7 +632,7 @@ class ToolboxMaintenanceMixin:
             result["after"] = after
         return result
 
-    def _toolbox_gc_now(self) -> Dict[str, Any]:
+    def _hosting_gc_now(self) -> Dict[str, Any]:
         recovery = self.recover_toolbox_definition_rollouts()
         references = self._toolbox_reference_report()
         registrations = self._toolbox_v2_registrations()
@@ -701,7 +701,7 @@ class ToolboxMaintenanceMixin:
             only_inconsistent=only_inconsistent,
             details=details,
         )
-        gc = self._toolbox_gc_now()
+        gc = self._hosting_gc_now()
         after = self.toolbox_consistency()
         result: Dict[str, Any] = {
             "status": "ok",
@@ -742,9 +742,15 @@ class ToolboxMaintenanceMixin:
             }
         )
         configuration = getattr(self, "_toolbox_host_project_config", None)
+        host_scope_id = "hosting" if maintenance_action == "gc" else "toolbox-host"
+        execution_kind = (
+            HostedExecutionKind.HOSTING_GC
+            if maintenance_action == "gc"
+            else HostedExecutionKind.TOOLBOX_MAINTENANCE
+        )
         fingerprint = hosted_execution_fingerprint(
             {
-                "execution_kind": HostedExecutionKind.TOOLBOX_MAINTENANCE.value,
+                "execution_kind": execution_kind.value,
                 "configuration_revision": self.hosting_configuration_revision,
                 "action": maintenance_action,
                 "toolbox_ids": selected,
@@ -761,9 +767,13 @@ class ToolboxMaintenanceMixin:
         owner = self._operation_owner(owner_actor_id)
         prepared = self._hosted_operations.prepare(
             owner_actor_id=owner,
-            execution_kind=HostedExecutionKind.TOOLBOX_MAINTENANCE,
-            selector=HostedOperationSelector(kind="host_scope", id="toolbox-host"),
-            namespace="toolbox_maintenance:toolbox-host",
+            execution_kind=execution_kind,
+            selector=HostedOperationSelector(kind="host_scope", id=host_scope_id),
+            namespace=(
+                "hosting_gc:hosting"
+                if maintenance_action == "gc"
+                else "toolbox_maintenance:toolbox-host"
+            ),
             request_id=rid,
             fingerprint=fingerprint,
             metadata={
@@ -846,7 +856,7 @@ class ToolboxMaintenanceMixin:
             owner_actor_id=owner_actor_id,
         )
 
-    def toolbox_gc(
+    def hosting_gc(
         self, *, request_id: str, owner_actor_id: str = "service:local"
     ) -> Dict[str, Any]:
         return self._toolbox_maintenance_start(
@@ -904,6 +914,45 @@ class ToolboxMaintenanceMixin:
             )
 
         try:
+            if action == "gc":
+                checkpoint(
+                    "validation", "hosting_gc_validated", 1, 1,
+                    "The host-wide garbage collection request was validated.", True,
+                )
+                checkpoint(
+                    "mark", "hosting_gc_mark_started", 0, 1,
+                    "Live worker, operation, execution, and environment references are being marked.", False,
+                )
+                self._toolbox_reference_report()
+                checkpoint(
+                    "mark", "hosting_gc_mark_completed", 1, 1,
+                    "Live hosting references were marked.", False,
+                )
+                checkpoint(
+                    "sweep", "hosting_gc_sweep_started", 0, 1,
+                    "Unreferenced hosting resources are being reclaimed.", False,
+                )
+                result = self._hosting_gc_now()
+                checkpoint(
+                    "sweep", "hosting_gc_sweep_completed", 1, 1,
+                    "Unreferenced hosting resources were reclaimed.", False,
+                )
+                checkpoint(
+                    "cleanup", "hosting_gc_cleanup_completed", 1, 1,
+                    "Host-wide garbage collection cleanup is complete.", False,
+                )
+                self._hosted_operations.finish(
+                    operation_id=operation_id,
+                    lifecycle=HostedOperationLifecycle.TERMINAL_SUCCESS,
+                    envelope={
+                        "contract": "hosting.gc_result.v1",
+                        "status": "ok",
+                        "code": "hosting_gc_completed",
+                        "action": "gc",
+                        "maintenance_result": result,
+                    },
+                )
+                return
             checkpoint(
                 "validation", "toolbox_maintenance_validated", 1, 1,
                 "The maintenance action and bounded selection were validated.", True,
@@ -925,10 +974,6 @@ class ToolboxMaintenanceMixin:
                     details=details,
                 )
                 checkpoint("repair", "toolbox_repair_completed", 1, 1, "Selected toolbox state was repaired.", False)
-            elif action == "gc":
-                checkpoint("gc", "toolbox_gc_started", 0, 1, "Unreferenced toolbox resources are being reclaimed.", False)
-                result = self._toolbox_gc_now()
-                checkpoint("gc", "toolbox_gc_completed", 1, 1, "Unreferenced toolbox resources were reclaimed.", False)
             else:
                 before = self.toolbox_consistency()
                 checkpoint("repair", "toolbox_reconcile_repair_started", 0, 1, "Selected toolbox state is being repaired.", False)
@@ -939,7 +984,7 @@ class ToolboxMaintenanceMixin:
                 )
                 checkpoint("repair", "toolbox_reconcile_repair_completed", 1, 1, "Selected toolbox state was repaired.", False)
                 checkpoint("gc", "toolbox_reconcile_gc_started", 0, 1, "Unreferenced toolbox resources are being reclaimed.", False)
-                gc = self._toolbox_gc_now()
+                gc = self._hosting_gc_now()
                 checkpoint("gc", "toolbox_reconcile_gc_completed", 1, 1, "Unreferenced toolbox resources were reclaimed.", False)
                 after = self.toolbox_consistency()
                 result = {
@@ -968,13 +1013,14 @@ class ToolboxMaintenanceMixin:
                 },
             )
         except Exception:
+            failure_code = "hosting_gc_failed" if action == "gc" else "toolbox_maintenance_failed"
             self._hosted_operations.finish(
                 operation_id=operation_id,
                 lifecycle=HostedOperationLifecycle.TERMINAL_FAILURE,
                 envelope={
                     "status": "error",
-                    "code": "toolbox_maintenance_failed",
-                    "summary": "Toolbox maintenance failed before a complete terminal result.",
+                    "code": failure_code,
+                    "summary": "Hosting maintenance failed before a complete terminal result.",
                 },
-                reason="toolbox_maintenance_failed",
+                reason=failure_code,
             )

@@ -2299,7 +2299,7 @@ class EngineHostDaemon:
                     "toolbox-discard-definition-candidate",
                     "environment-remove",
                     "environment-template-construct",
-                    "toolbox-gc",
+                    "hosting-gc",
                     "toolbox-repair",
                     "toolbox-reconcile",
                     "toolbox-describe-refresh",
@@ -2496,7 +2496,7 @@ class EngineHostDaemon:
                 "toolbox-publish-definition-candidate",
                 "toolbox-discard-definition-candidate",
                 "environment-template-construct",
-                "toolbox-gc",
+                "hosting-gc",
                 "toolbox-repair",
                 "toolbox-reconcile",
             }:
@@ -3219,8 +3219,8 @@ class EngineHostDaemon:
                 execution_request_id=str(payload.get("execution_request_id") or ""),
                 owner_actor_id=str(payload.get("_claim_actor_id") or "service:local"),
             )
-        if cmd == "toolbox-gc":
-            return svc.toolbox_gc(
+        if cmd == "hosting-gc":
+            return svc.hosting_gc(
                 request_id=str(payload.get("request_id") or ""),
                 owner_actor_id=str(payload.get("_claim_actor_id") or "service:local"),
             )

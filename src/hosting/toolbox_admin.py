@@ -202,7 +202,7 @@ class HostedToolboxAdmin:
             gc_out: Dict[str, Any] = {}
             if gc_on_noop:
                 gc_out = dict(
-                    self.host.toolbox_gc(request_id=str(request_id or "").strip()) or {}
+                    self.host.hosting_gc(request_id=str(request_id or "").strip()) or {}
                 )
             return {
                 "status": "ok",

@@ -130,6 +130,7 @@ ENVIRONMENT_TEMPLATE_CONSTRUCT_PHASES = frozenset(
         "cleanup",
     }
 )
+HOSTING_GC_PHASES = frozenset({"validation", "mark", "sweep", "cleanup"})
 TOOLBOX_MAINTENANCE_PHASES = frozenset(
     {"validation", "recovery", "repair", "gc", "cleanup"}
 )
@@ -150,6 +151,7 @@ class HostedExecutionKind(StrEnum):
     TOOLBOX_ARTIFACT_IMPORT = "toolbox_artifact_import"
     ENVIRONMENT_REMOVE = "environment_remove"
     ENVIRONMENT_TEMPLATE_CONSTRUCT = "environment_template_construct"
+    HOSTING_GC = "hosting_gc"
     TOOLBOX_MAINTENANCE = "toolbox_maintenance"
     TOOLBOX_DESCRIBE_REFRESH = "toolbox_describe_refresh"
     WORKFLOW_PYTHON = "workflow_python"
@@ -235,7 +237,7 @@ class HostedOperationSelector:
         }:
             raise ValueError("operation_selector_kind_invalid")
         _bounded_text(self.id, label="operation_selector_id", max_bytes=MAX_SELECTOR_ID_BYTES)
-        if self.kind == "host_scope" and self.id != "toolbox-host":
+        if self.kind == "host_scope" and self.id not in {"hosting", "toolbox-host"}:
             raise ValueError("operation_host_scope_invalid")
         if self.kind == "environment_digest":
             canonical_sha256_digest(self.id, label="operation_environment_digest")
@@ -588,6 +590,11 @@ class HostedOperationStatus:
                     raise ValueError("environment_template_construct_progress_phase_invalid")
                 if self.progress.phase in {"receipt_commit", "publication", "cleanup"} and self.progress.cancellable:
                     raise ValueError("environment_template_construct_committed_progress_cancellable")
+            if self.operation.execution_kind == HostedExecutionKind.HOSTING_GC:
+                if self.progress.phase not in HOSTING_GC_PHASES:
+                    raise ValueError("hosting_gc_progress_phase_invalid")
+                if self.progress.phase in {"mark", "sweep", "cleanup"} and self.progress.cancellable:
+                    raise ValueError("hosting_gc_committed_progress_cancellable")
             if self.operation.execution_kind == HostedExecutionKind.TOOLBOX_MAINTENANCE:
                 if self.progress.phase not in TOOLBOX_MAINTENANCE_PHASES:
                     raise ValueError("toolbox_maintenance_progress_phase_invalid")
@@ -683,6 +690,7 @@ __all__ = [
     "TOOLBOX_SETUP_PHASES",
     "TOOLBOX_ARTIFACT_IMPORT_PHASES",
     "ENVIRONMENT_REMOVE_PHASES",
+    "HOSTING_GC_PHASES",
     "ENVIRONMENT_TEMPLATE_CONSTRUCT_PHASES",
     "TOOLBOX_MAINTENANCE_PHASES",
     "TOOLBOX_DESCRIBE_REFRESH_PHASES",
