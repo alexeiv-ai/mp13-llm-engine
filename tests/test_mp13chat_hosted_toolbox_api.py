@@ -73,14 +73,14 @@ def test_create_hosted_toolbox_executor_returns_sandbox_harness() -> None:
 def test_create_hosted_control_channel_builds_local_channel_settings() -> None:
     channel = create_hosted_control_channel(
         engines_state_file="managed_engines.json",
-        control_state_file="access_control.json",
+        control_state_file="control_state.json"
         timeout_seconds=9.5,
         auto_bootstrap=False,
     )
 
     assert isinstance(channel, EngineHostControlChannel)
     assert channel.control_settings["engine_host_state_file"] == "managed_engines.json"
-    assert channel.control_settings["engine_host_control_state_file"] == "access_control.json"
+    assert channel.control_settings["engine_host_control_state_file"] == "control_state.json"
     assert channel.control_settings["engine_host_timeout_seconds"] == 9.5
     assert channel.control_settings["engine_host_daemon_auto_bootstrap"] is False
 
@@ -89,7 +89,7 @@ def test_attach_existing_hosted_toolbox_returns_wrapper_ready_attachment() -> No
     attachment = attach_existing_hosted_toolbox(
         toolbox_id="user-tools",
         engines_state_file="managed_engines.json",
-        control_state_file="access_control.json",
+        control_state_file="control_state.json"
         timeout_seconds=9.5,
         auto_bootstrap=False,
     )

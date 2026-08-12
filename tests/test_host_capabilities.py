@@ -764,7 +764,7 @@ def test_host_capability_broker_does_not_fail_call_when_audit_emitter_fails() ->
         return {"status": "ok", "provider_call_id": call.provider_call_id, "result": {"deleted": True}}
 
     def fail_audit(_payload: dict) -> None:
-        raise PermissionError("access_control.json")
+        raise PermissionError("control_state.json")
 
     broker = HostCapabilityBroker(
         workflow_id="wf-1",

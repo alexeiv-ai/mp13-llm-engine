@@ -1763,7 +1763,7 @@ def test_toolbox_sandbox_orchestrator_groups_requests_by_profile() -> None:
     try:
         svc = EngineHostService(
             engines_state_file=root / "managed_engines.json",
-            control_state_file=root / "access_control.json",
+            control_state_file=root / "control_state.json"
         )
         orchestrator = ToolboxSandboxOrchestrator(
             service=svc,
@@ -1842,7 +1842,7 @@ def test_toolbox_execute_records_shared_hosted_pool_lifecycle(monkeypatch: pytes
     root = _scratch_dir("toolbox-hosted-pool-")
     svc = EngineHostService(
         engines_state_file=root / "managed_engines.json",
-        control_state_file=root / "access_control.json",
+        control_state_file=root / "control_state.json"
     )
     reg = svc.spawn(
         engine_id="toolbox-hosted-pool",
@@ -1894,7 +1894,7 @@ def test_routed_toolbox_execute_honors_bounded_caller_readiness_timeout(
     root = _scratch_dir("toolbox-routed-ready-timeout-")
     svc = EngineHostService(
         engines_state_file=root / "managed_engines.json",
-        control_state_file=root / "access_control.json",
+        control_state_file=root / "control_state.json"
     )
     registration = svc.register_spawned(
         engine_id="toolbox-routed-ready-timeout",
@@ -1945,7 +1945,7 @@ def test_toolbox_execute_returns_all_settled_error_diagnostics(monkeypatch: pyte
     try:
         svc = EngineHostService(
             engines_state_file=root / "managed_engines.json",
-            control_state_file=root / "access_control.json",
+            control_state_file=root / "control_state.json"
         )
         svc.register_spawned(
             engine_id="toolbox-all-settled-error",
@@ -1986,7 +1986,7 @@ def test_toolbox_cancel_marks_recycled_sibling_requests_explicitly(monkeypatch: 
     try:
         svc = EngineHostService(
             engines_state_file=root / "managed_engines.json",
-            control_state_file=root / "access_control.json",
+            control_state_file=root / "control_state.json"
         )
         svc.register_spawned(
             engine_id="toolbox-sandbox-recycled",
@@ -2039,7 +2039,7 @@ def test_toolbox_execute_forwards_host_api_approval_to_worker_rpc(monkeypatch: p
     root = _scratch_dir("toolbox-host-api-approval-forward-")
     svc = EngineHostService(
         engines_state_file=root / "managed_engines.json",
-        control_state_file=root / "access_control.json",
+        control_state_file=root / "control_state.json"
     )
     reg = svc.spawn(
         engine_id="toolbox-host-api-approval-forward",
@@ -2077,7 +2077,7 @@ def test_toolbox_cancel_marks_shared_hosted_pool_request_canceled() -> None:
     root = _scratch_dir("toolbox-hosted-cancel-")
     svc = EngineHostService(
         engines_state_file=root / "managed_engines.json",
-        control_state_file=root / "access_control.json",
+        control_state_file=root / "control_state.json"
     )
     svc.spawn(
         engine_id="toolbox-hosted-cancel",
@@ -2250,7 +2250,7 @@ def test_toolbox_execute_denies_unknown_tool_before_worker_call(monkeypatch) -> 
     try:
         svc = EngineHostService(
             engines_state_file=root / "managed_engines.json",
-            control_state_file=root / "access_control.json",
+            control_state_file=root / "control_state.json"
         )
         svc.register_spawned(
             engine_id="toolbox1",
@@ -2285,7 +2285,7 @@ def test_toolbox_execute_denies_blocked_in_scope_before_worker_call(monkeypatch)
     try:
         svc = EngineHostService(
             engines_state_file=root / "managed_engines.json",
-            control_state_file=root / "access_control.json",
+            control_state_file=root / "control_state.json"
         )
         svc.register_spawned(
             engine_id="toolbox1",
@@ -2329,7 +2329,7 @@ def test_toolbox_execute_denies_gated_requires_confirmation_before_worker_call(m
     try:
         svc = EngineHostService(
             engines_state_file=root / "managed_engines.json",
-            control_state_file=root / "access_control.json",
+            control_state_file=root / "control_state.json"
         )
         svc.register_spawned(
             engine_id="toolbox1",
@@ -2375,7 +2375,7 @@ def test_toolbox_cancel_returns_noop_when_target_is_missing() -> None:
     try:
         svc = EngineHostService(
             engines_state_file=root / "managed_engines.json",
-            control_state_file=root / "access_control.json",
+            control_state_file=root / "control_state.json"
         )
 
         terminal = svc._test_cancel_toolbox(toolbox_id="missing-box", request_id="cancel-missing")
@@ -2427,7 +2427,7 @@ def test_toolbox_gate_reports_denied_and_allowed_outcomes() -> None:
     try:
         svc = EngineHostService(
             engines_state_file=root / "managed_engines.json",
-            control_state_file=root / "access_control.json",
+            control_state_file=root / "control_state.json"
         )
         svc.register_spawned(
             engine_id="toolbox1",
@@ -2458,7 +2458,7 @@ def test_toolbox_gate_respects_request_scoped_tools_view() -> None:
     try:
         svc = EngineHostService(
             engines_state_file=root / "managed_engines.json",
-            control_state_file=root / "access_control.json",
+            control_state_file=root / "control_state.json"
         )
         svc.register_spawned(
             engine_id="toolbox1",
@@ -2501,7 +2501,7 @@ def test_toolbox_gate_reports_gated_requires_confirmation_from_request_view() ->
     try:
         svc = EngineHostService(
             engines_state_file=root / "managed_engines.json",
-            control_state_file=root / "access_control.json",
+            control_state_file=root / "control_state.json"
         )
         svc.register_spawned(
             engine_id="toolbox1",
@@ -2913,7 +2913,7 @@ def test_hosted_toolbox_ref_serializes_and_deserializes_with_service() -> None:
     try:
         svc = EngineHostService(
             engines_state_file=root / "managed_engines.json",
-            control_state_file=root / "access_control.json",
+            control_state_file=root / "control_state.json"
         )
         ref = HostedToolBoxRef(
             toolbox_id="service-ref",
@@ -3038,7 +3038,7 @@ def test_toolbox_execute_dispatches_host_capability_in_parent_and_audits(monkeyp
     (project_root / "a.txt").write_text("parent-owned", encoding="utf-8")
     svc = EngineHostService(
         engines_state_file=root / "managed_engines.json",
-        control_state_file=root / "access_control.json",
+        control_state_file=root / "control_state.json"
     )
     svc.register_spawned(
         engine_id="toolbox-parent-host-api",
@@ -3161,7 +3161,7 @@ def test_ensure_toolbox_assignments_ready_returns_rollout_metadata(monkeypatch) 
     root = _scratch_dir("ready-rollout-")
     svc = EngineHostService(
         engines_state_file=root / "managed_engines.json",
-        control_state_file=root / "access_control.json",
+        control_state_file=root / "control_state.json"
     )
     monkeypatch.setattr(
         svc,
@@ -3220,7 +3220,7 @@ def test_ensure_toolbox_assignments_ready_requires_verified_install_receipt(monk
     root = _scratch_dir("ready-rollout-receipt-")
     svc = EngineHostService(
         engines_state_file=root / "managed_engines.json",
-        control_state_file=root / "access_control.json",
+        control_state_file=root / "control_state.json"
     )
     monkeypatch.setattr(
         svc,
@@ -3281,7 +3281,7 @@ def test_wait_for_toolbox_executor_ready_requires_inventory_match(monkeypatch) -
     try:
         svc = EngineHostService(
             engines_state_file=root / "managed_engines.json",
-            control_state_file=root / "access_control.json",
+            control_state_file=root / "control_state.json"
         )
         svc.register_spawned(
             engine_id="toolbox-mismatch",
@@ -3393,7 +3393,7 @@ def test_toolbox_executor_ipc_end_to_end() -> None:
     root = _scratch_dir("live-")
     svc = EngineHostService(
         engines_state_file=root / "managed_engines.json",
-        control_state_file=root / "access_control.json",
+        control_state_file=root / "control_state.json"
     )
     stager = ToolboxBundleStager(root)
     staged = stager.stage_bundle(
@@ -3461,7 +3461,7 @@ def test_toolbox_executor_ipc_end_to_end_with_brokered_fs_callback() -> None:
     root = _scratch_dir("live-callback-")
     svc = EngineHostService(
         engines_state_file=root / "managed_engines.json",
-        control_state_file=root / "access_control.json",
+        control_state_file=root / "control_state.json"
     )
     data_root = root / "sandbox-data"
     data_root.mkdir(parents=True, exist_ok=True)
@@ -3655,7 +3655,7 @@ def test_toolbox_executor_ipc_end_to_end_with_intrinsic_tools_only() -> None:
     root = _scratch_dir("live-intrinsic-")
     svc = EngineHostService(
         engines_state_file=root / "managed_engines.json",
-        control_state_file=root / "access_control.json",
+        control_state_file=root / "control_state.json"
     )
     stager = ToolboxBundleStager(root)
     staged = stager.stage_bundle(
@@ -3720,7 +3720,7 @@ def test_toolbox_executor_ipc_end_to_end_with_auto_callable_discovery() -> None:
     root = _scratch_dir("live-auto-")
     svc = EngineHostService(
         engines_state_file=root / "managed_engines.json",
-        control_state_file=root / "access_control.json",
+        control_state_file=root / "control_state.json"
     )
     stager = ToolboxBundleStager(root)
     staged = stager.stage_bundle(

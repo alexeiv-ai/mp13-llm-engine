@@ -118,7 +118,7 @@ def _configuration() -> dict[str, Any]:
 def _service(root: Path) -> EngineHostService:
     service = EngineHostService(
         engines_state_file=root / "engines.json",
-        control_state_file=root / "access_control.json",
+        control_state_file=root / "control_state.json"
         toolbox_template_materializer=VerifiedMaterializer(),
         toolbox_host_project_configuration=_configuration(),
     )
@@ -347,7 +347,7 @@ def test_configuration_revision_change_invalidates_unused_state_but_preserves_ac
     changed["retention"]["artifact_cache_grace_seconds"] += 1
     restarted = EngineHostService(
         engines_state_file=tmp_path / "engines.json",
-        control_state_file=tmp_path / "access_control.json",
+        control_state_file=tmp_path / "control_state.json"
         toolbox_template_materializer=VerifiedMaterializer(),
         toolbox_host_project_configuration=changed,
     )
@@ -377,7 +377,7 @@ def test_configuration_revision_change_invalidates_unused_state_but_preserves_ac
 
     unconfigured = EngineHostService(
         engines_state_file=tmp_path / "engines.json",
-        control_state_file=tmp_path / "access_control.json",
+        control_state_file=tmp_path / "control_state.json"
     )
     assert unconfigured._toolbox_host_project_config is None  # noqa: SLF001
     assert unconfigured._toolbox_config_transition is None  # noqa: SLF001

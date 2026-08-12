@@ -106,7 +106,7 @@ def test_brokered_filesystem_denies_traversal_and_allows_root_scoped_io(tmp_path
 def test_service_brokered_filesystem_uses_registration_policy(tmp_path: Path) -> None:
     svc = EngineHostService(
         engines_state_file=tmp_path / "managed_engines.json",
-        control_state_file=tmp_path / "access_control.json",
+        control_state_file=tmp_path / "control_state.json"
     )
     root = tmp_path / "sandbox_root"
     root.mkdir()
@@ -288,7 +288,7 @@ def test_worker_side_brokered_http_client_builds_expected_rpc_payload() -> None:
 def test_spawn_persists_sandbox_policy_and_runtime(monkeypatch, tmp_path: Path) -> None:
     svc = EngineHostService(
         engines_state_file=tmp_path / "managed_engines.json",
-        control_state_file=tmp_path / "access_control.json",
+        control_state_file=tmp_path / "control_state.json"
     )
 
     def _fake_launch(req: WorkerLaunchRequest) -> WorkerLaunchResult:

@@ -119,7 +119,7 @@ only in `HOSTING_CLIENT_BREAKING_CHANGES.md`.
 |---|---|---|
 | R0–R1 freeze/inventory | Complete | Refresh handoff/removal evidence at R9. |
 | R2 paths/setup | Complete | Final aggregate/platform evidence at R9.7. |
-| R3 unified configuration | Active | Remaining old-file readers/fixtures/docs. |
+| R3 unified configuration | Complete | Final aggregate/platform evidence at R9.7. |
 | R4 startup cut | Active | Configuration pinning and final old-option scan. |
 | R5 generic packages | Complete | Toolbox planning adopts locks at R7.1. |
 | R6 generic environments | Active | Final legacy readers/aliases; candidate policy fields. |
@@ -150,7 +150,7 @@ R7 plan/confirmation field assertions are provisional and must be replaced.
 
 ### R3/R4/R6 — finish the P0 clean cut
 
-- [ ] **R3.2** Remove every remaining production reader, fixture, example, and
+- [x] **R3.2** Remove every remaining production reader, fixture, example, and
   document that treats `access_control.json` as an authority. Prove the strict
   repository and setup flow are the only path.
 - [ ] **R4.1** Capture and validate a stable configuration revision in every

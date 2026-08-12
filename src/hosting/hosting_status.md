@@ -2,8 +2,7 @@
 
 Last updated: 2026-08-12
 
-Status: paused at clean commit `757c13f`; consumer-contract steering is
-documented but not implemented
+Status: R3.2 complete; ready to open R4.1
 
 This is the current execution ledger for
 [`hosting_access_plan.md`](hosting_access_plan.md). Detailed completed-slice
@@ -13,11 +12,10 @@ compact evidence index, and external completion gates.
 
 ## 1. Current gate and resume order
 
-No slice is active while paused. The working tree intentionally changes only:
-
-- `hosting_access_plan.md` — execution/design plan;
-- `HOSTING_CLIENT_BREAKING_CHANGES.md` — exact external-consumer handoff; and
-- this status ledger.
+No slice is active. **R3.2 strict configuration authority cleanup** removed the
+remaining legacy-named runtime-state fixtures while retaining explicit negative
+proof that the legacy file cannot configure a host. The required post-`757c13f`
+workflow-helper checkpoint passed with 116 tests on 2026-08-12.
 
 Resume in this order:
 
@@ -39,7 +37,7 @@ after R9.4 removals make R9.7 evidence meaningful.
 | R0 Contract freeze | Complete | Final tool-change schemas were revised in place before adoption. |
 | R1 Inventory/handoff | Complete | Refresh removal scans and dependent receipt at R9. |
 | R2 Shared paths/setup | Complete | Final aggregate/platform proof at R9.7. |
-| R3 Unified configuration | Active | Remove remaining old-file fixtures/docs and close aggregate proof. |
+| R3 Unified configuration | Complete | Final aggregate/platform proof at R9.7. |
 | R4 Single startup path | Active | Pin configuration revision in long operations; finish removed flag/setting scans. |
 | R5 Generic packages | Complete | Toolbox planning origin moves to generic locks in R7.1. |
 | R6 Generic environments | Active | Remove final legacy receipt/reference readers; add candidate lifecycle policy fields in R7.2. |
@@ -70,7 +68,6 @@ are authoritative for unfinished item-level work.
 
 ### P0 before R7
 
-- R3.2: eliminate remaining `access_control.json` readers/fixtures/docs.
 - R4.1: capture stable configuration revision in long-running plans/operations.
 - R4.2: finish removal of old startup flag/setting/launcher vocabulary.
 - R6.5: remove final legacy receipt/reference readers and aliases.
@@ -112,12 +109,13 @@ are authoritative for unfinished item-level work.
 | DOC-R0/R1 | Control-v3 contract, inventory, consumer handoff, and doc ownership frozen. |
 | CODE-R2 | Shared roots, logical labels, safe host-local setup/journal implemented. |
 | CODE-R3.1/R4A | Strict unified configuration and single-path startup implemented; focused startup/security lanes passed. |
+| TEST-R3.2 | Legacy authority scan leaves only explicit negative/removal evidence; strict configuration/startup/setup lane passed 27 tests. |
 | CODE-R5 | Generic package ingress, daemon hashing, locks, commands, and denial paths passed focused coverage. |
 | CODE-R6A–D | Generic environment contracts/manager/commands and legacy-root cut passed focused coverage. |
 | CODE-R7A/B | Generic materializer/package/reference bridges and atomic candidate publication remain valid foundations; old plan/confirmation field assertions are provisional. |
 | CODE-R8A–C | Versioned neutral state, Python/JS shared manager adoption, GC/repair controls passed focused coverage. |
 | CODE/TEST-R9 partial | Structured auth, role/hash authority, redaction, startup modes, generic lifecycle, and retry/restart identity passed focused coverage. |
-| TEST-R8.2C checkpoint | Workflow operation suite passed; helper suite recorded 114 passes plus both fixes passing together. One full 116-test focused rerun remains. |
+| TEST-R8.2C checkpoint | Workflow operation suite passed; full helper suite passed 116 tests on resume. |
 
 ## 6. External completion gates
 
