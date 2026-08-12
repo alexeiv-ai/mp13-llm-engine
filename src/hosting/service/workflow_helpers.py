@@ -45,6 +45,14 @@ WORKFLOW_ACTION_MANIFEST_CONTRACT = "hosting.sandbox.action_manifest.v1"
 WORKFLOW_ACTION_DISCOVERY_CONTRACT = "hosting.sandbox.action_discovery.v1"
 
 
+def _dict_value(value: Any) -> Dict[str, Any]:
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def _list_value(value: Any) -> list[Any]:
+    return list(value) if isinstance(value, list) else []
+
+
 class WorkflowHelperMixin:
     _workflow_registry_initialization_guard = threading.Lock()
 
@@ -1169,8 +1177,8 @@ class WorkflowHelperMixin:
         input_roots = sorted(str(key) for key in dict(child.get("inputs") or {}).keys())
         output_roots = sorted(str(key) for key in dict(child.get("outputs") or {}).keys())
         sandbox = dict(dict(sandbox_policy or {}).get("sandbox") or sandbox_policy or {})
-        host_api_policy = sandbox.get("host_api") if isinstance(sandbox.get("host_api"), dict) else {}
-        namespace_policy = dict(host_api_policy.get("namespaces") or {})
+        host_api_policy = _dict_value(sandbox.get("host_api"))
+        namespace_policy = _dict_value(host_api_policy.get("namespaces"))
         artifact_fs_enabled = bool(host_api_policy.get("enabled", True))
         http_namespace_enabled = bool(host_api_policy.get("enabled", True))
         for key in ("fs", "artifact_fs"):
@@ -1408,10 +1416,17 @@ class WorkflowHelperMixin:
                             visibility="request",
                         ),
                     )
+                    def _state_handler(
+                        args: Dict[str, Any],
+                        _scope: str = scope,
+                        _action: str = action,
+                    ) -> Any:
+                        return _state_call(_scope, _action, args)
+
                     methods.append(
                         HostCapabilityMethod(
                             descriptor=descriptor,
-                            handler=lambda args, _scope=scope, _action=action: _state_call(_scope, _action, args),
+                            handler=_state_handler,
                         )
                     )
             return methods
@@ -1849,16 +1864,18 @@ class WorkflowHelperMixin:
         eid = str(engine_id or "").strip() or self.workflow_js_default_engine_id(environment_key=effective_key)
         pool = self._workflow_python_pool_registry().get(self._workflow_js_pool_key(effective_key))
         runtime_resources = self._workflow_js_node_runtime_registry().resources()
+        pool_resources = pool.resources() if pool is not None else {}
+        pool_metrics = _dict_value(pool_resources.get("metrics"))
         return {
             "status": "ok",
             "profile": prof,
             "engine_id": eid,
             "environment_key": effective_key,
             "environment": dict(env.get("environment") or {}),
-            "workflow_pool": pool.resources() if pool is not None else None,
+            "workflow_pool": pool_resources or None,
             "node_runtime": runtime_resources,
-            "workflow_js_capacity": int(dict(dict(pool.resources() if pool is not None else {}).get("metrics") or {}).get("desired_capacity") or 0),
-            "workflow_js_active_calls": int(dict(dict(pool.resources() if pool is not None else {}).get("metrics") or {}).get("active_calls") or 0),
+            "workflow_js_capacity": int(pool_metrics.get("desired_capacity") or 0),
+            "workflow_js_active_calls": int(pool_metrics.get("active_calls") or 0),
         }
 
     def set_workflow_js_capacity(
@@ -2091,7 +2108,7 @@ class WorkflowHelperMixin:
                 "engine_id": str(ensured["engine_id"]),
                 "environment_key": str(ensured.get("environment_key") or ""),
                 "reason": str(scheduled.get("reason") or "capacity_exceeded"),
-                "metrics": {"workflow_pool": pool.resources(), "request": dict(scheduled.get("request") or {})},
+                "metrics": {"workflow_pool": pool.resources(), "request": _dict_value(scheduled.get("request"))},
             }
         required = ["module_sha256", "package_id", "workflow_id", "package_source_digest"]
         if str(req.get("execution_mode") or js.get("execution_mode") or "").strip().lower() != "project":
@@ -2152,7 +2169,7 @@ class WorkflowHelperMixin:
                         result["artifacts"] = self._workflow_python_collect_node_artifacts(
                             artifact_context,
                             request_id=lifecycle.request_id,
-                            runtime_artifacts=list(result.get("artifacts") or []),
+                            runtime_artifacts=_list_value(result.get("artifacts")),
                             sandbox_policy=sandbox_policy,
                         )
                     except Exception as exc:
@@ -2187,7 +2204,7 @@ class WorkflowHelperMixin:
             engine_id=str(ensured["engine_id"]),
             metrics={
                 "workflow_pool": pool.resources(),
-                "request": dict(finished.get("request") or lifecycle.to_dict()),
+                "request": _dict_value(finished.get("request")) or lifecycle.to_dict(),
             },
         )
 
@@ -2908,7 +2925,7 @@ class WorkflowHelperMixin:
                     "engine_id": eid,
                     "environment_key": effective_key,
                     "reason": str(scheduled.get("reason") or "capacity_exceeded"),
-                    "metrics": {"workflow_pool": pool.resources(), "request": dict(scheduled.get("request") or {})},
+                    "metrics": {"workflow_pool": pool.resources(), "request": _dict_value(scheduled.get("request"))},
                 }
 
             artifact_context: Optional[Dict[str, Any]] = None
@@ -2933,7 +2950,7 @@ class WorkflowHelperMixin:
                     )
                     response["metrics"] = {
                         "workflow_pool": pool.resources(),
-                        "request": dict(finished.get("request") or lifecycle.to_dict()),
+                        "request": _dict_value(finished.get("request")) or lifecycle.to_dict(),
                     }
                     return response
 
@@ -3026,7 +3043,7 @@ class WorkflowHelperMixin:
                 engine_id=eid,
                 metrics={
                     "workflow_pool": pool.resources(),
-                    "request": dict(finished.get("request") or lifecycle.to_dict()),
+                    "request": _dict_value(finished.get("request")) or lifecycle.to_dict(),
                     "node_runtime_recycle": node_runtime_recycle,
                     "node_runtime_trim": node_runtime_trim,
                 },
@@ -3076,7 +3093,7 @@ class WorkflowHelperMixin:
                 "engine_id": str(ensured["engine_id"]),
                 "environment_key": str(ensured.get("environment_key") or ""),
                 "reason": str(scheduled.get("reason") or "capacity_exceeded"),
-                "metrics": {"workflow_pool": pool.resources(), "request": dict(scheduled.get("request") or {})},
+                "metrics": {"workflow_pool": pool.resources(), "request": _dict_value(scheduled.get("request"))},
             }
         out = self.proxy_rpc_call(
             engine_id=str(ensured["engine_id"]),
@@ -3092,7 +3109,7 @@ class WorkflowHelperMixin:
         )
         metrics = {
             "workflow_pool": pool.resources(),
-            "request": dict(finished.get("request") or lifecycle.to_dict()),
+            "request": _dict_value(finished.get("request")) or lifecycle.to_dict(),
         }
         return {
             "status": "ok" if bool(result.get("ok", False)) else "error",
@@ -3304,7 +3321,7 @@ class WorkflowHelperMixin:
             ]
             processes = [*active_processes, *idle_processes]
             pool_resources = pool.resources() if pool is not None else None
-            pool_metrics = dict(dict(pool_resources or {}).get("metrics") or {})
+            pool_metrics = _dict_value(_dict_value(pool_resources).get("metrics"))
             active_request_ids = []
             for worker_row in list(pool_metrics.get("workers") or []):
                 for item in list(dict(worker_row or {}).get("active_request_ids") or []):
@@ -3442,17 +3459,25 @@ class WorkflowHelperMixin:
         }:
             return self._hosted_operations.status(ref=operation, owner_actor_id=owner_actor_id)
         runtime = str(metadata.get("runtime") or "").strip()
-        kwargs = {
-            "profile": str(metadata.get("profile") or ("node" if runtime == "javascript" else "helper")),
-            "environment_key": str(metadata.get("environment_key") or "") or None,
-            "engine_id": str(metadata.get("engine_id") or "") or None,
-            "request_id": str(operation.get("request_id") or ""),
-        }
+        runtime_profile = str(metadata.get("profile") or ("node" if runtime == "javascript" else "helper"))
+        runtime_environment_key = str(metadata.get("environment_key") or "") or None
+        runtime_engine_id = str(metadata.get("engine_id") or "") or None
+        runtime_request_id = str(operation.get("request_id") or "")
         try:
             if runtime == "javascript":
-                canceled_runtime = self._cancel_workflow_js_runtime(**kwargs)
+                canceled_runtime = self._cancel_workflow_js_runtime(
+                    profile=runtime_profile,
+                    environment_key=runtime_environment_key,
+                    engine_id=runtime_engine_id,
+                    request_id=runtime_request_id,
+                )
             elif runtime == "python":
-                canceled_runtime = self._cancel_workflow_python_runtime(**kwargs)
+                canceled_runtime = self._cancel_workflow_python_runtime(
+                    profile=runtime_profile,
+                    environment_key=runtime_environment_key,
+                    engine_id=runtime_engine_id,
+                    request_id=runtime_request_id,
+                )
             else:
                 raise ValueError("stored workflow operation runtime is invalid")
         except Exception as exc:
