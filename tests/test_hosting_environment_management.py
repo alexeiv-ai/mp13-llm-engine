@@ -178,6 +178,9 @@ def test_workflow_runtime_adapters_share_manager_and_keep_references_independent
 
 def test_lower_roles_cannot_mutate_templates_environments_references_or_gc() -> None:
     sensitive = {
+        "package-artifact-upload-begin", "package-artifact-upload-chunk",
+        "package-artifact-upload-cancel", "package-artifact-upload-commit",
+        "package-lock-create",
         "environment-template-construct", "environment-template-activate",
         "environment-template-replace", "environment-template-deprecate",
         "environment-template-revoke", "environment-template-prewarm",

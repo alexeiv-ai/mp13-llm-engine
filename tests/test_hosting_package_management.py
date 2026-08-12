@@ -123,6 +123,19 @@ def test_service_configures_toolbox_materialization_from_generic_roots(tmp_path:
     assert set(builder.artifact_sources) == {"ingress"}
 
 
+def test_authentication_methods_with_equal_role_receive_equal_policy(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    shared = service.auth_upsert_key(
+        key_id="shared-admin", key_secret="secret", role="admin", auth_method="shared_secret"
+    )
+    public = service.auth_upsert_key(
+        key_id="public-admin", role="admin", auth_method="public_key",
+        public_key="ssh-ed25519 AAAATest public-admin",
+    )
+    assert shared["role"] == public["role"] == "admin"
+    assert AuthMixin._commands_allowed_for_role(shared["role"]) == AuthMixin._commands_allowed_for_role(public["role"])
+
+
 def test_upload_is_ordered_bounded_idempotent_and_content_addressed(tmp_path: Path) -> None:
     service = _service(tmp_path)
     content = b"daemon-owned-content"

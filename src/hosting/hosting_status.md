@@ -573,6 +573,17 @@ the slice.
 - Proof: three focused fresh/empty/cached metadata tests passed; token-only cache
   return annotations are absent
 
+### TEST-R9.2A — role, authentication-method, and hash authority
+
+- Date: 2026-08-11
+- Plan IDs: R9.2 (first three items); P2; high expertise
+- Proof: 19 focused tests passed; diagnostic authority is disjoint from package
+  and environment mutation surfaces, equal admin roles backed by shared-secret
+  and public-key records produce identical command policy, and mismatched caller
+  expectations cannot publish or resolve bytes under either digest
+- Remaining: complete the process-argument/log/audit/receipt/error/path sentinel
+  sweep before closing R9.2
+
 Append one concise entry per completed slice. Include exact commands, counts,
 durations where useful, negative-path results, commit pin, and dependent receipt
 impact. Do not paste an unstructured full test transcript.

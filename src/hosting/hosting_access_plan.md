@@ -814,10 +814,10 @@ exercise an admin-only call without another handshake.
 
 ##### R9.2 Run cross-boundary security acceptance
 
-- [ ] Prove lower roles cannot manage sources, credentials, packages,
+- [x] Prove lower roles cannot manage sources, credentials, packages,
   templates, environments, references, or GC.
-- [ ] Prove equal roles granted by password and public key receive equal policy.
-- [ ] Prove caller hashes cannot substitute for daemon-computed hashes.
+- [x] Prove equal roles granted by password and public key receive equal policy.
+- [x] Prove caller hashes cannot substitute for daemon-computed hashes.
 - [ ] Prove secrets and restricted local paths are absent from arguments,
   process inspection fixtures, logs, audit, receipts, errors, and remote status.
 
