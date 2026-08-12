@@ -55,8 +55,6 @@ def test_interactive_api_invoke_uses_engine_host_control_channel(monkeypatch: py
     monkeypatch.setattr(interactive, "EngineHostControlChannel", _FakeChannel)
     args = argparse.Namespace(
         pid_file=Path("daemon.pid"),
-        engines_state_file=Path("engines.json"),
-        control_state_file=Path("control.json"),
         engine_host_ssh_target="user@example-host",
         control_ssh_key="C:/keys/id_ed25519",
     )
@@ -75,7 +73,7 @@ def test_interactive_api_invoke_uses_engine_host_control_channel(monkeypatch: py
 def test_interactive_api_invoke_maps_session_errors(monkeypatch: pytest.MonkeyPatch) -> None:
     _FakeChannel.instances.clear()
     monkeypatch.setattr(interactive, "EngineHostControlChannel", _FakeChannel)
-    args = argparse.Namespace(pid_file=None, engines_state_file=None, control_state_file=None)
+    args = argparse.Namespace(pid_file=None)
 
     with pytest.raises(PermissionError, match="session_token_required"):
         interactive._api_invoke(args, "needs-auth", {})
@@ -84,7 +82,7 @@ def test_interactive_api_invoke_maps_session_errors(monkeypatch: pytest.MonkeyPa
 def test_interactive_api_invoke_maps_auth_failed(monkeypatch: pytest.MonkeyPatch) -> None:
     _FakeChannel.instances.clear()
     monkeypatch.setattr(interactive, "EngineHostControlChannel", _FakeChannel)
-    args = argparse.Namespace(pid_file=None, engines_state_file=None, control_state_file=None)
+    args = argparse.Namespace(pid_file=None)
 
     with pytest.raises(PermissionError, match="session_token_required"):
         interactive._api_invoke(args, "auth-failed", {})
@@ -106,7 +104,7 @@ def test_background_session_renewer_extends_token_while_menu_can_block(monkeypat
     _FakeChannel.instances.clear()
     monkeypatch.setattr(interactive, "EngineHostControlChannel", RenewChannel)
     monkeypatch.setattr(interactive, "_SESSION_RENEW_CHECK_INTERVAL_SECONDS", 0.01)
-    args = argparse.Namespace(pid_file=None, engines_state_file=None, control_state_file=None)
+    args = argparse.Namespace(pid_file=None)
     interactive._set_interactive_session_token(args, "tok-1")
 
     interactive._ensure_session_renewer(args)
@@ -130,7 +128,7 @@ def test_background_session_renewer_pauses_quietly_when_daemon_stops(
     _FakeChannel.instances.clear()
     monkeypatch.setattr(interactive, "EngineHostControlChannel", StoppedChannel)
     monkeypatch.setattr(interactive, "_SESSION_RENEW_CHECK_INTERVAL_SECONDS", 0.01)
-    args = argparse.Namespace(pid_file=None, engines_state_file=None, control_state_file=None)
+    args = argparse.Namespace(pid_file=None)
     interactive._set_interactive_session_token(args, "tok-1")
 
     interactive._ensure_session_renewer(args)
@@ -152,7 +150,7 @@ def test_metrics_auth_error_does_not_print_daemon_error(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    args = argparse.Namespace(pid_file=None, engines_state_file=None, control_state_file=None)
+    args = argparse.Namespace(pid_file=None)
     monkeypatch.setattr(interactive, "_can_use_offline_local_fallback", lambda *_args, **_kwargs: False)
     monkeypatch.setattr(
         interactive,
@@ -169,7 +167,7 @@ def test_metrics_auth_error_does_not_print_daemon_error(
 def test_interactive_lifecycle_uses_channel_helpers(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     _FakeChannel.instances.clear()
     monkeypatch.setattr(interactive, "EngineHostControlChannel", _FakeChannel)
-    args = argparse.Namespace(pid_file=None, engines_state_file=None, control_state_file=None)
+    args = argparse.Namespace(pid_file=None)
 
     interactive._start_daemon(args)
     interactive._stop_daemon(args)
@@ -203,7 +201,7 @@ def test_list_consumers_uses_offline_fallback_when_local_daemon_stopped(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    args = argparse.Namespace(pid_file=None, engines_state_file=None, control_state_file=None)
+    args = argparse.Namespace(pid_file=None)
     monkeypatch.setattr(interactive, "_can_use_offline_local_fallback", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(
         interactive,
@@ -278,7 +276,7 @@ def test_manage_workflow_helpers_prefers_workflow_python_facade(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    args = argparse.Namespace(pid_file=None, engines_state_file=None, control_state_file=None)
+    args = argparse.Namespace(pid_file=None)
     invocations: list[tuple[str, Dict[str, Any]]] = []
 
     def fake_api(_args: argparse.Namespace, cmd: str, payload: Dict[str, Any], session_token: Optional[str] = None) -> Dict[str, Any]:
@@ -342,7 +340,7 @@ def test_manage_workflow_helpers_can_ensure_python_runtime(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    args = argparse.Namespace(pid_file=None, engines_state_file=None, control_state_file=None)
+    args = argparse.Namespace(pid_file=None)
     invocations: list[tuple[str, Dict[str, Any]]] = []
 
     def fake_api(_args: argparse.Namespace, cmd: str, payload: Dict[str, Any], session_token: Optional[str] = None) -> Dict[str, Any]:
@@ -388,7 +386,7 @@ def test_manage_workflow_helpers_show_resources_without_legacy_request_status(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    args = argparse.Namespace(pid_file=None, engines_state_file=None, control_state_file=None)
+    args = argparse.Namespace(pid_file=None)
     invocations: list[tuple[str, Dict[str, Any]]] = []
 
     def fake_api(_args: argparse.Namespace, cmd: str, payload: Dict[str, Any], session_token: Optional[str] = None) -> Dict[str, Any]:
@@ -437,7 +435,7 @@ def test_manage_workflow_helpers_can_receive_python_stream_events(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    args = argparse.Namespace(pid_file=None, engines_state_file=None, control_state_file=None)
+    args = argparse.Namespace(pid_file=None)
     invocations: list[tuple[str, Dict[str, Any]]] = []
 
     def fake_api(_args: argparse.Namespace, cmd: str, payload: Dict[str, Any], session_token: Optional[str] = None) -> Dict[str, Any]:
@@ -494,7 +492,7 @@ def test_manage_workflow_runtimes_show_js_resources_without_legacy_request_statu
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    args = argparse.Namespace(pid_file=None, engines_state_file=None, control_state_file=None)
+    args = argparse.Namespace(pid_file=None)
     invocations: list[tuple[str, Dict[str, Any]]] = []
 
     def fake_api(_args: argparse.Namespace, cmd: str, payload: Dict[str, Any], session_token: Optional[str] = None) -> Dict[str, Any]:
@@ -545,7 +543,7 @@ def test_manage_workflow_runtimes_can_receive_js_stream_events(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    args = argparse.Namespace(pid_file=None, engines_state_file=None, control_state_file=None)
+    args = argparse.Namespace(pid_file=None)
     invocations: list[tuple[str, Dict[str, Any]]] = []
 
     def fake_api(_args: argparse.Namespace, cmd: str, payload: Dict[str, Any], session_token: Optional[str] = None) -> Dict[str, Any]:
@@ -675,7 +673,7 @@ def test_reachability_summary_treats_spawning_ipc_as_startup() -> None:
 
 
 def test_worker_status_summary_uses_daemon_resource_summary(monkeypatch: pytest.MonkeyPatch) -> None:
-    args = argparse.Namespace(pid_file=None, engines_state_file=None, control_state_file=None)
+    args = argparse.Namespace(pid_file=None)
     monkeypatch.setattr(
         interactive,
         "_api_invoke",
@@ -861,7 +859,7 @@ def test_offline_read_authenticates_and_retries_when_token_required(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    args = argparse.Namespace(pid_file=None, engines_state_file=None, control_state_file=None)
+    args = argparse.Namespace(pid_file=None)
     calls: list[Optional[str]] = []
 
     monkeypatch.setattr(interactive, "_can_use_offline_local_fallback", lambda *_args, **_kwargs: True)
@@ -888,7 +886,7 @@ def test_engine_details_uses_offline_fallback_when_local_daemon_stopped(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    args = argparse.Namespace(pid_file=None, engines_state_file=None, control_state_file=None)
+    args = argparse.Namespace(pid_file=None)
     monkeypatch.setattr(interactive, "_can_use_offline_local_fallback", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(
         interactive,
@@ -916,7 +914,7 @@ def test_list_engines_derives_labels_for_older_daemon_response(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    args = argparse.Namespace(pid_file=None, engines_state_file=None, control_state_file=None)
+    args = argparse.Namespace(pid_file=None)
     monkeypatch.setattr(interactive, "_can_use_offline_local_fallback", lambda *_args, **_kwargs: False)
     monkeypatch.setattr(
         interactive,
@@ -994,7 +992,7 @@ def test_kill_resource_is_unavailable_when_local_daemon_stopped(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    args = argparse.Namespace(pid_file=None, engines_state_file=None, control_state_file=None)
+    args = argparse.Namespace(pid_file=None)
     monkeypatch.setattr(interactive, "_can_use_offline_local_fallback", lambda *_args, **_kwargs: True)
 
     interactive._kill_resource(args, session_token=None)
@@ -1004,7 +1002,7 @@ def test_kill_resource_is_unavailable_when_local_daemon_stopped(
 
 
 def test_local_recovery_menu_can_update_session_token(monkeypatch: pytest.MonkeyPatch) -> None:
-    args = argparse.Namespace(pid_file=None, engines_state_file=None, control_state_file=None)
+    args = argparse.Namespace(pid_file=None)
     choices = iter(["u", "b"])
     monkeypatch.setattr(interactive, "_target_mode", lambda _args: "local")
     monkeypatch.setattr(interactive, "_prompt_menu", lambda *_args, **_kwargs: next(choices))
@@ -1019,7 +1017,7 @@ def test_local_recovery_menu_rejects_remote_target(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    args = argparse.Namespace(pid_file=None, engines_state_file=None, control_state_file=None)
+    args = argparse.Namespace(pid_file=None)
     monkeypatch.setattr(interactive, "_target_mode", lambda _args: "ssh")
 
     token = interactive._local_recovery_menu(args, session_token="tok-existing")
@@ -1032,7 +1030,7 @@ def test_revoke_local_session_uses_numbered_selection(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    args = argparse.Namespace(pid_file=None, engines_state_file=None, control_state_file=None)
+    args = argparse.Namespace(pid_file=None)
     revoked: list[str] = []
 
     class FakeService:
@@ -1066,7 +1064,7 @@ def test_revoke_local_key_uses_numbered_selection(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    args = argparse.Namespace(pid_file=None, engines_state_file=None, control_state_file=None)
+    args = argparse.Namespace(pid_file=None)
     revoked: list[str] = []
 
     class FakeService:
