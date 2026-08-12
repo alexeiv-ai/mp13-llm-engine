@@ -892,6 +892,19 @@ the slice.
   tests/test_engine_host_cli_remote_args.py tests/test_hosting_auth_roles.py -q
   --maxfail=30` passed all 101 tests
 
+### TEST-R3.2M — service static-control writer removal
+
+- Date: 2026-08-12
+- Plan IDs: R3.2 and R9.4 (partial); P0/P2; high expertise
+- Outcome: `EngineHostService` is now read-only with respect to static control
+  policy; the final production `set_control_config` implementation was deleted
+  after its public callers and authorization surface were removed
+- Removal proof: Python production sources contain zero `set_control_config` or
+  `set-control-config` matches
+- Proof: `python -m pytest tests/test_hosting_auth_roles.py
+  tests/test_hosting_service_security.py tests/test_hosting_configuration_v3.py
+  -q --maxfail=30` passed all 97 tests; the control module compiles cleanly
+
 Append one concise entry per completed slice. Include exact commands, counts,
 durations where useful, negative-path results, commit pin, and dependent receipt
 impact. Do not paste an unstructured full test transcript.
