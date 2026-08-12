@@ -706,6 +706,18 @@ the slice.
 - Remaining: broader channel command removal and public-surface alignment remain
   open under R9.1/R9.4
 
+### TEST-R3.2F — model runtime boundary fixture cut
+
+- Date: 2026-08-12
+- Plan IDs: R3.2 fixture removal and R9.4 (partial); P0/P2; high expertise
+- Outcome: read-only model-runtime boundary services and daemon projections now
+  receive the immutable v3 authority; no model-runtime test constructs a legacy
+  control-state authority or filename
+- Proof: `python -m pytest tests/test_hosted_model_runtime_boundary.py -q
+  --maxfail=20` passed 12 tests, covering bounded status, unconfigured/degraded
+  states, selector-smuggling denials, role/channel projection, daemon dispatch,
+  and SSH CLI routing
+
 Append one concise entry per completed slice. Include exact commands, counts,
 durations where useful, negative-path results, commit pin, and dependent receipt
 impact. Do not paste an unstructured full test transcript.

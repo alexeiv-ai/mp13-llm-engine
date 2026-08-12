@@ -30,6 +30,7 @@ from hosting.toolbox.dependency_policy import (
     validate_toolbox_dependency_policy,
 )
 from hosting_toolbox_test_catalog import realized_test_catalog
+from tests.hosting_v3_fixtures import hosting_configuration, write_hosting_configuration
 
 
 def _digest(char: str) -> str:
@@ -52,7 +53,7 @@ def _identity(*, verified: bool = True) -> ModelRuntimeIdentity:
 def _service(tmp_path: Path, *, verified: bool = True) -> EngineHostService:
     return EngineHostService(
         engines_state_file=tmp_path / "engines.json",
-        control_state_file=tmp_path / "access_control.json",
+        hosting_configuration=hosting_configuration(tmp_path),
         model_runtime_identity=_identity(verified=verified),
     )
 
@@ -85,7 +86,7 @@ def test_model_runtime_status_is_exact_bounded_and_read_only(tmp_path: Path) -> 
 def test_unconfigured_and_unverified_statuses_remain_bounded(tmp_path: Path) -> None:
     unconfigured = EngineHostService(
         engines_state_file=tmp_path / "a" / "engines.json",
-        control_state_file=tmp_path / "a" / "access_control.json",
+        hosting_configuration=hosting_configuration(tmp_path / "a"),
     ).model_runtime_status()
     assert set(unconfigured) == MODEL_RUNTIME_STATUS_FIELDS
     assert unconfigured["state"] == "unavailable"
@@ -139,7 +140,7 @@ def test_healthy_installed_model_cannot_be_selected_by_planner_or_custom_builder
         )
     with pytest.raises(PermissionError, match="model_runtime_selection_denied"):
         service.authorize_command(
-            "toolbox-template-construct",
+            "environment-template-create",
             {"template": {"runtime_kind": "model"}},
         )
 
@@ -201,7 +202,7 @@ def test_status_command_roles_channel_and_daemon_projection(tmp_path: Path) -> N
     daemon = EngineHostDaemon(
         pid_file=tmp_path / "daemon.pid",
         engines_state_file=tmp_path / "daemon-engines.json",
-        control_state_file=tmp_path / "daemon-access-control.json",
+        mp13_config_file=write_hosting_configuration(tmp_path),
     )
     daemon.svc._model_runtime_identity = _identity()  # noqa: SLF001
     response = asyncio.run(
