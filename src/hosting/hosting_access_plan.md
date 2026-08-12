@@ -732,9 +732,9 @@ reuse, references, GC, or execution.
 
 - [ ] Make toolbox definition planning resolve exact package locks and an
   `EnvironmentRequest` through the generic subsystem.
-- [ ] Carry package/environment identities through confirmation, approval, and
+- [x] Carry package/environment identities through confirmation, approval, and
   apply so approved bytes cannot change between stages.
-- [ ] Attach/release the toolbox reference transactionally with definition
+- [x] Attach/release the toolbox reference transactionally with definition
   revision activation.
 
 Proof: mutation-between-plan-and-apply, stale approval, restart, retry, and

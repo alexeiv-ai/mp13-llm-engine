@@ -161,9 +161,6 @@ class ToolboxDefinitionRolloutCoordinator:
     ) -> list[str]:
         """Release superseded builder references only after publication."""
 
-        builder = getattr(self.service, "_hermetic_toolbox_environment_builder", None)
-        if builder is None:
-            return []
         retained = {str(item or "").strip() for item in active_references}
         released: list[str] = []
         for raw in dict(dict(old_snapshot or {}).get("profiles") or {}).values():
@@ -171,13 +168,7 @@ class ToolboxDefinitionRolloutCoordinator:
             reference = str(row.get("environment_reference") or "").strip()
             if not reference or reference in retained:
                 continue
-            environment_key = str(dict(row.get("profile") or {}).get("environment_key") or "").strip()
-            if not environment_key:
-                raise RuntimeError("retired_environment_key_missing")
-            builder.release_reference(
-                environment_key=environment_key,
-                reference_id=reference,
-            )
+            self.service._environment_manager.release(reference_id=reference)
             released.append(reference)
         return sorted(released)
 
@@ -384,21 +375,12 @@ class ToolboxDefinitionRolloutCoordinator:
                 return repository.status(ref=current["operation"], owner_actor_id=current["owner_actor_id"])
             cleanup: list[str] = []
             if not published:
-                builder = getattr(
-                    self.service, "_hermetic_toolbox_environment_builder", None
-                )
-                if builder is not None:
-                    for assignment in assignments:
-                        if assignment.materialization_reference_id:
-                            try:
-                                builder.release_reference(
-                                    environment_key=assignment.resolved_profile.environment_key,
-                                    reference_id=assignment.materialization_reference_id,
-                                )
-                            except Exception:
-                                operator_details.setdefault(
-                                    "reference_cleanup_failed", []
-                                ).append(assignment.resolved_profile.environment_key)
+                for assignment in assignments:
+                    if assignment.materialization_reference_id:
+                        try:
+                            self.service._environment_manager.release(reference_id=assignment.materialization_reference_id)
+                        except Exception:
+                            operator_details.setdefault("reference_cleanup_failed", []).append(assignment.resolved_profile.environment_key)
                 for engine_id in candidates:
                     self.service._retire_toolbox_registration(engine_id)
                     cleanup.append(engine_id)

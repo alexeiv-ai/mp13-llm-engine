@@ -136,6 +136,29 @@ def test_authentication_methods_with_equal_role_receive_equal_policy(tmp_path: P
     assert AuthMixin._commands_allowed_for_role(shared["role"]) == AuthMixin._commands_allowed_for_role(public["role"])
 
 
+def test_daemon_local_import_rehashes_and_creates_generic_lock(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    content = b"toolbox-resolved-wheel"
+    local = tmp_path / "resolved.whl"
+    local.write_bytes(content)
+    artifact = service._package_manager.import_verified_file(
+        source_id="ingress", path=local, expected_digest=_digest(content),
+        actor_id="service:toolbox", request_id="toolbox-plan-1",
+    )
+    lock = service.package_lock_create(
+        lock_id="toolbox-profile-1", revision=1, runtime_kind="python", platform="win_amd64",
+        artifacts=[artifact],
+        dependencies=[{"name": "demo", "version": "1.0", "artifact_id": artifact["artifact_id"]}],
+    )
+    assert lock["contract"] == "hosting.package_lock.v1"
+    assert lock["artifacts"][0]["artifact_id"] == _digest(content)
+    with pytest.raises(PackageError, match="hash_mismatch"):
+        service._package_manager.import_verified_file(
+            source_id="ingress", path=local, expected_digest=_digest(b"different"),
+            actor_id="service:toolbox", request_id="toolbox-plan-2",
+        )
+
+
 def test_upload_is_ordered_bounded_idempotent_and_content_addressed(tmp_path: Path) -> None:
     service = _service(tmp_path)
     content = b"daemon-owned-content"

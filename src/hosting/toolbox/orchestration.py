@@ -126,7 +126,7 @@ class ToolboxSandboxOrchestrator:
             # Keep the logical prefix for diagnostics, but make each concrete
             # candidate identity unique and non-replacing.
             engine_id = f"{logical_engine_id}-{uuid.uuid4().hex[:12]}"
-            item.materialization_reference_id = (
+            adoption_request_id = (
                 f"toolbox:{tid}:{profile.profile_id.removeprefix('sha256:')[:24]}:"
                 f"{revision.removeprefix('sha256:')[:24]}"
             )
@@ -140,7 +140,7 @@ class ToolboxSandboxOrchestrator:
                 intrinsic_names=list(staged.manifest.get("intrinsic_tool_names") or []),
                 allowed_template_ids=(profile.template_id,),
                 sandbox_policy=profile.sandbox_policy,
-                reference_id=item.materialization_reference_id,
+                reference_id=adoption_request_id,
                 resolved_environment=dict(pinned_environments.get(profile.profile_id) or {}),
             )
             if (
@@ -151,6 +151,43 @@ class ToolboxSandboxOrchestrator:
                 ) != profile.effective_lock_digest
             ):
                 raise RuntimeError("resolved_environment_identity_mismatch")
+            generic_artifacts = []
+            generic_dependencies = []
+            for artifact in hermetic.resolved.locked_artifacts:
+                imported = self.service._package_manager.import_verified_file(
+                    source_id=artifact.source_id,
+                    path=self.service._toolbox_artifact_store.object_path(artifact.sha256),
+                    expected_digest=artifact.sha256,
+                    actor_id="service:toolbox",
+                    request_id=adoption_request_id,
+                )
+                generic_artifacts.append(imported)
+                generic_dependencies.append({
+                    "name": artifact.distribution_name,
+                    "version": artifact.version,
+                    "artifact_id": artifact.sha256,
+                })
+            generic_lock = self.service._package_manager.create_lock(
+                lock_id=f"toolbox-{profile.profile_id.removeprefix('sha256:')[:32]}",
+                revision=1,
+                runtime_kind="python",
+                platform=current_target.platform,
+                artifacts=generic_artifacts,
+                dependencies=generic_dependencies,
+            )
+            adopted = self.service._environment_manager.adopt_published(
+                environment_id=hermetic.environment_key,
+                consumer_kind="toolbox",
+                consumer_id=tid,
+                revision=1,
+                template_id=profile.template_id,
+                template_revision=1,
+                package_lock_digest=str(generic_lock["lock_digest"]),
+                runtime_kind="python",
+                platform=current_target.platform,
+                builder_id="python-environment-v1",
+            )
+            item.materialization_reference_id = str(adopted["reference"]["reference_id"])
             environment_spec = ToolboxEnvironmentSpec(
                 venv_key=hermetic.environment_key,
                 venv_path=hermetic.environment_root,
@@ -175,7 +212,7 @@ class ToolboxSandboxOrchestrator:
                 {
                     "environment_key": profile.environment_key,
                     "environment_reference": item.materialization_reference_id,
-                    "verification_receipt_contract": "hosting.toolbox.hermetic_environment_receipt.v1",
+                    "verification_receipt_contract": "hosting.environment_receipt.v1",
                     "verification_state": "verified",
                 }
             )

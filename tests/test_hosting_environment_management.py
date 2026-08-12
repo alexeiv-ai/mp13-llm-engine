@@ -135,6 +135,26 @@ def test_state_version_rejection_and_reference_pagination(tmp_path: Path) -> Non
         manager.list_templates()
 
 
+def test_adopt_published_bytes_issues_generic_receipt_and_reference(tmp_path: Path) -> None:
+    manager, _ = _manager(tmp_path)
+    environment_id = "sha256:" + "c" * 64
+    content = tmp_path / "environments" / "content" / ("c" * 64)
+    content.mkdir(parents=True)
+    (content / "ready").write_text("ok", encoding="utf-8")
+    first = manager.adopt_published(
+        environment_id=environment_id, consumer_kind="toolbox", consumer_id="tb-1", revision=1,
+        template_id="base", template_revision=1, package_lock_digest=LOCK_DIGEST,
+        runtime_kind="python", platform="win_amd64", builder_id="python-environment-v1",
+    )
+    second = manager.adopt_published(
+        environment_id=environment_id, consumer_kind="toolbox", consumer_id="tb-1", revision=1,
+        template_id="base", template_revision=1, package_lock_digest=LOCK_DIGEST,
+        runtime_kind="python", platform="win_amd64", builder_id="python-environment-v1",
+    )
+    assert first["receipt"]["contract"] == "hosting.environment_receipt.v1"
+    assert first["reference"] == second["reference"]
+
+
 def test_legacy_roots_and_incomplete_builds_are_not_discovered(tmp_path: Path) -> None:
     for name in ("toolbox_venvs", "runtime_envs", "toolbox_environment_cache"):
         (tmp_path / name / "fake").mkdir(parents=True)

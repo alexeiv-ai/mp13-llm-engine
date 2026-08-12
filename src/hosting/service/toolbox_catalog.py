@@ -945,7 +945,7 @@ class ToolboxTemplateCatalogMixin:
                 (item.source_id, item.filename): self._toolbox_artifact_store.object_path(item.sha256)
                 for item in resolved.locked_artifacts
             })
-            return builder.materialize_environment(resolved, reference_id=reference_id)
+            return builder.materialize_environment(resolved, reference_id=reference_id, add_reference=False)
         resolution = self.resolve_hosted_template_environment(
             consumer_kind="toolbox",
             files=files,
@@ -966,7 +966,7 @@ class ToolboxTemplateCatalogMixin:
         resolved = HermeticToolboxTemplateMaterializer._resolved_input(
             entry, python_abi=python_abi, platform=platform
         )
-        return builder.materialize_environment(resolved, reference_id=reference_id)
+        return builder.materialize_environment(resolved, reference_id=reference_id, add_reference=False)
 
     def initialize_configured_toolbox_templates(
         self,

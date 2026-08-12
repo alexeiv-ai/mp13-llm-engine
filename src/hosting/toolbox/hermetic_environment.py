@@ -634,6 +634,7 @@ class PythonEnvironmentBuilder:
         resolved: ResolvedToolboxEnvironmentInput | Mapping[str, Any],
         *,
         reference_id: str,
+        add_reference: bool = True,
     ) -> HermeticToolboxEnvironmentSpec:
         model = resolved if isinstance(resolved, ResolvedToolboxEnvironmentInput) else ResolvedToolboxEnvironmentInput.from_dict(resolved)
         reference = _id(reference_id, label="environment_reference_id")
@@ -666,7 +667,8 @@ class PythonEnvironmentBuilder:
                     raise HermeticToolboxEnvironmentBuildError(
                         "environment_build_failed", "The hermetic toolbox environment build failed."
                     ) from exc
-        self._add_reference(spec.environment_key, reference)
+        if add_reference:
+            self._add_reference(spec.environment_key, reference)
         return spec
 
     def verified_environment(

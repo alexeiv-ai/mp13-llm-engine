@@ -613,6 +613,21 @@ the slice.
 - Proof: 11 focused lifecycle/role/channel tests passed with exact payload
   comparisons and lower-role denial coverage
 
+### CODE-R7B — generic toolbox package and reference authority
+
+- Date: 2026-08-11
+- Plan IDs: R7.1 (identity and reference transaction); P1; high expertise
+- Outcome: confirmed toolbox bytes are rehashed into the generic CAS, expressed
+  as a deterministic `hosting.package_lock.v1`, and attached to a generic
+  environment receipt/reference before candidate registration; failed rollout
+  releases the generic reference and successful replacement releases displaced
+  references only after publication
+- Proof: 22 package/environment tests passed, including daemon-local rehash,
+  mismatch denial, deterministic lock creation, adopted receipt idempotence,
+  independent references, and removal guards
+- Remaining: remove the retained toolbox resolver/artifact repository and make
+  planning originate the generic lock/request directly before closing R7.1/R7.2
+
 Append one concise entry per completed slice. Include exact commands, counts,
 durations where useful, negative-path results, commit pin, and dependent receipt
 impact. Do not paste an unstructured full test transcript.

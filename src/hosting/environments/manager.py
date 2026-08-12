@@ -280,6 +280,63 @@ class EnvironmentManager:
                     raise
                 raise EnvironmentError("environment_build_failed") from exc
 
+    def adopt_published(
+        self,
+        *,
+        environment_id: str,
+        consumer_kind: str,
+        consumer_id: str,
+        revision: int,
+        template_id: str,
+        template_revision: int,
+        package_lock_digest: str,
+        runtime_kind: str,
+        platform: str,
+        builder_id: str,
+    ) -> dict[str, Any]:
+        """Attach neutral receipt/reference authority to validated published bytes."""
+        request = EnvironmentRequest.from_dict({
+            "contract": EnvironmentRequest.CONTRACT,
+            "request_id": "adopt-" + hashlib.sha256(f"{consumer_kind}|{consumer_id}|{revision}".encode("utf-8")).hexdigest(),
+            "consumer_kind": consumer_kind,
+            "consumer_id": consumer_id,
+            "revision": revision,
+            "template_id": template_id,
+            "template_revision": template_revision,
+            "package_lock_digest": package_lock_digest,
+            "runtime_kind": runtime_kind,
+            "platform": platform,
+            "configuration_revision": self.configuration_revision,
+        })
+        if not environment_id.startswith("sha256:") or len(environment_id) != 71 or any(character not in "0123456789abcdef" for character in environment_id[7:]):
+            raise EnvironmentError("environment_id_invalid")
+        digest = environment_id.split(":", 1)[1]
+        content_dir = self.root / "content" / digest
+        if not content_dir.is_dir():
+            raise EnvironmentError("environment_unavailable")
+        receipt_path = self.root / "receipts" / f"{digest}.json"
+        receipt = EnvironmentReceipt(
+            environment_id, environment_id, 1, f"@environments/content/{digest}",
+            runtime_kind, platform, template_id, template_revision,
+            package_lock_digest, self.configuration_revision,
+            {"builder_id": builder_id, "adopted": True},
+        ).to_dict()
+        existed = receipt_path.exists()
+        with self._locked():
+            state = self._read()
+            if receipt_path.exists():
+                existing = json.loads(receipt_path.read_text(encoding="utf-8"))
+                if existing != receipt:
+                    raise EnvironmentError("environment_receipt_conflict")
+            else:
+                receipt_path.parent.mkdir(parents=True, exist_ok=True)
+                temporary = receipt_path.with_name(f".{receipt_path.name}.{secrets.token_hex(8)}.tmp")
+                temporary.write_text(json.dumps(receipt, sort_keys=True, separators=(",", ":")), encoding="utf-8")
+                os.replace(temporary, receipt_path)
+            reference = self._acquire_locked(state, environment_id, request)
+            self._write(state)
+        return {"receipt": receipt, "reference": reference, "reused": existed}
+
     def _acquire_locked(self, state: dict[str, Any], environment_id: str, request: EnvironmentRequest) -> dict[str, Any]:
         seed = f"{environment_id}|{request.consumer_kind}|{request.consumer_id}|{request.revision}"
         reference_id = "ref-" + hashlib.sha256(seed.encode("utf-8")).hexdigest()[:32]

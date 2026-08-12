@@ -9,6 +9,7 @@ import re
 import secrets
 import threading
 import time
+import shutil
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence
@@ -328,3 +329,35 @@ class PackageArtifactManager:
             temporary.write_text(encoded, encoding="utf-8")
             os.replace(temporary, target)
         return lock.to_dict()
+
+    def import_verified_file(
+        self, *, source_id: str, path: Path, expected_digest: str, actor_id: str, request_id: str
+    ) -> dict[str, Any]:
+        """Rehash daemon-local resolved bytes into the generic CAS."""
+        source = self.sources.get(str(source_id))
+        if source is None or not source.enabled or source.source_id not in self.policy.allowed_source_ids:
+            raise PackageError("package_source_unavailable")
+        if source.credential_ref is not None and source.credential_ref not in self._credentials:
+            raise PackageError("package_credential_unavailable")
+        source_path = Path(path).resolve()
+        if not source_path.is_file():
+            raise PackageError("package_artifact_unavailable")
+        size = source_path.stat().st_size
+        if size < 1 or size > self.policy.max_artifact_bytes:
+            raise PackageError("package_upload_bounds_exceeded")
+        hasher = hashlib.sha256()
+        with source_path.open("rb") as handle:
+            while block := handle.read(1024 * 1024):
+                hasher.update(block)
+        digest = "sha256:" + hasher.hexdigest()
+        if digest != require_digest(expected_digest, "package_expected_digest"):
+            raise PackageError("package_artifact_hash_mismatch")
+        target = self.artifact_root / "sha256" / hasher.hexdigest()
+        if not target.exists():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            temporary = self.scratch_root / f"import-{secrets.token_hex(12)}.part"
+            temporary.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source_path, temporary)
+            os.replace(temporary, target)
+        self._audit(event="package_artifact_import", actor_id=actor_id, request_id=request_id, result="committed", artifact_id=digest)
+        return {"artifact_id": digest, "size_bytes": size, "source_id": source.source_id}
