@@ -1605,6 +1605,24 @@ class EngineHostControlChannel:
                     pass
                 self._connection = None
 
+    def package_artifact_upload_begin(self, **payload: Any) -> Dict[str, Any]:
+        return dict(self._invoke("package-artifact-upload-begin", dict(payload)) or {})
+
+    def package_artifact_upload_chunk(self, **payload: Any) -> Dict[str, Any]:
+        return dict(self._invoke("package-artifact-upload-chunk", dict(payload)) or {})
+
+    def package_artifact_upload_status(self, **payload: Any) -> Dict[str, Any]:
+        return dict(self._invoke("package-artifact-upload-status", dict(payload)) or {})
+
+    def package_artifact_upload_cancel(self, **payload: Any) -> Dict[str, Any]:
+        return dict(self._invoke("package-artifact-upload-cancel", dict(payload)) or {})
+
+    def package_artifact_upload_commit(self, **payload: Any) -> Dict[str, Any]:
+        return dict(self._invoke("package-artifact-upload-commit", dict(payload)) or {})
+
+    def package_lock_create(self, **payload: Any) -> Dict[str, Any]:
+        return dict(self._invoke("package-lock-create", dict(payload)) or {})
+
     def restart_remote_daemon(self, *, wait_seconds: float = 3.0) -> Dict[str, Any]:
         """SSH-exec the remote daemon start command and wait for it to bind.
 

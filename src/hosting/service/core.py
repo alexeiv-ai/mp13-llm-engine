@@ -40,6 +40,8 @@ class CoreMixin:
             "approval_callback_leases_v1": True,
             "explicit_capability_provider_identity_v1": True,
             "capability_authority_leases_v1": True,
+            "package_artifact_ingress_v1": True,
+            "package_locks_v1": True,
         }
 
     @staticmethod

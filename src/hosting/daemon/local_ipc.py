@@ -3265,37 +3265,47 @@ class EngineHostDaemon:
             )
         if cmd == "toolbox-template-list":
             return svc.toolbox_template_list()
-        if cmd == "toolbox-artifact-upload-begin":
-            return svc.toolbox_artifact_upload_begin(
+        if cmd == "package-artifact-upload-begin":
+            return svc.package_artifact_upload_begin(
+                actor_id=str(payload.get("_claim_actor_id") or "service:local"),
                 source_id=str(payload.get("source_id") or ""),
                 total_size=payload.get("total_size"),
-                archive_sha256=str(payload.get("archive_sha256") or ""),
+                expected_digest=str(payload.get("expected_digest") or "").strip() or None,
                 request_id=str(payload.get("request_id") or ""),
-                owner_actor_id=str(payload.get("_claim_actor_id") or "service:local"),
             )
-        if cmd == "toolbox-artifact-upload-chunk":
-            return svc.toolbox_artifact_upload_chunk(
+        if cmd == "package-artifact-upload-chunk":
+            return svc.package_artifact_upload_chunk(
+                actor_id=str(payload.get("_claim_actor_id") or "service:local"),
                 upload_id=str(payload.get("upload_id") or ""),
                 chunk_index=payload.get("chunk_index"),
                 offset=payload.get("offset"),
                 chunk_base64url=str(payload.get("chunk_base64url") or ""),
-                owner_actor_id=str(payload.get("_claim_actor_id") or "service:local"),
             )
-        if cmd == "toolbox-artifact-upload-status":
-            return svc.toolbox_artifact_upload_status(
+        if cmd == "package-artifact-upload-status":
+            return svc.package_artifact_upload_status(
+                actor_id=str(payload.get("_claim_actor_id") or "service:local"),
                 upload_id=str(payload.get("upload_id") or ""),
-                owner_actor_id=str(payload.get("_claim_actor_id") or "service:local"),
             )
-        if cmd == "toolbox-artifact-upload-cancel":
-            return svc.toolbox_artifact_upload_cancel(
-                upload_id=str(payload.get("upload_id") or ""),
-                owner_actor_id=str(payload.get("_claim_actor_id") or "service:local"),
-            )
-        if cmd == "toolbox-artifact-upload-commit":
-            return svc.toolbox_artifact_upload_commit(
+        if cmd == "package-artifact-upload-cancel":
+            return svc.package_artifact_upload_cancel(
+                actor_id=str(payload.get("_claim_actor_id") or "service:local"),
                 upload_id=str(payload.get("upload_id") or ""),
                 request_id=str(payload.get("request_id") or ""),
-                owner_actor_id=str(payload.get("_claim_actor_id") or "service:local"),
+            )
+        if cmd == "package-artifact-upload-commit":
+            return svc.package_artifact_upload_commit(
+                actor_id=str(payload.get("_claim_actor_id") or "service:local"),
+                upload_id=str(payload.get("upload_id") or ""),
+                request_id=str(payload.get("request_id") or ""),
+            )
+        if cmd == "package-lock-create":
+            return svc.package_lock_create(
+                lock_id=str(payload.get("lock_id") or ""),
+                revision=payload.get("revision"),
+                runtime_kind=str(payload.get("runtime_kind") or ""),
+                platform=str(payload.get("platform") or ""),
+                artifacts=list(payload.get("artifacts") or []),
+                dependencies=list(payload.get("dependencies") or []),
             )
         if cmd == "toolbox-template-describe":
             return svc.toolbox_template_describe(

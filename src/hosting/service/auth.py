@@ -93,6 +93,16 @@ _TOOLBOX_ENVIRONMENT_ADMIN_COMMANDS = {
     "toolbox-environment-remove",
 }
 
+_PACKAGE_UPLOAD_COMMANDS = {
+    "package-artifact-upload-begin",
+    "package-artifact-upload-chunk",
+    "package-artifact-upload-status",
+    "package-artifact-upload-cancel",
+    "package-artifact-upload-commit",
+}
+
+_PACKAGE_LOCK_COMMANDS = {"package-lock-create"}
+
 _WORKFLOW_JS_COMMANDS = {
     "workflow-js-environment-spec",
     "workflow-js-ensure",
@@ -373,11 +383,8 @@ class AuthMixin:
             "hosted-operation-result",
             "hosted-operation-cancel",
             "toolbox-gc",
-            "toolbox-artifact-upload-begin",
-            "toolbox-artifact-upload-chunk",
-            "toolbox-artifact-upload-status",
-            "toolbox-artifact-upload-cancel",
-            "toolbox-artifact-upload-commit",
+            *_PACKAGE_UPLOAD_COMMANDS,
+            *_PACKAGE_LOCK_COMMANDS,
             *_TOOLBOX_DEFINITION_COMMANDS,
             *_TOOLBOX_TEMPLATE_CONSUMER_COMMANDS,
             *_TOOLBOX_TEMPLATE_ADMIN_COMMANDS,
@@ -433,6 +440,7 @@ class AuthMixin:
         if r == ROLE_DEPENDENCY_APPROVER:
             return {
                 *_TOOLBOX_DEPENDENCY_APPROVAL_COMMANDS,
+                *_PACKAGE_LOCK_COMMANDS,
                 "auth-status",
                 "auth-validate-session",
                 "auth-renew-session",
@@ -475,6 +483,7 @@ class AuthMixin:
                 "hosted-operation-result",
                 "hosted-operation-cancel",
                 "toolbox-gc",
+                *_PACKAGE_UPLOAD_COMMANDS,
                 *_TOOLBOX_DEFINITION_COMMANDS,
                 *_TOOLBOX_TEMPLATE_CONSUMER_COMMANDS,
                 "toolbox-references",
@@ -532,6 +541,7 @@ class AuthMixin:
                 "hosted-operation-result",
                 "hosted-operation-cancel",
                 "toolbox-gc",
+                *_PACKAGE_UPLOAD_COMMANDS,
                 *_TOOLBOX_DEFINITION_COMMANDS,
                 *_TOOLBOX_TEMPLATE_CONSUMER_COMMANDS,
                 "toolbox-references",

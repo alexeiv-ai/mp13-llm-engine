@@ -314,83 +314,39 @@ class StateMixin:
             "sessions_count": len(dict(auth.get("sessions") or {})),
             "secure_state": self.hosting_secure_state_status(local_admin=local_admin),
         }
-        required_abi = str(getattr(self, "_toolbox_required_python_abi", "") or "").strip()
-        required_platform = str(getattr(self, "_toolbox_required_platform", "") or "").strip()
-        toolbox_setup_diagnostic = getattr(self, "_toolbox_setup_diagnostic", None)
-        artifact_ingestion_diagnostic = getattr(
-            self, "_toolbox_artifact_ingestion_diagnostic", None
-        )
-        toolbox_setup_operation = getattr(self, "_toolbox_setup_operation", None)
-        if isinstance(toolbox_setup_operation, dict) and isinstance(
-            toolbox_setup_operation.get("operation"), dict
-        ):
-            try:
-                toolbox_setup_operation = self._hosted_operations.status(
-                    ref=toolbox_setup_operation["operation"],
-                    owner_actor_id="system:toolbox-setup",
-                )
-                self._toolbox_setup_operation = toolbox_setup_operation
-            except (KeyError, ValueError):
-                toolbox_setup_operation = None
-        if isinstance(toolbox_setup_operation, dict):
-            summary["toolbox_setup_operation"] = dict(toolbox_setup_operation)
-        if isinstance(toolbox_setup_diagnostic, dict):
-            summary["toolbox_readiness"] = {
-                "status": "unavailable",
-                "code": str(toolbox_setup_diagnostic["code"]),
-                "summary": str(toolbox_setup_diagnostic["summary"]),
-                "target": getattr(self, "_toolbox_target").to_dict(),
-                "templates": [],
-                "diagnostics": [dict(toolbox_setup_diagnostic)],
-            }
-        elif isinstance(artifact_ingestion_diagnostic, dict):
-            summary["toolbox_readiness"] = {
+        revision = self.hosting_configuration_revision
+        package = dict(self.hosting_configuration.package_management)
+        enabled_sources = [
+            source_id
+            for source_id, source in dict(package.get("sources") or {}).items()
+            if bool(dict(source).get("enabled", True))
+        ]
+        summary["readiness"] = [
+            {
+                "contract": "hosting.readiness.v1",
+                "status": "ready",
+                "code": "ready",
+                "summary": "Control authentication and diagnostics are available.",
+                "subsystem": "control",
+                "configuration_revision": revision,
+            },
+            {
+                "contract": "hosting.readiness.v1",
+                "status": "ready" if enabled_sources else "degraded",
+                "code": "ready" if enabled_sources else "package_source_unavailable",
+                "summary": "Package ingress has an enabled source." if enabled_sources else "No package source is enabled.",
+                "subsystem": "package",
+                "configuration_revision": revision,
+            },
+            {
+                "contract": "hosting.readiness.v1",
                 "status": "degraded",
-                "code": str(artifact_ingestion_diagnostic["code"]),
-                "summary": str(artifact_ingestion_diagnostic["summary"]),
-                "target": getattr(self, "_toolbox_target").to_dict(),
-                "templates": [],
-                "diagnostics": [dict(artifact_ingestion_diagnostic)],
-            }
-        elif (
-            self._toolbox_host_project_config is not None
-            and isinstance(toolbox_setup_operation, dict)
-            and toolbox_setup_operation.get("lifecycle") != "terminal_success"
-        ):
-            result = dict(toolbox_setup_operation.get("result") or {})
-            lifecycle = str(toolbox_setup_operation.get("lifecycle") or "queued")
-            code = str(
-                result.get("code")
-                or (
-                    "toolbox_setup_interrupted"
-                    if lifecycle.startswith("interrupted_")
-                    else "toolbox_setup_in_progress"
-                )
-            )
-            diagnostic = {
-                "code": code,
-                "summary": str(
-                    result.get("summary")
-                    or "Toolbox setup has not completed atomic publication."
-                ),
-            }
-            summary["toolbox_readiness"] = {
-                "status": "degraded",
-                "code": code,
-                "config_revision": self._toolbox_host_project_config.config_revision,
-                "catalog_revision": self._toolbox_template_catalog.read()["catalog_revision"],
-                "target": getattr(self, "_toolbox_target").to_dict(),
-                "templates": [],
-                "diagnostics": [diagnostic],
-            }
-        elif required_abi and required_platform:
-            summary["toolbox_readiness"] = self.toolbox_required_template_status(
-                python_abi=required_abi,
-                platform=required_platform,
-            )
-        host_project = getattr(self, "_toolbox_host_project_config", None)
-        if host_project is not None:
-            summary["toolbox_host_project"] = host_project.public_dict()
+                "code": "environment_template_unavailable",
+                "summary": "No environment template is active.",
+                "subsystem": "environment",
+                "configuration_revision": revision,
+            },
+        ]
         return summary
 
     def _read_control(self) -> Dict[str, Any]:

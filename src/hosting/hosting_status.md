@@ -2,7 +2,7 @@
 
 Last updated: 2026-08-11
 
-Status: active; R0–R2 and R3.1 complete; R3.2 next
+Status: active; R0–R3.1 and R5 complete; R3.2–R4 active
 
 This is the fresh execution ledger for
 [`hosting_access_plan.md`](hosting_access_plan.md). The prior toolbox corrective
@@ -17,8 +17,9 @@ Current continuous block: C — implementation and acceptance (`high`, P0–P2)
 
 Active slice: R3.2–R4 authority/startup cut (`high`, P0)
 
-R0.1–R0.7, R1.1–R1.5, R2.1–R2.3, and R3.1 are complete. R3.2 is the next
-production slice; no dependent adoption is claimed.
+R0.1–R0.7, R1.1–R1.5, R2.1–R2.3, R3.1, and R5.1–R5.4 are complete. R3.2–R4
+remain the active authority/startup acceptance slice; no dependent adoption is
+claimed.
 
 In-progress R3.2–R4 production state: daemon/service/foreground/background/
 HTTP/relay/channel startup now accepts the top-level MP13 configuration and
@@ -48,7 +49,7 @@ and remaining permanent documents are migrated and the named proofs pass.
 | R2 Shared paths/config foundation | P0 | high | Complete | CODE-R2 |
 | R3 Unified hosting configuration | P0 | high | Active (R3.1 complete) | CODE-R3.1 |
 | R4 Single-path daemon startup | P0 | high | Not started | — |
-| R5 Generic package subsystem | P0 | high | Not started | — |
+| R5 Generic package subsystem | P0 | high | Complete | CODE-R5 |
 | R6 Generic environment subsystem | P0 | high | Not started | — |
 | R7 Toolbox adoption | P1 | high | Not started | — |
 | R8 Worker-neutral state/operations | P1 | high | Not started | — |
@@ -384,6 +385,25 @@ the slice.
   absent from remote inspection; invalid writes left the authority unchanged
 - Dependent handoff impact: the v3 static schema is executable; daemon startup
   and dependent adoption remain R3.2–R4 and R9.6 work
+
+### CODE-R5 — generic package management
+
+- Date: 2026-08-11
+- Plan IDs: R5.1–R5.4; P0; high expertise
+- Production boundary: neutral package source/policy/lock contracts,
+  daemon-owned artifact ingress, deterministic resolution, public package
+  commands, role policy, capability advertisement, and sanitized audit records
+- Outcome: bounded resumable uploads compute their identity from staged bytes
+  and promote atomically into content-addressed storage; optional verification
+  is outside the baseline; credential values remain host-local; deterministic
+  locks contain only reproducible, non-secret source metadata
+- Positive/negative proof: 20 focused package/configuration/startup tests passed,
+  covering authorization, bounds/order/idempotency, cancellation/disconnect,
+  mismatch isolation, restart, concurrent commit, source/policy/credential
+  failures, offline reuse, deterministic output, and legacy command rejection;
+  the production legacy command search returned zero results
+- Dependent handoff impact: generic package commands and locks are available;
+  toolbox adoption and external dependent receipt remain R7 and R9.6 work
 
 Append one concise entry per completed slice. Include exact commands, counts,
 durations where useful, negative-path results, commit pin, and dependent receipt

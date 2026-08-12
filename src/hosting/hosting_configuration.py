@@ -191,9 +191,9 @@ def parse_hosting_configuration(payload: Mapping[str, Any], resolver: PathResolv
             _string(credential.get("key"), f"package_management.credentials.{credential_id}.key")
     for source_id, source in sources.items():
         source_data = _mapping(source, f"package_management.sources.{source_id}")
-        _exact_keys(source_data, {"kind", "location", "credential_ref", "enabled", "priority"}, f"package_management.sources.{source_id}")
+        _exact_keys(source_data, {"kind", "locator", "credential_ref", "enabled", "priority"}, f"package_management.sources.{source_id}")
         _string(source_data.get("kind"), f"package_management.sources.{source_id}.kind")
-        _string(source_data.get("location"), f"package_management.sources.{source_id}.location")
+        _string(source_data.get("locator"), f"package_management.sources.{source_id}.locator")
         _optional_bool(source_data, "enabled", f"package_management.sources.{source_id}")
         _optional_int(source_data, "priority", f"package_management.sources.{source_id}")
         credential_ref = source_data.get("credential_ref")
@@ -202,11 +202,11 @@ def parse_hosting_configuration(payload: Mapping[str, Any], resolver: PathResolv
             if ref not in credentials:
                 raise HostingConfigurationError("hosting_configuration_credential_policy_conflict", f"package_management.sources.{source_id}.credential_ref")
     dependency_policy = _mapping(package.get("dependency_policy"), "package_management.dependency_policy")
-    _exact_keys(dependency_policy, {"allow_prereleases", "allow_sdists", "allowed_packages", "denied_packages", "max_dependencies"}, "package_management.dependency_policy")
-    _optional_bool(dependency_policy, "allow_prereleases", "package_management.dependency_policy")
-    _optional_bool(dependency_policy, "allow_sdists", "package_management.dependency_policy")
-    _optional_int(dependency_policy, "max_dependencies", "package_management.dependency_policy", minimum=1)
-    for key in ("allowed_packages", "denied_packages"):
+    _exact_keys(dependency_policy, {"policy_id", "revision", "allowed_source_ids", "allowed_platforms", "allowed_runtimes", "max_artifact_bytes", "require_sha256", "optional_verifier"}, "package_management.dependency_policy")
+    _optional_int(dependency_policy, "revision", "package_management.dependency_policy", minimum=1)
+    _optional_int(dependency_policy, "max_artifact_bytes", "package_management.dependency_policy", minimum=1)
+    _optional_bool(dependency_policy, "require_sha256", "package_management.dependency_policy")
+    for key in ("allowed_source_ids", "allowed_platforms", "allowed_runtimes"):
         if key in dependency_policy and (not isinstance(dependency_policy[key], list) or any(not isinstance(item, str) for item in dependency_policy[key])):
             raise HostingConfigurationError("hosting_configuration_type_invalid", f"package_management.dependency_policy.{key}")
     verification = _mapping(package.get("verification"), "package_management.verification")

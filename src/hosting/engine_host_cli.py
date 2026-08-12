@@ -958,6 +958,12 @@ def _build_parser() -> argparse.ArgumentParser:
         "op-start",
         "op-status",
         "op-cancel",
+        "package-artifact-upload-begin",
+        "package-artifact-upload-chunk",
+        "package-artifact-upload-status",
+        "package-artifact-upload-cancel",
+        "package-artifact-upload-commit",
+        "package-lock-create",
     ]:
         cp = sp.add_parser(name)
         cp.add_argument("--engine-id", type=str, default="")

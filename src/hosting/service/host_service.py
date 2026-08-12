@@ -31,11 +31,11 @@ from .hosted_operations import HostedOperationsMixin
 from .operation_repository import AtomicJsonHostedOperationRepository, LegacyOperationRepositoryError
 from .result_artifacts import TerminalResultArtifactStore
 from .policy import PolicyMixin
+from .package_api import PackageApiMixin
 from .proxy import ProxyMixin
 from .sandbox_api import SandboxApiMixin
 from .state import StateMixin
 from .toolbox_env import ToolboxMaintenanceMixin
-from .toolbox_artifact_upload_service import ToolboxArtifactUploadMixin
 from .toolbox_catalog import ToolboxTemplateCatalogMixin
 from .toolbox_materialization import (
     HermeticToolboxTemplateMaterializer,
@@ -53,7 +53,7 @@ from ..toolbox.target import detect_current_toolbox_target
 from .workflow_helpers import WorkflowHelperMixin
 
 
-class EngineHostService(CoreMixin, MetricsMixin, StateMixin, ConfigMixin, ControlMixin, AuthMixin, ClaimsMixin, PolicyMixin, EnginesMixin, ProxyMixin, SandboxApiMixin, LogsMixin, ToolboxMaintenanceMixin, ToolboxArtifactUploadMixin, ToolboxTemplateCatalogMixin, ToolboxRuntimeMixin, WorkflowHelperMixin, HostedOperationsMixin, ModelRuntimeMixin):
+class EngineHostService(CoreMixin, MetricsMixin, StateMixin, ConfigMixin, ControlMixin, AuthMixin, ClaimsMixin, PolicyMixin, PackageApiMixin, EnginesMixin, ProxyMixin, SandboxApiMixin, LogsMixin, ToolboxMaintenanceMixin, ToolboxTemplateCatalogMixin, ToolboxRuntimeMixin, WorkflowHelperMixin, HostedOperationsMixin, ModelRuntimeMixin):
     """Engine host service for terminal-command control."""
     _metrics_lock = threading.Lock()
     _runtime_metrics: Optional[Dict[str, Any]] = None

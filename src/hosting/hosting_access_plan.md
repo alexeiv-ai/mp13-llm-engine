@@ -627,10 +627,10 @@ credential, template, and environment states.
 
 ##### R5.1 Extract neutral package contracts
 
-- [ ] Move source and dependency policy models out of toolbox ownership into a
+- [x] Move source and dependency policy models out of toolbox ownership into a
   generic package module.
-- [ ] Rename public and serialized types to `PackageSource` and `PackagePolicy`.
-- [ ] Remove mandatory trust-key IDs and signed-manifest validation from the
+- [x] Rename public and serialized types to `PackageSource` and `PackagePolicy`.
+- [x] Remove mandatory trust-key IDs and signed-manifest validation from the
   base path while preserving an optional verifier interface.
 
 Proof: package model tests have no toolbox dependency and demonstrate the
@@ -638,11 +638,11 @@ optional verifier is absent/disabled by default.
 
 ##### R5.2 Implement authorized content-addressed ingress
 
-- [ ] Authorize begin/chunk/status/commit/cancel from the server-side session.
-- [ ] Bound size, chunk order, concurrency, timeout, and scratch allocation.
-- [ ] Compute SHA-256 during daemon-owned ingress, compare any caller
+- [x] Authorize begin/chunk/status/commit/cancel from the server-side session.
+- [x] Bound size, chunk order, concurrency, timeout, and scratch allocation.
+- [x] Compute SHA-256 during daemon-owned ingress, compare any caller
   expectation, and atomically promote only a complete artifact.
-- [ ] Make retries idempotent and quarantine/remove incomplete or mismatched
+- [x] Make retries idempotent and quarantine/remove incomplete or mismatched
   uploads without making them resolvable.
 
 Proof: tests cover permission denial, disconnect, reordered/duplicate chunks,
@@ -650,11 +650,11 @@ oversize input, expected-hash mismatch, concurrent commit, restart, and retry.
 
 ##### R5.3 Implement sources, credentials, policy, and locks
 
-- [ ] Resolve source and credential configuration locally without serializing
+- [x] Resolve source and credential configuration locally without serializing
   secrets into operations or receipts.
-- [ ] Enforce source allowlists, dependency policy, platform/runtime targets,
+- [x] Enforce source allowlists, dependency policy, platform/runtime targets,
   and exact artifact selection before an environment build.
-- [ ] Persist immutable package locks containing daemon-computed identities and
+- [x] Persist immutable package locks containing daemon-computed identities and
   reproducible source metadata stripped of secrets.
 
 Proof: resolution tests cover allowed/denied sources, missing credentials,
@@ -662,10 +662,10 @@ dependency conflicts, deterministic lock output, and offline reuse.
 
 ##### R5.4 Cut the public package commands
 
-- [ ] Replace `toolbox-artifact-upload-*` dispatch/channel/CLI/API surfaces with
+- [x] Replace `toolbox-artifact-upload-*` dispatch/channel/CLI/API surfaces with
   `package-artifact-upload-*` and the frozen payloads.
-- [ ] Advertise only the new commands in capabilities/version negotiation.
-- [ ] Use generic operation/audit kinds and reject the old command family.
+- [x] Advertise only the new commands in capabilities/version negotiation.
+- [x] Use generic operation/audit kinds and reject the old command family.
 
 Proof: no-double tests prove exactly one authorized ingress effect and old
 commands fail with the frozen version/unknown-command response.

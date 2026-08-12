@@ -70,9 +70,9 @@ def test_full_configuration_and_sanitized_inspection(tmp_path: Path) -> None:
     }
     payload["package_management"]["credentials"] = {"private-index": "SENTINEL_SECRET"}
     payload["package_management"]["sources"] = {
-        "private": {"kind": "https", "location": "https://example.invalid/simple?token=SENTINEL_TOKEN", "credential_ref": "private-index", "enabled": True, "priority": 1}
+        "private": {"kind": "https", "locator": "https://example.invalid/simple?token=SENTINEL_TOKEN", "credential_ref": "private-index", "enabled": True, "priority": 1}
     }
-    payload["package_management"]["dependency_policy"] = {"allow_prereleases": False, "allow_sdists": False, "max_dependencies": 25}
+    payload["package_management"]["dependency_policy"] = {"policy_id": "default", "revision": 1, "allowed_source_ids": ["private"], "allowed_platforms": ["win_amd64"], "allowed_runtimes": ["python"], "max_artifact_bytes": 1024, "require_sha256": True, "optional_verifier": None}
     payload["environment_management"]["retention"] = {"unused_seconds": 60, "receipt_seconds": 120}
     payload["environment_management"]["cache"] = {"enabled": True, "max_bytes": 1024}
     config = parse_hosting_configuration(payload, _resolver(tmp_path))
@@ -92,7 +92,7 @@ def test_full_configuration_and_sanitized_inspection(tmp_path: Path) -> None:
         (lambda value: value["package_management"].update(artifact_root="@unknown/place"), "hosting_configuration_path_invalid"),
         (
             lambda value: value["package_management"]["sources"].update(
-                private={"kind": "https", "location": "https://example.invalid", "credential_ref": "missing"}
+                private={"kind": "https", "locator": "https://example.invalid", "credential_ref": "missing", "enabled": True, "priority": 1}
             ),
             "hosting_configuration_credential_policy_conflict",
         ),
