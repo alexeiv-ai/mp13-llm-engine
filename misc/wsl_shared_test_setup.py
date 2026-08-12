@@ -147,8 +147,8 @@ def cmd_commands(root: Path, *, venv: Path | None = None) -> int:
     print(f"export WSL_VENV={venv or Path('/home/alx/mp13-wsl-venv')}")
     print("export POETRY_CACHE_DIR=/home/alx/.cache/pypoetry/mp13-cache")
     print("export PYTHONPYCACHEPREFIX=/home/alx/.cache/mp13-pycache")
-    print("export PYTEST_DEBUG_TEMPROOT=/home/alx/r8p")
-    print("export TMPDIR=/home/alx/r8t")
+    print("export PYTEST_DEBUG_TEMPROOT=/home/alx/.cache/mp13/pytest")
+    print("export TMPDIR=/home/alx/.cache/mp13/tmp")
     print(
         "mkdir -p \"$WSL_VENV\" \"$POETRY_CACHE_DIR\" "
         "\"$PYTHONPYCACHEPREFIX\" \"$PYTEST_DEBUG_TEMPROOT\" \"$TMPDIR\""
@@ -159,11 +159,11 @@ def cmd_commands(root: Path, *, venv: Path | None = None) -> int:
     print("# VIRTUAL_ENV=\"$WSL_VENV\" PATH=\"$WSL_VENV/bin:$PATH\" POETRY_VIRTUALENVS_CREATE=false poetry install --no-interaction")
     print(
         "\"$WSL_VENV/bin/python\" misc/hosting_test_lanes.py "
-        "--lane process --repeat 1 --durations 20 --json-output /home/alx/r8-wsl-process.json"
+        "--lane process --repeat 1 --durations 20 --json-output /home/alx/.cache/mp13/wsl-process.json"
     )
     print(
         "\"$WSL_VENV/bin/python\" misc/hosting_test_lanes.py "
-        "--lane native --collect-only --json-output /home/alx/r8-wsl-native-collection.json"
+        "--lane native --collect-only --json-output /home/alx/.cache/mp13/wsl-native-collection.json"
     )
     print("PYTHONPATH=src \"$WSL_VENV/bin/python\" -m pytest tests/test_hosting_daemon_pidfile.py -q")
     print(
