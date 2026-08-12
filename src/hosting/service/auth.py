@@ -1788,5 +1788,4 @@ class AuthMixin:
             "cleared_sessions": len(sessions),
             "cleared_challenges": len(challenges),
             "require_auth": bool(cfg.get("require_auth", False)),
-            "control_state_file": str(self.control_state_file),
         }

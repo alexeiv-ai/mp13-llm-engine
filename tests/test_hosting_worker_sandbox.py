@@ -18,6 +18,7 @@ from hosting.sandbox import (
     WorkerSandboxPolicy,
 )
 from hosting.sandbox.launcher import WorkerLaunchRequest, launch_worker_process
+from tests.hosting_v3_fixtures import hosting_configuration
 
 
 def test_worker_sandbox_policy_normalizes_nested_shape() -> None:
@@ -106,7 +107,7 @@ def test_brokered_filesystem_denies_traversal_and_allows_root_scoped_io(tmp_path
 def test_service_brokered_filesystem_uses_registration_policy(tmp_path: Path) -> None:
     svc = EngineHostService(
         engines_state_file=tmp_path / "managed_engines.json",
-        control_state_file=tmp_path / "control_state.json",
+        hosting_configuration=hosting_configuration(tmp_path),
     )
     root = tmp_path / "sandbox_root"
     root.mkdir()
@@ -173,8 +174,10 @@ def test_worker_side_brokered_filesystem_client_builds_expected_rpc_payloads() -
     assert calls[1][1]["text"] == "hello"
 
 
-def test_service_brokered_http_enforces_allowlist_and_returns_response(monkeypatch) -> None:
-    svc = EngineHostService()
+def test_service_brokered_http_enforces_allowlist_and_returns_response(
+    monkeypatch, tmp_path: Path
+) -> None:
+    svc = EngineHostService(hosting_configuration=hosting_configuration(tmp_path))
     svc._find_registration = lambda _eid: {  # type: ignore[method-assign]
         "engine_id": "worker1",
         "sandbox_policy": {
@@ -227,8 +230,8 @@ def test_service_brokered_http_enforces_allowlist_and_returns_response(monkeypat
     assert out["callback_context"] == {"tool_name": "http_tool", "tool_call_id": "call-http-1"}
 
 
-def test_service_brokered_http_denies_non_allowlisted_url() -> None:
-    svc = EngineHostService()
+def test_service_brokered_http_denies_non_allowlisted_url(tmp_path: Path) -> None:
+    svc = EngineHostService(hosting_configuration=hosting_configuration(tmp_path))
     svc._find_registration = lambda _eid: {  # type: ignore[method-assign]
         "engine_id": "worker1",
         "sandbox_policy": {
@@ -288,7 +291,7 @@ def test_worker_side_brokered_http_client_builds_expected_rpc_payload() -> None:
 def test_spawn_persists_sandbox_policy_and_runtime(monkeypatch, tmp_path: Path) -> None:
     svc = EngineHostService(
         engines_state_file=tmp_path / "managed_engines.json",
-        control_state_file=tmp_path / "control_state.json",
+        hosting_configuration=hosting_configuration(tmp_path),
     )
 
     def _fake_launch(req: WorkerLaunchRequest) -> WorkerLaunchResult:

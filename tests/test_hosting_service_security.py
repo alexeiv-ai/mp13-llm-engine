@@ -366,7 +366,7 @@ def test_resource_summary_reports_pending_gpu_vram() -> None:
     assert summary["worker_gpu_vram_pending"] is True
 
 
-def test_host_metrics_reports_daemon_and_engine_python(
+def test_host_metrics_do_not_expose_daemon_paths_or_interpreters(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -376,9 +376,14 @@ def test_host_metrics_reports_daemon_and_engine_python(
 
     metrics = svc.get_host_metrics()
 
-    assert metrics["daemon_python_executable"]
-    assert metrics["engine_python_executable"] == "C:/engine/python.exe"
-    assert metrics["mp13_engine_python_env"] == "C:/engine/python.exe"
+    assert not {
+        "engines_state_file",
+        "control_state_file",
+        "hosting_root",
+        "daemon_python_executable",
+        "engine_python_executable",
+        "mp13_engine_python_env",
+    } & set(metrics)
 
 
 def test_discover_running_uses_worker_state_gpu_memory_when_detailed_gpu_info_missing(

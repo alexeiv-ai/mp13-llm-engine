@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import secrets
-from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
 from mp13_engine.mp13_toolbox import ToolBoxRef, ToolsView
@@ -138,11 +137,8 @@ class HostedToolBoxRef:
             descriptor["control_settings"] = dict(getattr(host, "control_settings", {}) or {})
             return descriptor
         engines_state_file = getattr(host, "engines_state_file", None)
-        control_state_file = getattr(host, "control_state_file", None)
-        if engines_state_file is not None or control_state_file is not None:
+        if engines_state_file is not None:
             descriptor["kind"] = "service"
-            descriptor["engines_state_file"] = str(engines_state_file) if engines_state_file is not None else None
-            descriptor["control_state_file"] = str(control_state_file) if control_state_file is not None else None
             return descriptor
         descriptor["kind"] = "opaque"
         return descriptor
@@ -163,18 +159,6 @@ class HostedToolBoxRef:
                 from ..engine_host_channel import EngineHostControlChannel
 
                 resolved_host = EngineHostControlChannel(dict(host_row.get("control_settings") or {}))
-            elif kind == "service":
-                from ..service.host_service import EngineHostService
-                from ..hosting_configuration import load_hosting_configuration
-
-                engines_state_raw = str(host_row.get("engines_state_file") or "").strip()
-                mp13_config_raw = str(host_row.get("mp13_config_file") or "").strip()
-                resolved_host = EngineHostService(
-                    engines_state_file=Path(engines_state_raw) if engines_state_raw else None,
-                    hosting_configuration=load_hosting_configuration(
-                        Path(mp13_config_raw) if mp13_config_raw else None
-                    ),
-                )
             else:
                 raise ValueError("host_required_for_hosted_toolbox_ref_deserialization")
         return cls(toolbox_id=str(row.get("toolbox_id") or "").strip(), host=resolved_host)

@@ -399,16 +399,6 @@ class MetricsMixin:
         snapshot["pid"] = os.getpid()
         snapshot["runtime_scope"] = "process"
         snapshot["recommended_mode"] = "daemon"
-        snapshot["engines_state_file"] = str(self.engines_state_file)
-        snapshot["control_state_file"] = str(self.control_state_file)
-        snapshot["hosting_root"] = str(self.hosting_root)
-        snapshot["daemon_python_executable"] = sys.executable
-        snapshot["engine_python_executable"] = (
-            self._engine_python_executable()
-            if hasattr(self, "_engine_python_executable")
-            else os.environ.get("MP13_ENGINE_PYTHON", "").strip() or sys.executable
-        )
-        snapshot["mp13_engine_python_env"] = os.environ.get("MP13_ENGINE_PYTHON", "").strip() or None
         snapshot["timestamp"] = time.time()
         worker_rows = self._registered_worker_resource_rows()
         snapshot["worker_processes"] = worker_rows

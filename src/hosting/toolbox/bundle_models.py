@@ -1159,7 +1159,6 @@ class ToolboxWorkerStartupSpec:
     manifest_path: str
     scratch_root: str
     engines_state_file: Optional[str] = None
-    control_state_file: Optional[str] = None
     venv_path: Optional[str] = None
     ipc_family: str = field(default_factory=lambda: "AF_PIPE" if os.name == "nt" else "AF_UNIX")
     ipc_address: str = ""
@@ -1177,7 +1176,6 @@ class ToolboxWorkerStartupSpec:
             "manifest_path": str(self.manifest_path or "").strip(),
             "scratch_root": str(self.scratch_root or "").strip(),
             "engines_state_file": str(self.engines_state_file or "").strip() or None,
-            "control_state_file": str(self.control_state_file or "").strip() or None,
             "venv_path": str(self.venv_path or "").strip() or None,
             "ipc_family": str(self.ipc_family or default_ipc_family).strip() or default_ipc_family,
             "ipc_address": str(self.ipc_address or "").strip(),
@@ -1190,6 +1188,17 @@ class ToolboxWorkerStartupSpec:
     @classmethod
     def from_dict(cls, payload: Dict[str, Any]) -> "ToolboxWorkerStartupSpec":
         row = dict(payload or {})
+        allowed = {
+            "worker_id", "sandbox_id", "toolbox_revision", "manifest_path",
+            "scratch_root", "engines_state_file", "venv_path", "ipc_family",
+            "ipc_address", "auth_token_env", "execution_contract",
+            "callback_contract", "policy",
+        }
+        unknown = sorted(set(row) - allowed)
+        if unknown:
+            raise ValueError(
+                f"toolbox_worker_startup_spec_unknown_fields:{','.join(unknown)}"
+            )
         default_ipc_family = "AF_PIPE" if os.name == "nt" else "AF_UNIX"
         return cls(
             worker_id=str(row.get("worker_id") or "").strip(),
@@ -1198,7 +1207,6 @@ class ToolboxWorkerStartupSpec:
             manifest_path=str(row.get("manifest_path") or "").strip(),
             scratch_root=str(row.get("scratch_root") or "").strip(),
             engines_state_file=str(row.get("engines_state_file") or "").strip() or None,
-            control_state_file=str(row.get("control_state_file") or "").strip() or None,
             venv_path=str(row.get("venv_path") or "").strip() or None,
             ipc_family=str(row.get("ipc_family") or default_ipc_family).strip() or default_ipc_family,
             ipc_address=str(row.get("ipc_address") or "").strip(),

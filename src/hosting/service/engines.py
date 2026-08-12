@@ -1679,7 +1679,6 @@ class EnginesMixin:
         merged_env["MP13_WORKER_IPC_ADDRESS"] = ipc_address
         if str(executor_kind or "").strip() == "toolbox_executor":
             merged_env["MP13_TOOLBOX_EXECUTOR_ENGINE_ID"] = eid
-            merged_env["MP13_HOSTING_CONTROL_STATE_FILE"] = str(self.control_state_file)
             if not str(merged_env.get("MP13_TOOLBOX_WORKER_SPEC_PATH") or "").strip():
                 manifest_path = str(merged_env.get("MP13_TOOLBOX_MANIFEST_PATH") or "").strip()
                 if manifest_path:
@@ -1694,7 +1693,6 @@ class EnginesMixin:
                         toolbox_revision=str(dict(bundle or {}).get("bundle_revision") or ""),
                         manifest_path=manifest_path,
                         scratch_root=str((self.hosting_root / "toolbox_scratch" / eid).expanduser().resolve()),
-                        control_state_file=str(self.control_state_file),
                         ipc_family=ipc_family,
                         ipc_address=ipc_address,
                         policy=normalized_sandbox.to_dict(),
@@ -1724,7 +1722,6 @@ class EnginesMixin:
         if str(executor_kind or "").strip() == "toolbox_executor":
             for key in [
                 "MP13_TOOLBOX_EXECUTOR_ENGINE_ID",
-                "MP13_HOSTING_CONTROL_STATE_FILE",
                 "MP13_TOOLBOX_WORKER_SPEC_PATH",
             ]:
                 persisted_env[key] = str(launched.persisted_env.get(key) or merged_env.get(key) or "")
