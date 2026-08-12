@@ -22,14 +22,14 @@ from .bundle_models import SandboxProfileSpec, ToolboxEnvironmentSpec
 class ToolboxEnvironmentManager:
     def __init__(self, hosting_root: Path):
         self.hosting_root = Path(hosting_root).expanduser().resolve()
-        self.toolbox_environments_root = (self.hosting_root / "toolbox_venvs").resolve()
-        self.runtime_environments_root = (self.hosting_root / "runtime_envs").resolve()
+        self.toolbox_environments_root = (self.hosting_root / "environments" / "content").resolve()
+        self.runtime_environments_root = self.toolbox_environments_root
         self.environments_root = self.toolbox_environments_root
 
     def environment_root(self, *, root_kind: Optional[str] = None, consumer_kind: Optional[str] = None) -> Path:
         kind = str(root_kind or "").strip()
         consumer = str(consumer_kind or "").strip()
-        if kind == "runtime_envs" or consumer in {"workflow_python_helper", "workflow_js_node"}:
+        if consumer in {"workflow_python_helper", "workflow_js_node"}:
             return self.runtime_environments_root
         return self.toolbox_environments_root
 
@@ -182,7 +182,7 @@ class ToolboxEnvironmentManager:
             intrinsics_profile_id=intrinsics_profile_id,
             required_imports=required_imports,
             dependency_lock_hash=dependency_lock_hash,
-            environment_root_kind="toolbox_venvs",
+            environment_root_kind="environments",
             environment_consumer_kind="toolbox_executor",
         )
 
@@ -304,7 +304,7 @@ class ToolboxEnvironmentManager:
             intrinsics_profile_id="workflow_python_helper",
             required_imports=required_imports,
             dependency_lock_hash=dependency_lock_hash,
-            environment_root_kind="runtime_envs",
+            environment_root_kind="environments",
             environment_consumer_kind="workflow_python_helper",
         )
 

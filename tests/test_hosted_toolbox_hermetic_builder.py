@@ -423,17 +423,15 @@ def test_catalog_prewarm_adapter_builds_complete_wheel_lock_on_target_host(tmp_p
     assert [item[1] for item in progress] == ["hermetic_environment_building", "hermetic_environment_verified"]
 
 
-def test_service_artifact_source_configuration_selects_hermetic_materializer(tmp_path: Path) -> None:
+def test_service_rejects_legacy_artifact_source_constructor_inputs(tmp_path: Path) -> None:
     source = tmp_path / "approved"
     source.mkdir()
-    service = EngineHostService(
-        engines_state_file=tmp_path / "engines.json",
-        control_state_file=tmp_path / "access.json",
-        toolbox_artifact_sources={"approved": source},
-    )
-
-    assert isinstance(service._hermetic_toolbox_environment_builder, HermeticToolboxEnvironmentBuilder)
-    assert isinstance(service._toolbox_template_materializer, HermeticToolboxTemplateMaterializer)
+    with pytest.raises(TypeError, match="unexpected keyword argument"):
+        EngineHostService(  # type: ignore[call-arg]
+            engines_state_file=tmp_path / "engines.json",
+            control_state_file=tmp_path / "access.json",
+            toolbox_artifact_sources={"approved": source},
+        )
 
 
 def test_configured_orchestrator_spawns_only_with_resolved_verified_interpreter(tmp_path: Path) -> None:

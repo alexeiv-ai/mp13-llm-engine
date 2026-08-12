@@ -22,7 +22,7 @@ class HostedToolboxRuntimeBase(HostedProcessSandboxBase):
 
     It deliberately does not own toolbox environment realization.  Existing
     toolbox lifecycle code keeps using ``ToolboxEnvironmentManager`` and
-    ``toolbox_venvs``; this base adds shared environment-key and registration
+    the resolved environments root; this base adds shared environment-key and registration
     metadata so toolbox workers can later move onto common pool accounting.
     """
 
@@ -93,7 +93,7 @@ class HostedToolboxRuntimeBase(HostedProcessSandboxBase):
             "environment_key": identity["environment_key"],
             "environment_key_full": identity["environment_key_full"],
             "environment_identity": identity,
-            "environment_root_kind": _clean(spec.environment_root_kind) or "toolbox_venvs",
+            "environment_root_kind": _clean(spec.environment_root_kind) or "environments",
             "environment_consumer_kind": _clean(spec.environment_consumer_kind) or "toolbox_executor",
         }
 

@@ -161,7 +161,7 @@ class ToolboxSandboxOrchestrator:
                 intrinsics_profile_id="resolved",
                 required_imports=list(profile.resolved_import_roots),
                 dependency_lock_hash=profile.effective_lock_digest,
-                environment_root_kind="toolbox_environment_cache",
+                environment_root_kind="environments",
                 environment_consumer_kind="toolbox_executor",
             )
             registration_environment = self.runtime_base.registration_environment(
@@ -380,7 +380,7 @@ class ToolboxSandboxOrchestrator:
                     intrinsics_profile_id="resolved",
                     required_imports=list(hermetic.resolved.resolved_import_roots),
                     dependency_lock_hash=hermetic.resolved.complete_lock_digest,
-                    environment_root_kind="toolbox_environment_cache",
+                    environment_root_kind="environments",
                     environment_consumer_kind="toolbox_executor",
                 )
             else:

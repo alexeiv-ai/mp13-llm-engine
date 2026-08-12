@@ -291,7 +291,7 @@ class HermeticToolboxEnvironmentResolver:
 
     def __init__(self, hosting_root: Path):
         self.hosting_root = Path(hosting_root).expanduser().resolve()
-        self.environments_root = (self.hosting_root / "toolbox_environment_cache").resolve()
+        self.environments_root = (self.hosting_root / "environments" / "content").resolve()
 
     def environment_spec(
         self, resolved: ResolvedToolboxEnvironmentInput | Mapping[str, Any]

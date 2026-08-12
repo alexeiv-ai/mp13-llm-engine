@@ -107,10 +107,10 @@ def test_template_labels_and_per_function_import_subsets_do_not_change_key() -> 
     ).environment_key == resolved.environment_key
 
 
-def test_environment_resolver_uses_only_digest_addressed_toolbox_cache(tmp_path: Path) -> None:
+def test_environment_resolver_uses_only_digest_addressed_shared_root(tmp_path: Path) -> None:
     resolved = _resolved()
     spec = HermeticToolboxEnvironmentResolver(tmp_path).environment_spec(resolved)
-    expected_root = (tmp_path / "toolbox_environment_cache" / resolved.environment_key.removeprefix("sha256:")).resolve()
+    expected_root = (tmp_path / "environments" / "content" / resolved.environment_key.removeprefix("sha256:")).resolve()
     expected_python = expected_root / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
     assert Path(spec.environment_root) == expected_root
     assert Path(spec.python_executable) == expected_python

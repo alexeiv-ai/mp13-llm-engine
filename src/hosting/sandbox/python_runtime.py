@@ -643,7 +643,7 @@ class HostedPythonRuntimeManager(HostedPythonRuntimeBase):
                     removed.append(child.name)
         return {
             "status": "ok",
-            "environment_root_kind": "runtime_envs",
+            "environment_root_kind": "environments",
             "environment_root": str(root),
             "dry_run": bool(dry_run),
             "referenced_environment_keys": sorted(referenced_keys),

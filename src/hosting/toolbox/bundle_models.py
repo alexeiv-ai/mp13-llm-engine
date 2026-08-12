@@ -1206,7 +1206,7 @@ class ToolboxEnvironmentSpec:
     intrinsics_profile_id: str = "none"
     required_imports: List[str] = field(default_factory=list)
     dependency_lock_hash: Optional[str] = None
-    environment_root_kind: str = "toolbox_venvs"
+    environment_root_kind: str = "environments"
     environment_consumer_kind: str = "toolbox_executor"
 
     def to_dict(self) -> Dict[str, Any]:
@@ -1221,7 +1221,7 @@ class ToolboxEnvironmentSpec:
             "intrinsics_profile_id": str(self.intrinsics_profile_id or "none").strip() or "none",
             "required_imports": [str(item or "").strip() for item in list(self.required_imports or []) if str(item or "").strip()],
             "dependency_lock_hash": str(self.dependency_lock_hash or "").strip() or None,
-            "environment_root_kind": str(self.environment_root_kind or "toolbox_venvs").strip() or "toolbox_venvs",
+            "environment_root_kind": str(self.environment_root_kind or "environments").strip() or "environments",
             "environment_consumer_kind": str(self.environment_consumer_kind or "toolbox_executor").strip() or "toolbox_executor",
         }
 
@@ -1239,7 +1239,7 @@ class ToolboxEnvironmentSpec:
             intrinsics_profile_id=str(row.get("intrinsics_profile_id") or "none").strip() or "none",
             required_imports=[str(item or "").strip() for item in list(row.get("required_imports") or []) if str(item or "").strip()],
             dependency_lock_hash=str(row.get("dependency_lock_hash") or "").strip() or None,
-            environment_root_kind=str(row.get("environment_root_kind") or "toolbox_venvs").strip() or "toolbox_venvs",
+            environment_root_kind=str(row.get("environment_root_kind") or "environments").strip() or "environments",
             environment_consumer_kind=str(row.get("environment_consumer_kind") or "toolbox_executor").strip() or "toolbox_executor",
         )
 

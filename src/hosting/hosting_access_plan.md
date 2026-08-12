@@ -717,7 +717,7 @@ new commands preserve role checks and no-double semantics.
 
 ##### R6.5 Remove legacy roots and fallback behavior
 
-- [ ] Remove discovery/use of `toolbox_venvs`, `runtime_envs`, and
+- [x] Remove discovery/use of `toolbox_venvs`, `runtime_envs`, and
   `toolbox_environment_cache`.
 - [ ] Remove legacy receipt/reference readers and compatibility aliases.
 - [x] Provide explicit local operator cleanup instructions; do not delete old

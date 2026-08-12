@@ -101,7 +101,7 @@ class HostedJsRuntimeBase(HostedProcessSandboxBase):
                 "environment_key": env["environment_key"],
                 "environment_key_full": env["environment_key_full"],
                 "environment_name": env["environment_name"],
-                "environment_root_kind": "runtime_envs",
+                "environment_root_kind": "environments",
                 "environment_consumer_kind": "workflow_js_node",
                 "workflow_runtime_kind": "workflow_js",
                 "workflow_profile": _clean(profile) or "node",

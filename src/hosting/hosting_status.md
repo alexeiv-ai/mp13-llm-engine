@@ -467,6 +467,18 @@ the slice.
 - Remaining: finish the implementation alias cut, then run the final permanent
   document search and executable example tests
 
+### CODE-R6B — legacy environment roots disabled
+
+- Date: 2026-08-11
+- Plan IDs: R6.5 (root discovery); P0; high expertise
+- Outcome: toolbox, workflow Python, workflow JavaScript, orchestration, bundle
+  metadata, and hermetic resolution use the shared environments root; production
+  Python contains no legacy environment directory name and never discovers old
+  content
+- Proof: root-name production search returned zero; 26 focused hermetic and
+  neutral environment tests ran with 24 passing before two deliberately stale
+  fixtures, which were migrated to shared-root and legacy-constructor rejection
+
 Append one concise entry per completed slice. Include exact commands, counts,
 durations where useful, negative-path results, commit pin, and dependent receipt
 impact. Do not paste an unstructured full test transcript.
