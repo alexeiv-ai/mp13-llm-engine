@@ -563,6 +563,16 @@ the slice.
 - Proof: 10 focused environment/maintenance tests passed, covering observation,
   denied unauthorized mutation, and authorized dispatch
 
+### CODE-R9.1A — structured authentication cache results
+
+- Date: 2026-08-11
+- Plan IDs: R9.1 authentication result preservation; P2; high expertise
+- Outcome: shared-secret and public-key cache reads return complete structured
+  authentication metadata; adoption preserves token, role, auth method, scope,
+  key ID, and expiry, and the channel exposes the adopted structured result
+- Proof: three focused fresh/empty/cached metadata tests passed; token-only cache
+  return annotations are absent
+
 Append one concise entry per completed slice. Include exact commands, counts,
 durations where useful, negative-path results, commit pin, and dependent receipt
 impact. Do not paste an unstructured full test transcript.

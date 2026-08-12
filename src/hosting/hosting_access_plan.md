@@ -804,9 +804,9 @@ active executions, stale scratch, and partial artifacts without broad deletion.
 
 - [ ] Align every public method signature, CLI option, help example, capability,
   request, response, and error with the R0 manifest.
-- [ ] Preserve complete authentication results through fresh and cached paths:
+- [x] Preserve complete authentication results through fresh and cached paths:
   token, role, auth method, scope, and key ID.
-- [ ] Remove annotations or conversions that narrow structured results to a
+- [x] Remove annotations or conversions that narrow structured results to a
   token string.
 
 Proof: channel/API contract tests compare fresh and cached session metadata and

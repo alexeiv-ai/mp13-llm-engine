@@ -710,7 +710,8 @@ class EngineHostControlChannel:
         ):
             cached = self._get_cached_auto_session()
             if cached:
-                self.set_session_token(cached)
+                self.set_session_token(str(cached.get("token") or ""))
+                self._set_session_token_meta(cached)
             try:
                 if not self._session_token:
                     target_mode = str(self.get_target().get("mode") or "").strip().lower()
@@ -733,6 +734,7 @@ class EngineHostControlChannel:
                     token = str((issued or {}).get("token") or "").strip()
                     if token:
                         self.set_session_token(token)
+                        self._set_session_token_meta(dict(issued or {}))
                         self._store_cached_auto_session(token, dict(issued or {}))
             except Exception as exc:
                 logger.debug("Auto session issuance failed: %s", exc)
@@ -828,6 +830,12 @@ class EngineHostControlChannel:
     def get_session_token(self) -> Optional[str]:
         return self._session_token
 
+    def get_session_metadata(self) -> Dict[str, Any]:
+        """Return the complete adopted authentication result, including token."""
+        if not self._session_token:
+            return {}
+        return {**dict(self._session_token_meta or {}), "token": self._session_token}
+
     def _set_session_token_meta(self, meta: Optional[Dict[str, Any]]) -> None:
         self._session_token_meta = dict(meta or {})
 
@@ -872,7 +880,7 @@ class EngineHostControlChannel:
         }
         return json.dumps(payload, sort_keys=True, separators=(",", ":"))
 
-    def _get_cached_auto_session(self) -> Optional[str]:
+    def _get_cached_auto_session(self) -> Optional[Dict[str, Any]]:
         try:
             key = self._auto_session_cache_key()
         except Exception:
@@ -888,7 +896,7 @@ class EngineHostControlChannel:
             if expires_at > 0 and now >= expires_at - 5:
                 _AUTO_SESSION_CACHE.pop(key, None)
                 return None
-            return token
+            return row
 
     def _store_cached_auto_session(self, token: str, issued: Dict[str, Any]) -> None:
         tok = str(token or "").strip()
@@ -902,7 +910,14 @@ class EngineHostControlChannel:
         if expires_at <= 0:
             expires_at = time.time() + max(60, int(self._session_ttl_seconds or 900))
         with _AUTO_SESSION_CACHE_LOCK:
-            _AUTO_SESSION_CACHE[key] = {"token": tok, "expires_at": expires_at}
+            _AUTO_SESSION_CACHE[key] = {
+                "token": tok,
+                "expires_at": expires_at,
+                "role": str(issued.get("role") or "").strip().lower(),
+                "auth_method": str(issued.get("auth_method") or "shared_secret").strip(),
+                "scope": str(issued.get("scope") or self._session_scope or "control").strip().lower(),
+                "key_id": str(issued.get("key_id") or self._key_id or "").strip(),
+            }
 
     def _clear_cached_auto_session(self) -> None:
         try:
@@ -943,7 +958,7 @@ class EngineHostControlChannel:
         config_paths: Optional[List[str]] = None,
         engine_ids: Optional[List[str]] = None,
         bind_to_ssh: bool = True,
-    ) -> Optional[str]:
+    ) -> Optional[Dict[str, Any]]:
         try:
             key = self._public_key_session_cache_key(
                 key_id=key_id,
@@ -966,7 +981,7 @@ class EngineHostControlChannel:
                 _AUTO_SESSION_CACHE.pop(key, None)
                 return None
             self._set_session_token_meta(row)
-            return token
+            return row
 
     def _store_cached_public_key_session(
         self,
@@ -4330,9 +4345,10 @@ class EngineHostControlChannel:
             bind_to_ssh=bind_to_ssh,
         )
         if cached:
+            cached_token = str(cached.get("token") or "")
             try:
                 validation = self.adopt_session_token(
-                    cached,
+                    cached_token,
                     scope=scope_norm,
                     expected_key_id=kid,
                     check_ssh_binding=bind_to_ssh,
@@ -4346,11 +4362,11 @@ class EngineHostControlChannel:
                     engine_ids=engine_ids,
                     bind_to_ssh=bind_to_ssh,
                 ):
-                return _reused_result(cached, validation)
+                return _reused_result(cached_token, validation)
             if scope_norm == "control":
                 try:
                     if bool(validation.get("valid", False)) and str(validation.get("key_id") or "").strip() == kid:
-                        return _reused_result(cached, validation)
+                        return _reused_result(cached_token, validation)
                 except Exception:
                     self.set_session_token(None)
             if not bool(validation.get("valid", False)):
