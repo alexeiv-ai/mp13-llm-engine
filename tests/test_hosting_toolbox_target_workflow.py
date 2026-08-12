@@ -20,7 +20,7 @@ def test_native_target_workflow_covers_every_declared_runner_family() -> None:
         assert f"runner: {runner}" in text
         assert f"target: {target}" in text
     assert "pydantic-core==2.41.5" in text
-    assert "cryptography==49.0.0" in text
+    assert "cryptography" not in text
     assert "tests/native_hosting_target_probe.py" in text
     assert "tests/test_hosting_r6_restart_healing.py" in text
     assert "tests/test_hosting_toolbox_definition_resolution.py" in text
