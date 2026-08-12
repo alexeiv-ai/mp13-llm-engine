@@ -101,9 +101,6 @@ TOOLBOX_DEFINITION_CANDIDATE_DISCARD_PHASES = frozenset(
 ENVIRONMENT_TEMPLATE_PREWARM_PHASES = frozenset(
     {"validation", "artifact_verification", "environment_build", "import_probe", "receipt_commit"}
 )
-TOOLBOX_ARTIFACT_IMPORT_PHASES = frozenset(
-    {"validation", "artifact_verification", "publication", "cleanup"}
-)
 ENVIRONMENT_REMOVE_PHASES = frozenset(
     {"validation", "reference_check", "removal", "cleanup"}
 )
@@ -136,7 +133,6 @@ class HostedExecutionKind(StrEnum):
     TOOLBOX_DEFINITION_CANDIDATE_PUBLISH = "toolbox_definition_candidate_publish"
     TOOLBOX_DEFINITION_CANDIDATE_DISCARD = "toolbox_definition_candidate_discard"
     ENVIRONMENT_TEMPLATE_PREWARM = "environment_template_prewarm"
-    TOOLBOX_ARTIFACT_IMPORT = "toolbox_artifact_import"
     ENVIRONMENT_REMOVE = "environment_remove"
     ENVIRONMENT_TEMPLATE_CONSTRUCT = "environment_template_construct"
     HOSTING_GC = "hosting_gc"
@@ -558,11 +554,6 @@ class HostedOperationStatus:
             if self.operation.execution_kind == HostedExecutionKind.ENVIRONMENT_TEMPLATE_PREWARM:
                 if self.progress.phase not in ENVIRONMENT_TEMPLATE_PREWARM_PHASES:
                     raise ValueError("environment_template_prewarm_progress_phase_invalid")
-            if self.operation.execution_kind == HostedExecutionKind.TOOLBOX_ARTIFACT_IMPORT:
-                if self.progress.phase not in TOOLBOX_ARTIFACT_IMPORT_PHASES:
-                    raise ValueError("toolbox_artifact_import_progress_phase_invalid")
-                if self.progress.cancellable:
-                    raise ValueError("toolbox_artifact_import_progress_cancellable")
             if self.operation.execution_kind == HostedExecutionKind.ENVIRONMENT_REMOVE:
                 if self.progress.phase not in ENVIRONMENT_REMOVE_PHASES:
                     raise ValueError("environment_remove_progress_phase_invalid")
@@ -670,7 +661,6 @@ __all__ = [
     "TOOLBOX_DEFINITION_PLAN_PHASES",
     "TOOLBOX_DEFINITION_CONFIRMATION_PHASES",
     "ENVIRONMENT_TEMPLATE_PREWARM_PHASES",
-    "TOOLBOX_ARTIFACT_IMPORT_PHASES",
     "ENVIRONMENT_REMOVE_PHASES",
     "HOSTING_GC_PHASES",
     "ENVIRONMENT_TEMPLATE_CONSTRUCT_PHASES",

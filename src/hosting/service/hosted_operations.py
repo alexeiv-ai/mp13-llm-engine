@@ -66,10 +66,6 @@ class HostedOperationsMixin:
             if target.kind != "toolbox_id":
                 raise ValueError("toolbox_definition_confirmation_selector_must_be_toolbox_id")
             namespace = f"toolbox-definition-confirmation:{target.id}"
-        elif kind == HostedExecutionKind.TOOLBOX_ARTIFACT_IMPORT:
-            if target.kind != "upload_id":
-                raise ValueError("toolbox_artifact_import_selector_must_be_upload_id")
-            namespace = f"toolbox_artifact_import:{target.id}"
         elif kind == HostedExecutionKind.ENVIRONMENT_REMOVE:
             if target.kind != "environment_id":
                 raise ValueError("environment_remove_selector_must_be_environment_id")
@@ -253,7 +249,6 @@ class HostedOperationsMixin:
                 committed_reason="toolbox_describe_refresh_started",
             )
         if operation.execution_kind in {
-            HostedExecutionKind.TOOLBOX_ARTIFACT_IMPORT,
             HostedExecutionKind.ENVIRONMENT_REMOVE,
             HostedExecutionKind.ENVIRONMENT_TEMPLATE_CONSTRUCT,
         }:
