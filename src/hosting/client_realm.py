@@ -19,6 +19,18 @@ from mp13_engine.mp13_config_paths import get_default_config_dir
 
 CLIENT_REALM_ROOT_SUBDIR = "hosting_client"
 VALID_SECRET_RECORD_ENCRYPTION = {"none"}
+_REMOVED_CLIENT_CONTROL_SETTINGS = frozenset(
+    {
+        "engine_host_control_state_file",
+        "engine_host_toolbox_config_file",
+    }
+)
+
+
+def _reject_removed_client_control_settings(settings: Dict[str, Any]) -> None:
+    removed = sorted(_REMOVED_CLIENT_CONTROL_SETTINGS.intersection(settings))
+    if removed:
+        raise ValueError(f"removed_engine_host_control_setting:{','.join(removed)}")
 
 
 def get_default_client_realm_root(*, default_config_dir: Optional[Path] = None, realm: str = "default") -> Path:
@@ -873,6 +885,7 @@ def resolve_client_profile_control_settings(
         or ""
     ).strip()
     if not profile_name:
+        _reject_removed_client_control_settings(raw)
         return raw
     realm = str(
         raw.get("engine_host_client_realm")
@@ -921,4 +934,5 @@ def resolve_client_profile_control_settings(
             if line:
                 resolved["ssh_known_hosts_line"] = line.splitlines()[0].strip()
     resolved.update(raw)
+    _reject_removed_client_control_settings(resolved)
     return resolved

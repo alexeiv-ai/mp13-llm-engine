@@ -662,6 +662,41 @@ def test_resolve_client_profile_control_settings_preserves_explicit_overrides() 
         assert not managed_key_path(realm_root, "demo-transport-key").exists()
 
 
+@pytest.mark.parametrize(
+    "removed_setting",
+    ["engine_host_control_state_file", "engine_host_toolbox_config_file"],
+)
+def test_resolve_client_profile_control_settings_rejects_removed_startup_settings(
+    removed_setting: str,
+) -> None:
+    with pytest.raises(
+        ValueError,
+        match=f"removed_engine_host_control_setting:{removed_setting}",
+    ):
+        resolve_client_profile_control_settings({removed_setting: "legacy.json"})
+
+
+def test_resolve_client_profile_control_settings_rejects_removed_profile_setting() -> None:
+    with _workspace_tmpdir() as root:
+        realm_root = root / "client-realm"
+        write_client_profile(
+            realm_root,
+            "legacy",
+            {"engine_host_toolbox_config_file": "legacy.json"},
+        )
+
+        with pytest.raises(
+            ValueError,
+            match="removed_engine_host_control_setting:engine_host_toolbox_config_file",
+        ):
+            resolve_client_profile_control_settings(
+                {
+                    "engine_host_client_realm_root": str(realm_root),
+                    "engine_host_client_profile": "legacy",
+                }
+            )
+
+
 def test_materialize_secret_file_rejects_missing_secret() -> None:
     with _workspace_tmpdir() as root:
         with pytest.raises(ValueError, match="is not present"):

@@ -12708,7 +12708,6 @@ async def main_logic():
             mp13_config_file=Path(str(args.hosted_mp13_config_file)).expanduser().resolve(),
             timeout_seconds=float(args.hosted_timeout_seconds or 15.0),
             auto_bootstrap=not bool(args.hosted_no_auto_bootstrap),
-            python_executable=sys.executable,
         )
         configure_hosted_toolbox_execution(
             control_channel=attached.control_channel,
@@ -12727,7 +12726,7 @@ async def main_logic():
             f"{Path(str(args.hosted_engines_state_file)).expanduser().resolve()}{Colors.RESET}"
         )
         print(
-            f"{Colors.SYSTEM}  control_state_file: "
+            f"{Colors.SYSTEM}  mp13_config_file: "
             f"{Path(str(args.hosted_mp13_config_file)).expanduser().resolve()}{Colors.RESET}"
         )
         if advertised:

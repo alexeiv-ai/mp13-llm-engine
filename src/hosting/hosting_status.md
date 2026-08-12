@@ -2,7 +2,7 @@
 
 Last updated: 2026-08-12
 
-Status: R4.1 complete; ready to open R4.2
+Status: R4.2 complete; ready to open R6.5
 
 This is the current execution ledger for
 [`hosting_access_plan.md`](hosting_access_plan.md). Detailed completed-slice
@@ -12,10 +12,10 @@ compact evidence index, and external completion gates.
 
 ## 1. Current gate and resume order
 
-No slice is active. **R4.1 unified configuration revision pinning** added the
-strict `hosting.configuration.v3` revision to every hosted-operation fingerprint
-and durable metadata record and to toolbox definition-plan pins independently
-of the toolbox project configuration revision.
+No slice is active. **R4.2 removed startup vocabulary** made obsolete direct
+and profile-loaded settings fail fast, retained explicit removed-flag rejection,
+and aligned the app attachment path and display with the sole top-level
+configuration input.
 
 Resume in this order:
 
@@ -38,7 +38,7 @@ after R9.4 removals make R9.7 evidence meaningful.
 | R1 Inventory/handoff | Complete | Refresh removal scans and dependent receipt at R9. |
 | R2 Shared paths/setup | Complete | Final aggregate/platform proof at R9.7. |
 | R3 Unified configuration | Complete | Final aggregate/platform proof at R9.7. |
-| R4 Single startup path | Active | Pin configuration revision in long operations; finish removed flag/setting scans. |
+| R4 Single startup path | Complete | Final aggregate/platform proof at R9.7. |
 | R5 Generic packages | Complete | Toolbox planning origin moves to generic locks in R7.1. |
 | R6 Generic environments | Active | Remove final legacy receipt/reference readers; add candidate lifecycle policy fields in R7.2. |
 | R7 Toolbox adoption | R7.0 design complete; implementation pending | R7.1 planning/revision and R7.2 candidate/materialization work. Existing package/reference/publication bridges remain useful. |
@@ -68,7 +68,6 @@ are authoritative for unfinished item-level work.
 
 ### P0 before R7
 
-- R4.2: finish removal of old startup flag/setting/launcher vocabulary.
 - R6.5: remove final legacy receipt/reference readers and aliases.
 
 ### R7.1 planning and selective revision
@@ -110,6 +109,7 @@ are authoritative for unfinished item-level work.
 | CODE-R3.1/R4A | Strict unified configuration and single-path startup implemented; focused startup/security lanes passed. |
 | TEST-R3.2 | Legacy authority scan leaves only explicit negative/removal evidence; strict configuration/startup/setup lane passed 27 tests. |
 | CODE/TEST-R4.1 | Unified revision pins cover toolbox plans and all hosted-operation creation paths; plan/operation lanes passed 67 tests and helper operations passed 116 tests. |
+| CODE/TEST-R4.2 | Removed startup flags/settings fail fast; app attachment uses only the top-level config input; client/startup lane passed 67 tests. |
 | CODE-R5 | Generic package ingress, daemon hashing, locks, commands, and denial paths passed focused coverage. |
 | CODE-R6A–D | Generic environment contracts/manager/commands and legacy-root cut passed focused coverage. |
 | CODE-R7A/B | Generic materializer/package/reference bridges and atomic candidate publication remain valid foundations; old plan/confirmation field assertions are provisional. |

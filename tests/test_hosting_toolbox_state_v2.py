@@ -192,7 +192,7 @@ def test_publish_is_process_safe_cas_and_interrupted_replace_preserves_old_state
 def test_rollout_recovery_resolves_pre_and_post_publication_crash_points(tmp_path: Path) -> None:
     service = EngineHostService(
         engines_state_file=tmp_path / "managed_engines.json",
-        control_state_file=tmp_path / "control_state.json"
+        control_state_file=tmp_path / "control_state.json",
     )
     service._require_toolbox_executor_registration = lambda engine_id, *, command_label: service.get_registration(engine_id)  # type: ignore[method-assign]
     candidate = service.register_spawned(

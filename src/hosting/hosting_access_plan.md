@@ -120,7 +120,7 @@ only in `HOSTING_CLIENT_BREAKING_CHANGES.md`.
 | R0–R1 freeze/inventory | Complete | Refresh handoff/removal evidence at R9. |
 | R2 paths/setup | Complete | Final aggregate/platform evidence at R9.7. |
 | R3 unified configuration | Complete | Final aggregate/platform evidence at R9.7. |
-| R4 startup cut | Active | Configuration pinning and final old-option scan. |
+| R4 startup cut | Complete | Final aggregate/platform evidence at R9.7. |
 | R5 generic packages | Complete | Toolbox planning adopts locks at R7.1. |
 | R6 generic environments | Active | Final legacy readers/aliases; candidate policy fields. |
 | R7 toolbox adoption | R7.0 complete | R7.1 planning/revision; R7.2 candidate/materialization. |
@@ -155,7 +155,7 @@ R7 plan/confirmation field assertions are provisional and must be replaced.
   repository and setup flow are the only path.
 - [x] **R4.1** Capture and validate a stable configuration revision in every
   long-running plan/operation affected by restart or policy change.
-- [ ] **R4.2** Remove `--toolbox-config-file`,
+- [x] **R4.2** Remove `--toolbox-config-file`,
   `engine_host_toolbox_config_file`, ephemeral launcher JSON behavior, and all
   remaining help/fixture vocabulary. Reject old arguments; do not absorb them
   through permissive `**kwargs`.
