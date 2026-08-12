@@ -205,6 +205,96 @@ class ToolboxDefinitionRolloutCoordinator:
             retired.append(engine_id)
         return {"retired_engine_ids": retired, "drain_pending_engine_ids": pending}
 
+    def prepare(
+        self,
+        *,
+        draft: ToolboxDefinitionPlanDraft,
+        profile_changes: Sequence[Mapping[str, Any]],
+        resolved_environments: Mapping[str, Any] | None,
+        planned_environment_records: Mapping[str, Any] | None,
+        operation_id: str,
+        preparation_state: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Build and warm an exact candidate without publishing active routes."""
+
+        tid = draft.definition.toolbox_id
+        orchestrator = self._orchestrator()
+        assignments = orchestrator.build_resolved_assignments(
+            toolbox_id=tid,
+            profiles=draft.profiles,
+            bundles=draft.bundles,
+            profile_changes=[dict(item) for item in profile_changes],
+        )
+        if preparation_state is not None:
+            preparation_state["assignments"] = assignments
+        changed = [item for item in assignments if item.classification != "reused"]
+        self._progress(
+            operation_id,
+            phase="environment_build",
+            code="definition_apply_environment_build",
+            summary="Required verified environments are being acquired.",
+            cancellable=True,
+            completed_units=0,
+            total_units=len(changed),
+        )
+        self._progress(
+            operation_id,
+            phase="staging",
+            code="definition_apply_staging",
+            summary="Changed toolbox profiles are being staged.",
+            cancellable=True,
+            completed_units=0,
+            total_units=len(changed),
+        )
+        spawn_kwargs = {
+            "toolbox_id": tid,
+            "definition_revision": draft.definition.revision,
+            "assignments": assignments,
+            "resolved_environments": dict(resolved_environments or {}),
+        }
+        if planned_environment_records is not None:
+            spawn_kwargs["planned_environment_records"] = dict(planned_environment_records)
+        assignments = orchestrator.spawn_resolved_assignments(**spawn_kwargs)
+        if preparation_state is not None:
+            preparation_state["assignments"] = assignments
+        candidates = [
+            str(dict(item.registration or {}).get("engine_id") or "").strip()
+            for item in assignments
+            if item.classification != "reused" and item.registration
+        ]
+        if preparation_state is not None:
+            preparation_state["candidate_engine_ids"] = candidates
+        self.service._hosted_operations.merge_metadata(
+            operation_id=operation_id, metadata={"candidate_engine_ids": candidates}
+        )
+        self._progress(
+            operation_id,
+            phase="warmup",
+            code="definition_apply_warmup",
+            summary="Candidate workers are being verified.",
+            cancellable=True,
+            completed_units=0,
+            total_units=len(candidates),
+        )
+        readiness = self.service._ensure_toolbox_assignments_ready(assignments)
+        old_snapshot = self.service._toolbox_state_v2.get(tid)
+        profiles, routes, references = self._runtime_payload(
+            draft=draft,
+            assignments=assignments,
+            old_snapshot=old_snapshot,
+            resolved_environments=resolved_environments,
+        )
+        return {
+            "assignments": assignments,
+            "candidate_engine_ids": candidates,
+            "readiness": readiness,
+            "old_snapshot": old_snapshot,
+            "profiles": profiles,
+            "routes": routes,
+            "environment_references": references,
+            "reused_profile_count": sum(item.classification == "reused" for item in assignments),
+        }
+
     def apply(
         self,
         *,
@@ -227,6 +317,7 @@ class ToolboxDefinitionRolloutCoordinator:
         candidates: list[str] = []
         published = False
         operator_details: dict[str, Any] = {"toolbox_id": tid, "candidate_engine_ids": []}
+        preparation_state: dict[str, Any] = {}
         try:
             repository.merge_metadata(
                 operation_id=operation_id,
@@ -239,69 +330,22 @@ class ToolboxDefinitionRolloutCoordinator:
                 summary="The pinned definition plan is valid.",
                 cancellable=True,
             )
-            orchestrator = self._orchestrator()
-            assignments = orchestrator.build_resolved_assignments(
-                toolbox_id=tid,
-                profiles=draft.profiles,
-                bundles=draft.bundles,
-                profile_changes=[dict(item) for item in profile_changes],
-            )
-            changed = [item for item in assignments if item.classification != "reused"]
-            self._progress(
-                operation_id,
-                phase="environment_build",
-                code="definition_apply_environment_build",
-                summary="Required verified environments are being acquired.",
-                cancellable=True,
-                completed_units=0,
-                total_units=len(changed),
-            )
-            self._progress(
-                operation_id,
-                phase="staging",
-                code="definition_apply_staging",
-                summary="Changed toolbox profiles are being staged.",
-                cancellable=True,
-                completed_units=0,
-                total_units=len(changed),
-            )
-            spawn_kwargs = {
-                "toolbox_id": tid,
-                "definition_revision": draft.definition.revision,
-                "assignments": assignments,
-                "resolved_environments": dict(resolved_environments or {}),
-            }
-            if planned_environment_records is not None:
-                spawn_kwargs["planned_environment_records"] = dict(
-                    planned_environment_records
-                )
-            assignments = orchestrator.spawn_resolved_assignments(
-                **spawn_kwargs,
-            )
-            candidates = [
-                str(dict(item.registration or {}).get("engine_id") or "").strip()
-                for item in assignments
-                if item.classification != "reused" and item.registration
-            ]
-            operator_details["candidate_engine_ids"] = candidates
-            repository.merge_metadata(operation_id=operation_id, metadata={"candidate_engine_ids": candidates})
-            self._progress(
-                operation_id,
-                phase="warmup",
-                code="definition_apply_warmup",
-                summary="Candidate workers are being verified.",
-                cancellable=True,
-                completed_units=0,
-                total_units=len(candidates),
-            )
-            ready = self.service._ensure_toolbox_assignments_ready(assignments)
-            operator_details["readiness"] = ready
-            profiles, routes, references = self._runtime_payload(
+            prepared = self.prepare(
                 draft=draft,
-                assignments=assignments,
-                old_snapshot=old_snapshot,
+                profile_changes=profile_changes,
                 resolved_environments=resolved_environments,
+                planned_environment_records=planned_environment_records,
+                operation_id=operation_id,
+                preparation_state=preparation_state,
             )
+            assignments = list(prepared["assignments"])
+            candidates = list(prepared["candidate_engine_ids"])
+            operator_details["candidate_engine_ids"] = candidates
+            operator_details["readiness"] = prepared["readiness"]
+            old_snapshot = prepared["old_snapshot"]
+            profiles = dict(prepared["profiles"])
+            routes = dict(prepared["routes"])
+            references = list(prepared["environment_references"])
             self._progress(
                 operation_id,
                 phase="publication",
@@ -361,7 +405,7 @@ class ToolboxDefinitionRolloutCoordinator:
                 "removed_tool_keys": list(dict(confirmation_result or {}).get("removed_tool_keys") or []),
                 "package_mutations": list(dict(confirmation_result or {}).get("package_mutations") or []),
                 "rollout_summary": {
-                    "reused_profiles": sum(item.classification == "reused" for item in assignments),
+                    "reused_profiles": prepared["reused_profile_count"],
                     "changed_profiles": len(candidates),
                     "retired_profiles": len(drain["retired_engine_ids"]),
                     "drain_pending_profiles": len(drain["drain_pending_engine_ids"]),
@@ -378,6 +422,10 @@ class ToolboxDefinitionRolloutCoordinator:
                 envelope=result,
             )
         except Exception as exc:
+            if not assignments:
+                assignments = list(preparation_state.get("assignments") or [])
+            if not candidates:
+                candidates = list(preparation_state.get("candidate_engine_ids") or [])
             current = repository.get_by_operation_id(operation_id)
             if current and current["lifecycle"] == HostedOperationLifecycle.TERMINAL_CANCELLATION.value:
                 return repository.status(ref=current["operation"], owner_actor_id=current["owner_actor_id"])

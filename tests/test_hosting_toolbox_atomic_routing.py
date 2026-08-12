@@ -7,6 +7,7 @@ import pytest
 
 from hosting.operation_contract import hosted_execution_fingerprint
 from hosting.service.host_service import EngineHostService
+from hosting.service.toolbox_rollout import ToolboxDefinitionRolloutCoordinator
 from tests.hosting_v3_fixtures import hosting_configuration
 from hosting.toolbox.bundle_models import (
     ResolvedToolboxProfileSpec,
@@ -215,6 +216,43 @@ def _install_fake_rollout(service: EngineHostService) -> _FakeOrchestrator:
         }
     )
     return orchestrator
+
+
+def test_prepare_boundary_warms_candidate_without_publishing_routes(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    _install_fake_rollout(service)
+    first = _draft("Alpha", "a", None)
+    service._apply_resolved_toolbox_definition(
+        draft=first,
+        profile_changes=_changes(first, "added"),
+        operation_id=_prepare(service, first, "prepare-boundary-first"),
+    )
+    old_snapshot = service._toolbox_state_v2.get("demo")
+    second = _draft("Beta", "b", first.definition.revision)
+    operation_id = _prepare(service, second, "prepare-boundary-second")
+    service._hosted_operations.mark_dispatch_claimed(operation_id=operation_id)
+
+    prepared = ToolboxDefinitionRolloutCoordinator(service).prepare(
+        draft=second,
+        profile_changes=_changes(second, "replaced", first.profiles[0].profile_id),
+        resolved_environments=None,
+        planned_environment_records=None,
+        operation_id=operation_id,
+    )
+
+    assert service._toolbox_state_v2.get("demo") == old_snapshot
+    assert prepared["candidate_engine_ids"]
+    assert all(
+        service.get_registration(engine_id)["routing_state"] == "candidate"
+        for engine_id in prepared["candidate_engine_ids"]
+    )
+    assert service._route_toolbox_registration(
+        toolbox_id="demo", tool_name="Alpha", command_label="test"
+    )["engine_id"] == old_snapshot["tool_routes"]["Alpha"]["engine_id"]
+    with pytest.raises(PermissionError):
+        service._route_toolbox_registration(
+            toolbox_id="demo", tool_name="Beta", command_label="test"
+        )
 
 
 def _changes(draft: ToolboxDefinitionPlanDraft, classification: str, active_profile_id=None):
@@ -448,13 +486,16 @@ def test_continuous_routing_observes_only_complete_old_or_new_definition(tmp_pat
     assert warmup.wait(2)
     observed: list[frozenset[str]] = []
     stop = threading.Event()
+    first_observation = threading.Event()
 
     def read_routes() -> None:
         while not stop.is_set():
             observed.append(frozenset(service._toolbox_state_v2.get("demo")["tool_routes"]))
+            first_observation.set()
 
     reader = threading.Thread(target=read_routes)
     reader.start()
+    assert first_observation.wait(2)
     release.set()
     writer.join(3)
     assert not writer.is_alive()
