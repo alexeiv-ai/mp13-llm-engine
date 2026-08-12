@@ -24,23 +24,38 @@ class ConfiguredToolboxPlanResolver:
     def __init__(
         self,
         *,
-        configuration: ToolboxHostProjectConfiguration,
+        configuration: ToolboxHostProjectConfiguration | None,
+        package_sources: Mapping[str, Any] | None = None,
         artifact_store: AtomicToolboxArtifactStore,
         catalog_state: Mapping[str, Any],
     ) -> None:
-        if not isinstance(configuration, ToolboxHostProjectConfiguration):
-            raise ValueError("toolbox_host_project_configuration_required")
         self.configuration = configuration
+        self.package_sources = {
+            str(source_id): dict(source or {})
+            for source_id, source in dict(package_sources or {}).items()
+        }
         self.artifact_store = artifact_store
         self.catalog_state = dict(catalog_state or {})
         self._source_paths: dict[str, dict[str, Path]] = {}
 
     def _source(self, source_id: str):
         logical = str(source_id or "").strip()
-        try:
-            return next(item for item in self.configuration.sources if item.source_id == logical)
-        except StopIteration as exc:
-            raise ValueError("toolbox_plan_artifact_source_unconfigured") from exc
+        if isinstance(self.configuration, ToolboxHostProjectConfiguration):
+            try:
+                source = next(
+                    item for item in self.configuration.sources
+                    if item.source_id == logical
+                )
+                return {"origin": source.origin, "priority": source.priority}
+            except StopIteration:
+                pass
+        source = self.package_sources.get(logical)
+        if source is None or not bool(source.get("enabled", True)):
+            raise ValueError("toolbox_plan_artifact_source_unconfigured")
+        return {
+            "origin": str(source.get("locator") or logical),
+            "priority": int(source.get("priority") or 0),
+        }
 
     def _paths(self, source_id: str) -> dict[str, Path]:
         logical = str(source_id or "").strip()
@@ -210,9 +225,9 @@ class ConfiguredToolboxPlanResolver:
                         base_template_revision=entry["template_digest"],
                         source_ids=source_ids,
                         source_origins=tuple(
-                            sorted(self._source(item).origin for item in source_ids)
+                            sorted(self._source(item)["origin"] for item in source_ids)
                         ),
-                        source_priority=min(self._source(item).priority for item in source_ids),
+                        source_priority=min(self._source(item)["priority"] for item in source_ids),
                         lock_digest=profile.template_lock_digest,
                         artifacts=base_artifacts,
                     )
@@ -225,6 +240,8 @@ class ConfiguredToolboxPlanResolver:
                 f"{item.name}=={item.version}" for item in template.locked_distributions
             )
             requirements = tuple(sorted({*pins, *custom_requirements}))
+            if not isinstance(self.configuration, ToolboxHostProjectConfiguration):
+                raise ValueError("toolbox_definition_exact_wheel_missing")
             configured_ids = tuple(item.source_id for item in self.configuration.sources)
             source_sets = {
                 tuple(sorted(base_sources | {source_id})) for source_id in configured_ids
@@ -266,10 +283,10 @@ class ConfiguredToolboxPlanResolver:
                         base_template_revision=entry["template_digest"],
                         source_ids=actual_sources,
                         source_origins=tuple(
-                            sorted(self._source(item).origin for item in actual_sources)
+                            sorted(self._source(item)["origin"] for item in actual_sources)
                         ),
                         source_priority=min(
-                            self._source(item).priority for item in actual_sources
+                            self._source(item)["priority"] for item in actual_sources
                         ),
                         lock_digest=closure.lock_digest,
                         artifacts=artifacts,
@@ -323,7 +340,7 @@ class ConfiguredToolboxPlanResolver:
                     base_template_id=template.template_id,
                     base_template_revision=resolved.template_digest,
                     source_ids=source_ids,
-                    source_origins=tuple(sorted(self._source(item).origin for item in source_ids)),
+                    source_origins=tuple(sorted(self._source(item)["origin"] for item in source_ids)),
                     lock_digest=resolved.custom_resolved_lock_digest or resolved.complete_lock_digest,
                     artifacts=tuple(sorted(artifacts, key=lambda item: item.distribution)),
                 ))
@@ -341,7 +358,7 @@ class ConfiguredToolboxPlanResolver:
                     base_template_revision=entry["template_digest"],
                     source_ids=source_ids,
                     source_origins=tuple(
-                        sorted(self._source(item).origin for item in source_ids)
+                        sorted(self._source(item)["origin"] for item in source_ids)
                     ),
                     lock_digest=str(profile.get("template_lock_digest") or ""),
                     artifacts=artifacts,

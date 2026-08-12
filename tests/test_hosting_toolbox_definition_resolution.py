@@ -410,6 +410,31 @@ def test_removed_custom_packages_recompute_to_exact_builtin_closure(
     assert offers[0].dependency_approval_required is False
 
 
+def test_strict_v3_base_template_plan_does_not_require_legacy_host_project_config(
+    tmp_path: Path,
+) -> None:
+    service, _template = _service_with_verified_closure(tmp_path)
+    service._toolbox_host_project_config = None  # noqa: SLF001
+    definition = json.loads(json.dumps(_definition()))
+    definition["auto_requests"][0]["files"] = [{
+        "relative_path": "pkg/fetch.py",
+        "content": "def Fetch():\n    return 'base-only'\n",
+    }]
+    definition["auto_requests"][0]["dependency"] = {
+        "mode": "template",
+        "template_id": "core",
+        "declared_imports": [],
+        "package_requirements": [],
+    }
+    planned = service._build_toolbox_definition_plan(  # noqa: SLF001
+        definition=definition,
+        owner_actor_id="actor:a",
+        authority_id="workspace:a",
+    )
+    assert planned["environment_mutations"]
+    assert planned["pins"]["host_config_revision"] == service.hosting_configuration_revision
+
+
 def test_confirmed_custom_closure_flows_through_orchestration_to_real_builder(
     tmp_path: Path,
 ) -> None:

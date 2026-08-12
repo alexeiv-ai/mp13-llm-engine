@@ -78,6 +78,9 @@ class ToolboxRuntimeMixin:
                 revision=identity_digest("hosting.toolbox.package_policy.v1", policy_payload),
                 **policy_payload,
             )
+        package_sources = dict(
+            self.hosting_configuration.package_management.get("sources") or {}
+        )
         return {
             "templates": templates,
             "catalog": catalog,
@@ -87,6 +90,10 @@ class ToolboxRuntimeMixin:
             "platform": platform,
             "target": current_target.name,
             "configuration": getattr(self, "_toolbox_host_project_config", None),
+            "host_config_revision": self.hosting_configuration_revision,
+            "source_set_revision": identity_digest(
+                "hosting.package_source_set.v1", package_sources
+            ),
             "runtime_identity": {
                 "version": ".".join(str(item) for item in sys.version_info[:3]),
                 "artifact_digest": templates[0].parent_worker_artifact_digest,
@@ -448,12 +455,12 @@ class ToolboxRuntimeMixin:
                 raise PermissionError("toolbox_definition_plan_not_found")
             context = self._toolbox_definition_planning_context()
             configuration = context["configuration"]
-            if configuration is None or (
+            if (
                 self.hosting_configuration_revision != parent.pins.configuration_revision
                 or context["catalog_revision"] != parent.pins.catalog_revision
                 or context["policy"].revision != parent.pins.dependency_policy_revision
-                or configuration.config_revision != parent.pins.host_config_revision
-                or configuration.source_set_revision != parent.pins.source_set_revision
+                or context["host_config_revision"] != parent.pins.host_config_revision
+                or context["source_set_revision"] != parent.pins.source_set_revision
                 or context["target"] != parent.pins.target
             ):
                 raise ValueError("toolbox_definition_plan_pins_changed")
@@ -650,8 +657,6 @@ class ToolboxRuntimeMixin:
         }
         context = self._toolbox_definition_planning_context()
         configuration = context["configuration"]
-        if configuration is None:
-            raise ValueError("toolbox_host_project_configuration_required")
         draft = plan_toolbox_definition(
             model,
             templates=context["templates"],
@@ -676,6 +681,7 @@ class ToolboxRuntimeMixin:
             )
         resolver = ConfiguredToolboxPlanResolver(
             configuration=configuration,
+            package_sources=self.hosting_configuration.package_management.get("sources", {}),
             artifact_store=self._toolbox_artifact_store,
             catalog_state=context["catalog"],
         )
@@ -713,9 +719,9 @@ class ToolboxRuntimeMixin:
             target=context["target"],
             configuration_revision=self.hosting_configuration_revision,
             catalog_revision=context["catalog_revision"],
-            host_config_revision=configuration.config_revision,
+            host_config_revision=context["host_config_revision"],
             dependency_policy_revision=context["policy"].revision,
-            source_set_revision=configuration.source_set_revision,
+            source_set_revision=context["source_set_revision"],
         )
         now_ms = int(time.time() * 1000)
         record = self._toolbox_definition_plans.create(
@@ -1050,11 +1056,11 @@ class ToolboxRuntimeMixin:
             )
             context = self._toolbox_definition_planning_context()
             configuration = context["configuration"]
-            if configuration is None or (
+            if (
                 self.hosting_configuration_revision != plan.pins.configuration_revision
                 or context["catalog_revision"] != plan.pins.catalog_revision
-                or configuration.config_revision != plan.pins.host_config_revision
-                or configuration.source_set_revision != plan.pins.source_set_revision
+                or context["host_config_revision"] != plan.pins.host_config_revision
+                or context["source_set_revision"] != plan.pins.source_set_revision
                 or context["policy"].revision != plan.pins.dependency_policy_revision
                 or context["target"] != plan.pins.target
             ):
@@ -1170,12 +1176,12 @@ class ToolboxRuntimeMixin:
         record = self._toolbox_definition_plans.get(receipt.plan_id, now_ms=now_ms)
         context = self._toolbox_definition_planning_context()
         configuration = context["configuration"]
-        if configuration is None or (
+        if (
             self.hosting_configuration_revision != record.pins.configuration_revision
             or context["catalog_revision"] != record.pins.catalog_revision
             or context["policy"].revision != record.pins.dependency_policy_revision
-            or configuration.config_revision != record.pins.host_config_revision
-            or configuration.source_set_revision != record.pins.source_set_revision
+            or context["host_config_revision"] != record.pins.host_config_revision
+            or context["source_set_revision"] != record.pins.source_set_revision
             or context["target"] != record.pins.target
             or not context["policy"].allow_custom
             or not context["policy"].custom_requires_approval
@@ -1248,12 +1254,12 @@ class ToolboxRuntimeMixin:
             raise ToolboxRevisionConflictError("toolbox_revision_conflict")
         context = self._toolbox_definition_planning_context()
         configuration = context["configuration"]
-        if configuration is None or (
+        if (
             self.hosting_configuration_revision != record.pins.configuration_revision
             or context["catalog_revision"] != record.pins.catalog_revision
             or context["policy"].revision != record.pins.dependency_policy_revision
-            or configuration.config_revision != record.pins.host_config_revision
-            or configuration.source_set_revision != record.pins.source_set_revision
+            or context["host_config_revision"] != record.pins.host_config_revision
+            or context["source_set_revision"] != record.pins.source_set_revision
             or context["target"] != record.pins.target
         ):
             raise ValueError("toolbox_definition_plan_pins_changed")
@@ -1634,12 +1640,12 @@ class ToolboxRuntimeMixin:
             raise ValueError("candidate_stale")
         context = self._toolbox_definition_planning_context()
         configuration = context["configuration"]
-        if configuration is None or (
+        if (
             self.hosting_configuration_revision != candidate.pins.configuration_revision
             or context["catalog_revision"] != candidate.pins.catalog_revision
             or context["policy"].revision != candidate.pins.dependency_policy_revision
-            or configuration.config_revision != candidate.pins.host_config_revision
-            or configuration.source_set_revision != candidate.pins.source_set_revision
+            or context["host_config_revision"] != candidate.pins.host_config_revision
+            or context["source_set_revision"] != candidate.pins.source_set_revision
             or context["target"] != candidate.pins.target
         ):
             raise ValueError("candidate_stale")
