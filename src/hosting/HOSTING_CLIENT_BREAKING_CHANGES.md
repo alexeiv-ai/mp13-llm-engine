@@ -1,7 +1,7 @@
 # Unified hosting client breaking changes
 
-Status: final control-v3 client contract frozen; parent implementation pin and
-dependent adoption pending
+Status: final control-v3 client contract frozen and parent implementation
+pinned; dependent adoption receipt pending
 
 This is the active handoff for the breaking plan in
 [`hosting_access_plan.md`](hosting_access_plan.md). The previous toolbox rollout
@@ -27,7 +27,7 @@ pin. Directional names are not permission to infer missing payloads.
 - [x] Publish state/receipt contract versions and old-version rejection errors.
 - [x] Publish atomic tool-change, selective-revision, per-tool analysis,
   and candidate-validation contracts before dependent adoption.
-- [ ] Record the parent implementation pin.
+- [x] Record the parent implementation pin.
 - [ ] Record each dependent owner, revision, test receipt, and adoption status.
 
 ### 1.1 Frozen control contract
@@ -861,7 +861,7 @@ parent implementation pin against which they ran.
 | Field | Required value | Current value |
 |---|---|---|
 | Parent contract major | Exact version | `hosting.control.v3` / `3` |
-| Parent implementation pin | Full commit | Pending |
+| Parent implementation pin | Full commit | `c0ff90777cca476b87322a67d60693d56dac0eea` |
 | Dependent owner | Team/person | Pending |
 | Dependent revision | Full commit | Pending |
 | Configuration/startup tests | Commands and result | Pending |

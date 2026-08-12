@@ -230,6 +230,10 @@ side-effect-free.
 - [ ] **R9.6 Consumer adoption:** deliver the final handoff and record the
   dependent owner, implementation revision, and tests. A daemon shim is not an
   adoption receipt.
+  - [x] Final parent handoff is frozen against implementation commit
+    `c0ff90777cca476b87322a67d60693d56dac0eea`.
+  - [ ] Named dependent owner, full dependent revision, and reproducible test
+    receipt remain required.
 - [ ] **R9.7 Full matrix:** after removals, run required aggregate, lint, type,
   integration, Windows/POSIX, relay-equivalent, and affected native/platform
   lanes. Record commands/results; skipped required lanes remain open with owner

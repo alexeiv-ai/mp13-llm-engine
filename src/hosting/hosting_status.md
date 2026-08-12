@@ -137,13 +137,15 @@ The pre-R7 P0 clean-cut items are complete.
 | CODE/TEST-R9.7D | The declared mypy lane checks `src/hosting`, follows imported dependencies in skip mode, and disables only the deliberate sibling-mixin `attr-defined` pattern; `python -m mypy` passed all 130 source files. |
 | TEST-R9.7E | Focused authentication, daemon-state, operation/result, callable-surface, host-capability, catalog, and identity security/redaction proof passed 172 tests. |
 | OPEN-R9.7F | Windows ARM64, Linux x64/ARM64, macOS ARM64, and opt-in Windows sensitive-sandbox results require external runners/resources and remain open. |
+| DOC-R9.6A | The final parent handoff is pinned to accepted implementation commit `c0ff90777cca476b87322a67d60693d56dac0eea`; only the named dependent owner/revision/test receipt remains open in R9.6. |
 | CODE-R8A–C | Versioned neutral state, Python/JS shared manager adoption, GC/repair controls passed focused coverage. |
 | CODE/TEST-R9 partial | Structured auth, role/hash authority, redaction, startup modes, generic lifecycle, and retry/restart identity passed focused coverage. |
 | TEST-R8.2C checkpoint | Workflow operation suite passed; full helper suite passed 116 tests on resume. |
 
 ## 6. External completion gates
 
-- Parent implementation pin and dependent owner/revision/test receipt.
+- Dependent owner/revision/test receipt against parent implementation
+  `c0ff90777cca476b87322a67d60693d56dac0eea`.
 - Native CI results for Windows ARM64, Linux x64/ARM64, and macOS ARM64.
 - Opt-in Windows sensitive-sandbox validation with an external engine model or
   configuration; the local aggregate skip records the exact requirement.
