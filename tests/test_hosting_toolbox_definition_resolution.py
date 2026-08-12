@@ -8,6 +8,7 @@ import json
 import zipfile
 from pathlib import Path
 
+import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from packaging.utils import parse_wheel_filename
 
@@ -29,6 +30,8 @@ from hosting.toolbox.definition_planner import (
 from hosting.toolbox.orchestration import ToolboxSandboxOrchestrator
 from hosting.toolbox.staging import ToolboxBundleStager
 from hosting.toolbox.identity import identity_digest
+from hosting.toolbox.host_project_config import ToolboxHostProjectConfiguration
+from tests.hosting_v3_fixtures import hosting_configuration
 
 
 def _b64(value: bytes) -> str:
@@ -152,12 +155,35 @@ def _service_with_verified_closure(tmp_path: Path, *, policy=None):
     source.mkdir(parents=True, exist_ok=True)
     service = EngineHostService(
         engines_state_file=tmp_path / "engines.json",
-        control_state_file=tmp_path / "control.json",
-        toolbox_host_project_configuration=_configuration(),
-        toolbox_artifact_sources={"release": source},
-        toolbox_trust_public_keys={"release-key": public},
-        toolbox_dependency_policy=policy,
+        hosting_configuration=hosting_configuration(
+            tmp_path,
+            package_sources={
+                "release": {
+                    "kind": "airgap_store",
+                    "locator": "airgap://release",
+                    "credential_ref": None,
+                    "enabled": True,
+                    "priority": 10,
+                }
+            },
+            dependency_policy={
+                "policy_id": "definition-resolution",
+                "revision": 1,
+                "allowed_source_ids": ["release"],
+                "allowed_platforms": ["*"],
+                "allowed_runtimes": ["python"],
+                "max_artifact_bytes": 16 * 1024 * 1024,
+                "require_sha256": True,
+                "optional_verifier": None,
+            },
+        ),
     )
+    service._toolbox_host_project_config = ToolboxHostProjectConfiguration.from_dict(  # noqa: SLF001
+        _configuration()
+    )
+    service._toolbox_artifact_sources = {"release": source}  # noqa: SLF001
+    service._toolbox_trust_public_keys = {"release-key": public}  # noqa: SLF001
+    service._configured_toolbox_dependency_policy = policy  # noqa: SLF001
     wheels = [
         _wheel("packaging", "26.0", "packaging"),
         _wheel("requests", "2.32.5", "requests", requires=("urllib3==2.0.0",)),
@@ -430,12 +456,24 @@ def test_confirmed_custom_closure_flows_through_orchestration_to_real_builder(
         "bundle": dict(kwargs["bundle"]),
         "environment": dict(kwargs["environment"]),
     }
+    plan_record = service._toolbox_definition_plans.get(  # noqa: SLF001
+        planned["plan_id"], now_ms=0
+    )
+    selected = {
+        item["environment_id"]: item["alternative_id"]
+        for item in receipt.reduction["selected_alternatives"]
+    }
+    generic_record = next(
+        item for item in plan_record.planned_environments
+        if selected.get(item.environment_id) == item.alternative_id
+    )
 
     spawned = orchestrator.spawn_resolved_assignments(
         toolbox_id=draft.definition.toolbox_id,
         definition_revision=draft.definition.revision,
         assignments=assignments,
         resolved_environments=receipt.resolved_environments,
+        planned_environment_records={draft.profiles[0].profile_id: generic_record.to_dict()},
     )
 
     assert spawned[0].registration is not None
@@ -501,6 +539,84 @@ def test_corrupt_confirmed_artifact_fails_before_atomic_publication(tmp_path: Pa
     assert service._toolbox_executor_registrations("custom-demo") == []  # noqa: SLF001
     if references.exists():
         assert json.loads(references.read_text(encoding="utf-8"))["environments"] == {}
+
+
+def test_confirmed_plan_prepares_durable_candidate_without_publication(tmp_path: Path) -> None:
+    from test_hosting_toolbox_atomic_routing import _install_fake_rollout
+    from test_hosting_toolbox_definition_service import _custom_policy
+
+    service, _template = _service_with_verified_closure(tmp_path, policy=_custom_policy())
+    started = service.toolbox_plan_definition(
+        definition=_definition(), request_id="plan-candidate",
+        owner_actor_id="actor:a", authority_id="workspace:a",
+    )
+    plan = service._hosted_operations.wait_for_terminal(  # noqa: SLF001
+        operation_id=started["operation"]["operation_id"], timeout_seconds=10
+    )["result"]
+    choices = [{
+        "environment_id": item["environment_id"],
+        "alternative_id": item["preferred_alternative_id"],
+        "accept_package_changes": True,
+    } for item in plan["environment_mutations"]]
+    confirmation_started = service.toolbox_confirm_definition_plan(
+        plan_id=plan["plan_id"], environment_choices=choices,
+        request_id="confirm-candidate", owner_actor_id="actor:a", authority_id="workspace:a",
+    )
+    confirmation = service._hosted_operations.wait_for_terminal(  # noqa: SLF001
+        operation_id=confirmation_started["operation"]["operation_id"], timeout_seconds=10
+    )["result"]
+    approval_ref = None
+    if confirmation["dependency_approval_required"]:
+        approval_ref = service.toolbox_approve_confirmed_definition_plan(
+            confirmation_ref=confirmation["confirmation_ref"],
+            approver_actor_id="approver:dependencies",
+            dependency_approver_authorized=True,
+        )["approval_ref"]
+    _install_fake_rollout(service)
+
+    prepared = service.toolbox_prepare_definition_candidate(
+        plan_id=plan["plan_id"],
+        confirmation_ref=confirmation["confirmation_ref"],
+        dependency_approval_ref=approval_ref,
+        requested_lifetime_ms=600_000,
+        request_id="prepare-candidate",
+        owner_actor_id="actor:a",
+        authority_id="workspace:a",
+    )
+    terminal = service._hosted_operations.wait_for_terminal(  # noqa: SLF001
+        operation_id=prepared["operation"]["operation_id"], timeout_seconds=10
+    )
+    candidate = terminal["result"]
+
+    assert terminal["lifecycle"] == "terminal_success"
+    assert set(candidate) == {
+        "contract", "candidate_ref", "toolbox_id", "definition_revision",
+        "changed_tool_keys", "created_at_ms", "expires_at_ms", "state", "user_projection",
+    }
+    assert candidate["state"] == "ready"
+    assert service._toolbox_state_v2.get("custom-demo") is None  # noqa: SLF001
+    registrations = service._toolbox_executor_registrations("custom-demo")  # noqa: SLF001
+    assert registrations and {item["routing_state"] for item in registrations} == {"candidate"}
+    duplicate = service.toolbox_prepare_definition_candidate(
+        plan_id=plan["plan_id"],
+        confirmation_ref=confirmation["confirmation_ref"],
+        dependency_approval_ref=approval_ref,
+        requested_lifetime_ms=600_000,
+        request_id="prepare-candidate",
+        owner_actor_id="actor:a",
+        authority_id="workspace:a",
+    )
+    assert duplicate["operation"] == prepared["operation"]
+    if approval_ref is not None:
+        with pytest.raises(Exception, match="dependency_approval_invalid"):
+            service.toolbox_apply_definition(
+                plan_id=plan["plan_id"],
+                confirmation_ref=confirmation["confirmation_ref"],
+                dependency_approval_ref=approval_ref,
+                request_id="apply-after-candidate",
+                owner_actor_id="actor:a",
+                authority_id="workspace:a",
+            )
 
 
 def test_authenticated_daemon_recovers_one_multi_tool_plan_and_confirmation(

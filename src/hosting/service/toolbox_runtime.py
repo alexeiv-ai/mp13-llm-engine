@@ -1200,15 +1200,16 @@ class ToolboxRuntimeMixin:
             expires_at_ms=min(record.expires_at_ms, now_ms + 60 * 60 * 1000),
         )
 
-    def toolbox_apply_definition(
+    def _resolve_confirmed_toolbox_definition_request(
         self,
         *,
         plan_id: str,
         confirmation_ref: str,
         request_id: str,
-        dependency_approval_ref: Optional[str] = None,
-        owner_actor_id: str = "service:local",
-        authority_id: str = "authority:local",
+        dependency_approval_ref: Optional[str],
+        owner_actor_id: str,
+        authority_id: str,
+        request_error_code: str,
     ) -> Dict[str, Any]:
         from ..toolbox.definition_planner import (
             ActiveToolboxProfileSnapshot,
@@ -1220,8 +1221,10 @@ class ToolboxRuntimeMixin:
         if dependency_approval_ref is not None and not isinstance(dependency_approval_ref, str):
             raise ValueError("dependency_approval_ref_must_be_opaque_string")
         rid = str(request_id or "").strip()
-        if not rid or len(rid) > 128 or any(ord(character) < 32 or ord(character) > 126 for character in rid):
-            raise ValueError("toolbox_apply_request_id_invalid")
+        if not rid or len(rid) > 128 or any(
+            ord(character) < 32 or ord(character) > 126 for character in rid
+        ):
+            raise ValueError(request_error_code)
         now_ms = int(time.time() * 1000)
         record = self._toolbox_definition_plans.get(plan_id, now_ms=now_ms)
         actor = str(owner_actor_id or "").strip()
@@ -1279,6 +1282,94 @@ class ToolboxRuntimeMixin:
             )
         elif dependency_approval_ref:
             raise ValueError("dependency_approval_not_required")
+        active_profiles = []
+        for profile_id, row in dict(dict(active or {}).get("profiles") or {}).items():
+            profile = dict(row["profile"])
+            active_profiles.append(
+                ActiveToolboxProfileSnapshot(
+                    profile_id=profile_id,
+                    manifest_hash=row["manifest_hash"],
+                    environment_key=profile["environment_key"],
+                    sandbox_policy_digest=identity_digest(
+                        "hosting.toolbox.sandbox_policy.v1", profile["sandbox_policy"]
+                    ),
+                    assigned_tool_keys=tuple(profile["assigned_tool_keys"]),
+                )
+            )
+        profile_changes = classify_toolbox_profiles(draft, active_profiles)
+        selected_alternatives = {
+            item["environment_id"]: item["alternative_id"]
+            for item in receipt.reduction["selected_alternatives"]
+        }
+        selected_planned_environment_records = {
+            item.environment_id: item
+            for item in record.planned_environments
+            if selected_alternatives.get(item.environment_id) == item.alternative_id
+        }
+        offers_by_tools = {
+            frozenset(
+                item.tool_key for item in offer.tool_mutations if item.change != "removed"
+            ): offer
+            for offer in record.environment_mutations
+            if any(item.change != "removed" for item in offer.tool_mutations)
+        }
+        planned_environment_records = {}
+        for profile in draft.profiles:
+            offer = offers_by_tools.get(frozenset(profile.assigned_tool_keys))
+            planned = (
+                selected_planned_environment_records.get(offer.environment_id)
+                if offer is not None
+                else None
+            )
+            if planned is not None:
+                planned_environment_records[profile.profile_id] = planned.to_dict()
+        if set(planned_environment_records) != {item.profile_id for item in draft.profiles}:
+            raise ValueError("toolbox_planned_environment_selection_incomplete")
+        return {
+            "request_id": rid,
+            "now_ms": now_ms,
+            "record": record,
+            "receipt": receipt,
+            "draft": draft,
+            "model": model,
+            "active": active,
+            "actor": actor,
+            "authority": authority,
+            "exact_resolution_digest": exact_resolution_digest,
+            "pins_digest": pins_digest,
+            "approval_identity": approval_identity,
+            "profile_changes": [dict(item) for item in profile_changes],
+            "planned_environment_records": planned_environment_records,
+        }
+
+    def toolbox_apply_definition(
+        self,
+        *,
+        plan_id: str,
+        confirmation_ref: str,
+        request_id: str,
+        dependency_approval_ref: Optional[str] = None,
+        owner_actor_id: str = "service:local",
+        authority_id: str = "authority:local",
+    ) -> Dict[str, Any]:
+        resolved = self._resolve_confirmed_toolbox_definition_request(
+            plan_id=plan_id,
+            confirmation_ref=confirmation_ref,
+            request_id=request_id,
+            dependency_approval_ref=dependency_approval_ref,
+            owner_actor_id=owner_actor_id,
+            authority_id=authority_id,
+            request_error_code="toolbox_apply_request_id_invalid",
+        )
+        rid = resolved["request_id"]
+        record = resolved["record"]
+        receipt = resolved["receipt"]
+        draft = resolved["draft"]
+        model = resolved["model"]
+        actor = resolved["actor"]
+        exact_resolution_digest = resolved["exact_resolution_digest"]
+        pins_digest = resolved["pins_digest"]
+        approval_identity = resolved["approval_identity"]
         fingerprint = hosted_execution_fingerprint(
             {
                 "toolbox_id": model.toolbox_id,
@@ -1313,32 +1404,6 @@ class ToolboxRuntimeMixin:
         if action != "dispatch":
             return status
         operation_id = str(dict(status.get("operation") or {}).get("operation_id") or "")
-        active_profiles = []
-        for profile_id, row in dict(dict(active or {}).get("profiles") or {}).items():
-            profile = dict(row["profile"])
-            active_profiles.append(
-                ActiveToolboxProfileSnapshot(
-                    profile_id=profile_id,
-                    manifest_hash=row["manifest_hash"],
-                    environment_key=profile["environment_key"],
-                    sandbox_policy_digest=identity_digest(
-                        "hosting.toolbox.sandbox_policy.v1", profile["sandbox_policy"]
-                    ),
-                    assigned_tool_keys=tuple(profile["assigned_tool_keys"]),
-                )
-            )
-        profile_changes = classify_toolbox_profiles(draft, active_profiles)
-        selected_alternatives = {
-            item["environment_id"]: item["alternative_id"]
-            for item in receipt.reduction["selected_alternatives"]
-        }
-        planned_environment_records = {
-            item.environment_id: item.to_dict()
-            for item in record.planned_environments
-            if selected_alternatives.get(item.environment_id) == item.alternative_id
-        }
-        if set(planned_environment_records) != {item.profile_id for item in draft.profiles}:
-            raise ValueError("toolbox_planned_environment_selection_incomplete")
         self._hosted_operations.update_progress(
             operation_id=operation_id,
             progress={
@@ -1355,10 +1420,10 @@ class ToolboxRuntimeMixin:
             target=self._apply_resolved_toolbox_definition,
             kwargs={
                 "draft": draft,
-                "profile_changes": [dict(item) for item in profile_changes],
+                "profile_changes": resolved["profile_changes"],
                 "confirmation_result": dict(receipt.reduction),
                 "resolved_environments": dict(receipt.resolved_environments),
-                "planned_environment_records": planned_environment_records,
+                "planned_environment_records": resolved["planned_environment_records"],
                 "operation_id": operation_id,
             },
             name=f"toolbox-definition-apply-{operation_id[:12]}",
@@ -1366,6 +1431,187 @@ class ToolboxRuntimeMixin:
         )
         worker.start()
         return status
+
+    def toolbox_prepare_definition_candidate(
+        self,
+        *,
+        plan_id: str,
+        confirmation_ref: str,
+        request_id: str,
+        dependency_approval_ref: Optional[str] = None,
+        requested_lifetime_ms: Optional[int] = None,
+        owner_actor_id: str = "service:local",
+        authority_id: str = "authority:local",
+    ) -> Dict[str, Any]:
+        resolved = self._resolve_confirmed_toolbox_definition_request(
+            plan_id=plan_id,
+            confirmation_ref=confirmation_ref,
+            request_id=request_id,
+            dependency_approval_ref=dependency_approval_ref,
+            owner_actor_id=owner_actor_id,
+            authority_id=authority_id,
+            request_error_code="toolbox_candidate_prepare_request_id_invalid",
+        )
+        record = resolved["record"]
+        receipt = resolved["receipt"]
+        model = resolved["model"]
+        fingerprint = hosted_execution_fingerprint(
+            {
+                "toolbox_id": model.toolbox_id,
+                "definition_revision": model.revision,
+                "expected_revision": model.expected_revision,
+                "plan_id": record.plan_id,
+                "confirmation_ref_digest": receipt.confirmation_ref_digest,
+                "exact_resolution_digest": resolved["exact_resolution_digest"],
+                "plan_pins_digest": resolved["pins_digest"],
+                "approval_identity": resolved["approval_identity"],
+                "requested_lifetime_ms": requested_lifetime_ms,
+                "configuration_revision": record.pins.configuration_revision,
+            }
+        )
+        prepared = self._hosted_operations.prepare(
+            owner_actor_id=resolved["actor"],
+            execution_kind=HostedExecutionKind.TOOLBOX_DEFINITION_CANDIDATE_PREPARE,
+            selector={"kind": "toolbox_id", "id": model.toolbox_id},
+            namespace=f"toolbox-definition-candidate:{model.toolbox_id}",
+            request_id=resolved["request_id"],
+            fingerprint=fingerprint,
+            metadata={
+                "toolbox_id": model.toolbox_id,
+                "definition_revision": model.revision,
+                "plan_id": record.plan_id,
+                "configuration_revision": record.pins.configuration_revision,
+            },
+        )
+        action = str(prepared.get("action") or "")
+        status = dict(prepared.get("status") or {})
+        if action != "dispatch":
+            return status
+        operation_id = str(dict(status.get("operation") or {}).get("operation_id") or "")
+        self._hosted_operations.update_progress(
+            operation_id=operation_id,
+            progress={
+                "phase": "validation",
+                "code": "definition_candidate_prepare_queued",
+                "completed_units": 0,
+                "total_units": None,
+                "updated_at_ms": int(time.time() * 1000),
+                "summary": "The toolbox candidate is queued for validation.",
+                "cancellable": True,
+            },
+        )
+        worker = threading.Thread(
+            target=self._prepare_resolved_toolbox_definition_candidate,
+            kwargs={
+                "resolved": resolved,
+                "confirmation_ref": confirmation_ref,
+                "requested_lifetime_ms": requested_lifetime_ms,
+                "operation_id": operation_id,
+            },
+            name=f"toolbox-definition-candidate-{operation_id[:12]}",
+            daemon=True,
+        )
+        worker.start()
+        return status
+
+    def _prepare_resolved_toolbox_definition_candidate(
+        self,
+        *,
+        resolved: Mapping[str, Any],
+        confirmation_ref: str,
+        requested_lifetime_ms: Optional[int],
+        operation_id: str,
+    ) -> Dict[str, Any]:
+        from .toolbox_rollout import ToolboxDefinitionRolloutCoordinator
+
+        draft = resolved["draft"]
+        preparation_state: Dict[str, Any] = {}
+
+        def prepare_locked() -> Dict[str, Any]:
+            return ToolboxDefinitionRolloutCoordinator(self).prepare(
+                draft=draft,
+                profile_changes=resolved["profile_changes"],
+                resolved_environments=dict(resolved["receipt"].resolved_environments),
+                planned_environment_records=resolved["planned_environment_records"],
+                operation_id=operation_id,
+                preparation_state=preparation_state,
+            )
+
+        try:
+            operation = self._hosted_operations.get_by_operation_id(operation_id)
+            if operation and operation["lifecycle"] == HostedOperationLifecycle.QUEUED.value:
+                self._hosted_operations.mark_dispatch_claimed(operation_id=operation_id)
+            prepared = self._run_locked_toolbox_call(
+                draft.definition.toolbox_id, prepare_locked
+            )
+            retained_payload = {
+                "definition": draft.definition.to_dict(),
+                "profiles": dict(prepared["profiles"]),
+                "routes": dict(prepared["routes"]),
+                "environment_references": list(prepared["environment_references"]),
+                "candidate_engine_ids": list(prepared["candidate_engine_ids"]),
+                "readiness": dict(prepared["readiness"]),
+                "reused_profile_count": int(prepared["reused_profile_count"]),
+                "confirmation_result": dict(resolved["receipt"].reduction),
+                "expected_active_revision": draft.definition.expected_revision,
+            }
+            candidate_ref, candidate = self._toolbox_definition_candidates.create(
+                plan_id=resolved["record"].plan_id,
+                confirmation_ref=confirmation_ref,
+                toolbox_id=draft.definition.toolbox_id,
+                definition_revision=draft.definition.revision,
+                changed_tool_keys=tuple(resolved["receipt"].reduction["accepted_tool_keys"]),
+                pins=resolved["record"].pins,
+                owner_actor_id=resolved["actor"],
+                authority_id=resolved["authority"],
+                request_id=resolved["request_id"],
+                requested_lifetime_ms=requested_lifetime_ms,
+                retained_payload=retained_payload,
+                now_ms=int(time.time() * 1000),
+            )
+            self._hosted_operations.update_progress(
+                operation_id=operation_id,
+                progress={
+                    "phase": "candidate_ready",
+                    "code": "definition_candidate_ready",
+                    "completed_units": len(prepared["candidate_engine_ids"]),
+                    "total_units": len(prepared["candidate_engine_ids"]),
+                    "updated_at_ms": int(time.time() * 1000),
+                    "summary": "The exact toolbox candidate is ready.",
+                    "cancellable": False,
+                },
+            )
+            return self._hosted_operations.finish(
+                operation_id=operation_id,
+                lifecycle=HostedOperationLifecycle.TERMINAL_SUCCESS,
+                envelope=candidate.public_projection(candidate_ref),
+            )
+        except Exception as exc:
+            assignments = list(preparation_state.get("assignments") or [])
+            for assignment in assignments:
+                reference_id = str(assignment.materialization_reference_id or "").strip()
+                if reference_id:
+                    try:
+                        self._environment_manager.release(reference_id=reference_id)
+                    except Exception:
+                        pass
+            for engine_id in list(preparation_state.get("candidate_engine_ids") or []):
+                self._retire_toolbox_registration(str(engine_id))
+            return self._hosted_operations.finish(
+                operation_id=operation_id,
+                lifecycle=HostedOperationLifecycle.TERMINAL_FAILURE,
+                envelope={
+                    "contract": "hosting.toolbox.definition_candidate.v1",
+                    "status": "error",
+                    "code": "definition_candidate_prepare_failed",
+                    "toolbox_id": draft.definition.toolbox_id,
+                    "diagnostics": [{
+                        "code": "definition_candidate_prepare_failed",
+                        "summary": "The toolbox candidate could not be prepared.",
+                    }],
+                },
+                reason=str(getattr(exc, "code", "") or "definition_candidate_prepare_failed"),
+            )
 
     def _apply_resolved_toolbox_definition(
         self,

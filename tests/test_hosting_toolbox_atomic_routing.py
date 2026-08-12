@@ -133,7 +133,8 @@ class _FakeOrchestrator:
     build_resolved_assignments = staticmethod(ToolboxSandboxOrchestrator.build_resolved_assignments)
 
     def spawn_resolved_assignments(
-        self, *, toolbox_id, definition_revision, assignments, resolved_environments=None
+        self, *, toolbox_id, definition_revision, assignments, resolved_environments=None,
+        planned_environment_records=None,
     ):
         for assignment in assignments:
             if assignment.classification == "reused":
