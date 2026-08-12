@@ -1436,20 +1436,6 @@ def _local_recovery_menu(args: argparse.Namespace, session_token: Optional[str])
 def run_interactive_mode(args: argparse.Namespace) -> int:
     scheme = getattr(args, "color_scheme", "dark")
     _set_color_scheme(scheme)
-    
-    from . import hosting_config_cli as hc
-    if scheme == "light":
-        hc._COLOR_TOKENS.update({
-            "title": "\033[1;35m", # Magenta
-            "accent": "\033[0;35m",
-            "rule": "\033[0;35m",
-        })
-    else:
-        hc._COLOR_TOKENS.update({
-            "title": "\033[1;95m", # Light Magenta
-            "accent": "\033[0;95m",
-            "rule": "\033[0;95m",
-        })
 
     session_token = None
 

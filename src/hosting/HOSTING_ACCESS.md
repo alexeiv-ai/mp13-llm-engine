@@ -442,7 +442,7 @@ Recommended projections:
    - use SSH relay for daemon control
    - enforce auth and SSH-bound session usage
    - use `hosting_config_cli --transport-harden-ssh` to compose client profile creation, forced-command authorized-key installation, hosting `transport` RBAC registration, and strict SSH validation
-   - use `hosting_config_cli --transport-admin-setup` only for explicit elevated SSH service/firewall/user-linger follow-up actions
+   - use `hosting.transport_admin_setup_api` only for explicit elevated SSH service/firewall/user-linger follow-up actions
    - hosting config tooling can provision realm-local SSH client artifacts from a transport bootstrap profile:
      - materialized private key
      - pinned known_hosts file
