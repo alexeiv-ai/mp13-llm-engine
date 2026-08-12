@@ -54,6 +54,14 @@ class ToolboxMaintenanceMixin:
             ):
                 blockers.add("candidate")
 
+        for candidate in self._toolbox_definition_candidates.list(now_ms=int(time.time() * 1000)):
+            if candidate.state == "ready" and self._contains_environment_digest(
+                candidate.retained_payload, key
+            ):
+                blockers.add("candidate")
+                if candidate.execution_leases:
+                    blockers.add("execution")
+
         now_ms = int(time.time() * 1000)
         for plan in self._toolbox_definition_plans.list(now_ms=now_ms):
             if self._contains_environment_digest(plan.to_dict(), key):
@@ -69,22 +77,24 @@ class ToolboxMaintenanceMixin:
             ):
                 blockers.add("operation")
 
-        cursor = ""
-        while True:
-            page = self._environment_manager.list_references(cursor=cursor, limit=500)
-            for reference in list(page.get("references") or []):
-                row = dict(reference or {})
-                if row.get("environment_id") != key or row.get("released_at_ms") is not None:
-                    continue
-                if "template" in str(row.get("consumer_kind") or ""):
-                    blockers.add("built_in")
-                else:
-                    blockers.add("reference")
-            cursor = str(page.get("next_cursor") or "")
-            if not cursor:
-                break
+        protection = self._environment_manager.protection_snapshot()
+        for reference in protection["live_references"]:
+            row = dict(reference)
+            if row.get("environment_id") != key:
+                continue
+            if "template" in str(row.get("consumer_kind") or ""):
+                blockers.add("built_in")
+            else:
+                blockers.add("reference")
+        if any(
+            str(row.get("environment_id") or "") == key
+            for row in protection["active_executions"]
+        ):
+            blockers.add("execution")
+        if key in set(protection["busy_environment_ids"]):
+            blockers.add("operation")
         return [item for item in (
-            "active", "candidate", "plan", "confirmation", "operation",
+            "active", "candidate", "execution", "plan", "confirmation", "operation",
             "built_in", "protected", "reference",
         ) if item in blockers]
 
@@ -259,8 +269,11 @@ class ToolboxMaintenanceMixin:
     def _active_candidate_engine_ids(self) -> set[str]:
         return {
             str(item or "").strip()
-            for record in self._hosted_operations.active_records()
-            for item in list(dict(record.get("metadata") or {}).get("candidate_engine_ids") or [])
+            for record in self._toolbox_definition_candidates.list(
+                now_ms=int(time.time() * 1000)
+            )
+            if record.state == "ready"
+            for item in list(record.retained_payload.get("candidate_engine_ids") or [])
             if str(item or "").strip()
         }
 
@@ -313,6 +326,10 @@ class ToolboxMaintenanceMixin:
             if str(row.get("routing_state") or "") == "retired"
         )
         stale = sorted(set(registrations) - active_engine_ids)
+        candidate_records = self._toolbox_definition_candidates.list(
+            now_ms=int(time.time() * 1000)
+        )
+        generic_protection = self._environment_manager.protection_snapshot()
         bundles_root = (self.hosting_root / "toolbox_bundles").resolve()
         stale_bundles: List[str] = []
         if bundles_root.exists():
@@ -329,6 +346,23 @@ class ToolboxMaintenanceMixin:
             "retired_engine_ids": retired,
             "stale_engine_ids": stale,
             "stale_bundle_roots": sorted(set(stale_bundles)),
+            "candidate_cross_references": [
+                {
+                    "candidate_ref_digest": record.candidate_ref_digest,
+                    "toolbox_id": record.toolbox_id,
+                    "definition_revision": record.definition_revision,
+                    "state": record.state,
+                    "candidate_engine_ids": sorted(
+                        str(item) for item in record.retained_payload["candidate_engine_ids"]
+                    ),
+                    "environment_reference_ids": sorted(
+                        str(item) for item in record.retained_payload["environment_references"]
+                    ),
+                    "execution_lease_count": len(record.execution_leases),
+                }
+                for record in candidate_records
+            ],
+            "generic_environment_protection": generic_protection,
             "summary": {
                 "toolbox_count": len(toolboxes),
                 "active_registration_count": len(active_engine_ids & set(registrations)),
@@ -337,6 +371,11 @@ class ToolboxMaintenanceMixin:
                 "stale_engine_count": len(stale),
                 "stale_bundle_count": len(set(stale_bundles)),
                 "stale_environment_count": 0,
+                "live_generic_reference_count": len(generic_protection["live_references"]),
+                "active_generic_execution_count": len(generic_protection["active_executions"]),
+                "ready_candidate_count": sum(
+                    record.state == "ready" for record in candidate_records
+                ),
             },
         }
 

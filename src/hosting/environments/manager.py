@@ -420,6 +420,33 @@ class EnvironmentManager:
         page = rows[:page_size]
         return {"references": page, "next_cursor": page[-1]["reference_id"] if len(rows) > page_size else None}
 
+    def protection_snapshot(self) -> dict[str, Any]:
+        """Return bounded generic protection truth for maintenance coordination."""
+
+        with self._locked():
+            state = self._read()
+        return {
+            "contract": "hosting.environment_protection_snapshot.v1",
+            "live_references": sorted(
+                (
+                    {
+                        "reference_id": str(row.get("reference_id") or ""),
+                        "environment_id": str(row.get("environment_id") or ""),
+                        "consumer_kind": str(row.get("consumer_kind") or ""),
+                        "consumer_id": str(row.get("consumer_id") or ""),
+                    }
+                    for row in state["references"].values()
+                    if row.get("released_at_ms") is None
+                ),
+                key=lambda row: row["reference_id"],
+            ),
+            "active_executions": sorted(
+                (dict(row) for row in state["active"].values()),
+                key=lambda row: str(row.get("execution_id") or ""),
+            ),
+            "busy_environment_ids": sorted(str(key) for key in state["busy"]),
+        }
+
     def execution_begin(self, *, environment_id: str, execution_id: str) -> dict[str, Any]:
         with self._locked():
             state = self._read()

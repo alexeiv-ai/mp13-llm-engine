@@ -197,6 +197,14 @@ class _RemovalManager:
         ]
         return {"references": rows, "next_cursor": None}
 
+    def protection_snapshot(self):
+        return {
+            "contract": "hosting.environment_protection_snapshot.v1",
+            "live_references": self.list_references()["references"],
+            "active_executions": [],
+            "busy_environment_ids": [],
+        }
+
     def remove(self, *, environment_id: str) -> dict:
         if self.references.get(environment_id):
             raise RuntimeError("environment_references_present")
