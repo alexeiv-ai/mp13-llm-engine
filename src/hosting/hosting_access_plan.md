@@ -566,9 +566,9 @@ class without leaking rejected secret values.
 
 ##### R3.2 Replace `access_control.json`
 
-- [ ] Move static authentication, role, session, and audit policy under
+- [x] Move static authentication, role, session, and audit policy under
   `control` while keeping keyring/audit/state records separate.
-- [ ] Change service constants and setup defaults to resolve the new file.
+- [x] Change service constants and setup defaults to resolve the new file.
 - [ ] Remove every reader, writer, fixture, and document that treats
   `access_control.json` as an authority.
 
@@ -577,10 +577,10 @@ precisely when only the old file exists; `rg` finds no production fallback.
 
 ##### R3.3 Add sanitized inspection and health
 
-- [ ] Report contract version, logical root refs, configuration health, source
+- [x] Report contract version, logical root refs, configuration health, source
   availability, and environment subsystem health.
-- [ ] Restrict local resolved paths to local administrative inspection.
-- [ ] Redact credential values, token material, key material, sensitive query
+- [x] Restrict local resolved paths to local administrative inspection.
+- [x] Redact credential values, token material, key material, sensitive query
   strings, and unrestricted host paths from remote status and errors.
 
 Proof: snapshot tests use sentinel secrets and local paths and assert they do
@@ -590,12 +590,12 @@ not appear in remote status, logs, audit messages, or exception strings.
 
 ##### R4.1 Replace startup inputs
 
-- [ ] Make foreground, background, service, CLI, and locally owned channel
+- [x] Make foreground, background, service, CLI, and locally owned channel
   bootstrap accept only the top-level MP13 configuration location needed to
   resolve `@hosting/hosting_config.json`.
-- [ ] Load and validate configuration before binding externally reachable
+- [x] Load and validate configuration before binding externally reachable
   listeners or accepting control requests.
-- [ ] Pass one normalized immutable configuration object into `EngineHostService`.
+- [x] Pass one normalized immutable configuration object into `EngineHostService`.
 - [ ] Capture a stable configuration revision in long-running plans/operations;
   reject their continuation after a restart under incompatible changed policy.
 
@@ -604,20 +604,20 @@ resolve the same logical configuration without credential-bearing arguments.
 
 ##### R4.2 Delete launcher configuration and five mappings
 
-- [ ] Remove the five `toolbox_*` constructor/settings mappings.
-- [ ] Delete `src/hosting/daemon/toolbox_launch_config.py`.
+- [x] Remove the five `toolbox_*` constructor/settings mappings.
+- [x] Delete `src/hosting/daemon/toolbox_launch_config.py`.
 - [ ] Remove `--toolbox-config-file`, `engine_host_toolbox_config_file`,
   ephemeral launch JSON creation, conflict handling, help text, and fixtures.
-- [ ] Do not leave deprecated parameters or permissive `**kwargs` sinks.
+- [x] Do not leave deprecated parameters or permissive `**kwargs` sinks.
 
 Proof: signature tests reject old arguments and `rg` returns zero relevant
 results in production, tests, and docs.
 
 ##### R4.3 Generalize startup readiness
 
-- [ ] Separate control readiness from package/environment configuration health.
-- [ ] Emit the exact R0 readiness codes and contract version.
-- [ ] Keep authentication usable for authorized diagnosis when a non-control
+- [x] Separate control readiness from package/environment configuration health.
+- [x] Emit the exact R0 readiness codes and contract version.
+- [x] Keep authentication usable for authorized diagnosis when a non-control
   package/environment subsystem is unhealthy, if the frozen policy permits it.
 
 Proof: readiness tests distinguish missing/invalid control, package, source,

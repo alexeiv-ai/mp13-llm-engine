@@ -48,8 +48,8 @@ and remaining permanent documents are migrated and the named proofs pass.
 | R1.4 Dependent read-only inventory | P0 | medium | Complete | DOC-R1 |
 | R1.5 Documentation cutover map | P0 | medium | Complete | DOC-R1 |
 | R2 Shared paths/config foundation | P0 | high | Complete | CODE-R2 |
-| R3 Unified hosting configuration | P0 | high | Active (R3.1 complete) | CODE-R3.1 |
-| R4 Single-path daemon startup | P0 | high | Not started | — |
+| R3 Unified hosting configuration | P0 | high | Active (legacy fixture/doc removal open) | CODE-R3.1/R4A |
+| R4 Single-path daemon startup | P0 | high | Active (legacy fixture/doc removal open) | CODE-R4A |
 | R5 Generic package subsystem | P0 | high | Complete | CODE-R5 |
 | R6 Generic environment subsystem | P0 | high | Active (foundation complete) | CODE-R6A |
 | R7 Toolbox adoption | P1 | high | Not started | — |
@@ -386,6 +386,21 @@ the slice.
   absent from remote inspection; invalid writes left the authority unchanged
 - Dependent handoff impact: the v3 static schema is executable; daemon startup
   and dependent adoption remain R3.2–R4 and R9.6 work
+
+### CODE-R4A — single-path production startup and readiness
+
+- Date: 2026-08-11
+- Plan IDs: R3.2–R3.3 and R4.1–R4.3 (partial); P0; high expertise
+- Outcome: all production startup modes load the top-level MP13 configuration
+  before listener construction and inject one immutable configuration; static
+  authority and mutable key/session/audit/runtime records are separate; the
+  launcher JSON module and five startup mappings are absent; generic readiness
+  keeps control diagnosis distinct from package/environment degradation
+- Proof: 21 focused configuration/startup tests passed at the production cut,
+  production searches found no old startup flags or authority filename, and
+  sentinel secrets/resolved paths were absent from remote inspection
+- Remaining: migrate or remove the inventoried legacy fixtures and permanent
+  documentation before closing the clean-cut checkboxes
 
 ### CODE-R5 — generic package management
 
