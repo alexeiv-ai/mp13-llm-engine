@@ -20,8 +20,9 @@ pre-publication rollout seam, candidate operation kinds, and shared validated
 candidate preparation, bounded get/renew, and ordinary gated candidate
 execution, exact warmed publication, discard, expiry cleanup, and restart
 reconciliation are committed. Maintenance references/GC now consume versioned
-generic environment protection and durable candidate cross-references; next,
-complete removal/GC/archive protection proofs across worker kinds and leases.
+generic environment protection and durable candidate cross-references. Removal
+and GC protection proofs are complete; finish archive/maintenance projection
+alignment to close R7.3.
 
 Resume in this order:
 
@@ -125,6 +126,7 @@ The pre-R7 P0 clean-cut items are complete.
 | CODE/TEST-R7.2H | Publish consumes only retained warmed runtime state and emits the existing apply result without rebuild/spawn; discard atomically becomes terminal before retiring non-active workers/references, and both deny in-flight leases; focused lifecycle/transport lane passed 13 tests. |
 | CODE/TEST-R7.2I | Recovery loads durable candidate truth before reconciling workers, preserves complete ready candidates, expires missing-worker candidates, cleans only non-active workers/references, and validates live generic reference/environment/package-lock identity; expanded R7.2 matrix passed 190 tests (one recorded real-daemon dependency fixture deselected). |
 | CODE/TEST-R7.3A | Generic environment authority exposes a versioned protection snapshot; toolbox references/consistency/repair/GC consume durable candidate truth and explicit candidate→engine/reference plus generic reference/execution cross-links; focused maintenance lane passed 34 tests. |
+| TEST-R7.3B | Generic GC and explicit removal preserve toolbox/other-worker references, active executions, and live candidate leases; environment/maintenance lane passed 31 tests. |
 | CODE-R8A–C | Versioned neutral state, Python/JS shared manager adoption, GC/repair controls passed focused coverage. |
 | CODE/TEST-R9 partial | Structured auth, role/hash authority, redaction, startup modes, generic lifecycle, and retry/restart identity passed focused coverage. |
 | TEST-R8.2C checkpoint | Workflow operation suite passed; full helper suite passed 116 tests on resume. |

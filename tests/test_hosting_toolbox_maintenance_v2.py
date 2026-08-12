@@ -175,10 +175,14 @@ def _configuration(*, protected: tuple[str, ...] = ()) -> dict:
 
 
 class _RemovalManager:
-    def __init__(self, *, references: dict[str, dict[str, int]] | None = None, result: str = "removed"):
+    def __init__(
+        self, *, references: dict[str, dict[str, int]] | None = None,
+        active_executions: list[dict] | None = None, result: str = "removed"
+    ):
         self.references = {str(key): dict(value) for key, value in dict(references or {}).items()}
         self.result = result
         self.removed: list[str] = []
+        self.active_executions = list(active_executions or [])
 
     def list_references(self, *, cursor: str = "", limit: int = 500):
         rows = [
@@ -201,7 +205,7 @@ class _RemovalManager:
         return {
             "contract": "hosting.environment_protection_snapshot.v1",
             "live_references": self.list_references()["references"],
-            "active_executions": [],
+            "active_executions": list(self.active_executions),
             "busy_environment_ids": [],
         }
 
@@ -350,6 +354,51 @@ def test_environment_remove_checks_unexpired_plan_confirmation_and_operation_ref
     )
 
     assert terminal["result"]["blocking_reference_kinds"] == ["plan", "confirmation", "operation"]
+
+
+def test_environment_remove_reports_generic_active_execution_blocker(tmp_path: Path) -> None:
+    service = _configured_service(tmp_path)
+    digest = _digest("e")
+    manager = _RemovalManager(active_executions=[{
+        "environment_id": digest,
+        "execution_id": "workflow-execution",
+        "started_at_ms": 1,
+    }])
+    service._environment_manager_instance = manager  # type: ignore[attr-defined]
+    terminal = _wait_remove(
+        service,
+        service.toolbox_environment_remove(
+            environment_digest=digest,
+            request_id="remove-active-execution",
+            owner_actor_id="admin:a",
+        ),
+    )
+    assert terminal["result"]["blocking_reference_kinds"] == ["execution"]
+    assert manager.removed == []
+
+
+def test_environment_remove_reports_live_candidate_lease_blockers(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from types import SimpleNamespace
+
+    service = _configured_service(tmp_path)
+    digest = _digest("f")
+    service._environment_manager_instance = _RemovalManager()  # type: ignore[attr-defined]
+    monkeypatch.setattr(
+        service._toolbox_definition_candidates,
+        "list",
+        lambda *, now_ms: (
+            SimpleNamespace(
+                state="ready",
+                retained_payload={"environment_key": digest},
+                execution_leases={"sha256:" + "1" * 64: 1},
+            ),
+        ),
+    )
+    assert service._environment_removal_blockers(environment_digest=digest) == [  # noqa: SLF001
+        "candidate", "execution"
+    ]
 
 
 def test_route_based_references_consistency_and_review(tmp_path: Path) -> None:

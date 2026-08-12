@@ -110,6 +110,13 @@ def test_references_busy_and_retention_guard_removal(tmp_path: Path) -> None:
         manager.remove(environment_id=environment_id)
     manager.release(reference_id=result["reference"]["reference_id"])
     manager.execution_begin(environment_id=environment_id, execution_id="execution-1")
+    protection = manager.protection_snapshot()
+    assert protection["contract"] == "hosting.environment_protection_snapshot.v1"
+    assert protection["active_executions"] == [{
+        "environment_id": environment_id,
+        "execution_id": "execution-1",
+        "started_at_ms": protection["active_executions"][0]["started_at_ms"],
+    }]
     with pytest.raises(EnvironmentError, match="environment_active"):
         manager.remove(environment_id=environment_id)
     assert manager.execution_end(execution_id="execution-1")["state"] == "ended"
@@ -226,6 +233,20 @@ def test_workflow_runtime_adapters_share_manager_and_keep_references_independent
         manager.remove(environment_id=js_result["receipt"]["environment_id"])
     javascript.release_shared_environment(reference_id=js_result["reference"]["reference_id"])
     assert manager.remove(environment_id=js_result["receipt"]["environment_id"])["state"] == "removed"
+
+
+def test_generic_gc_preserves_other_worker_reference_and_active_execution(tmp_path: Path) -> None:
+    manager, _ = _manager(tmp_path, retention_seconds=0)
+    workflow = manager.ensure(
+        _request(request_id="workflow", consumer_kind="workflow_python_helper", consumer_id="helper-1")
+    )
+    environment_id = workflow["receipt"]["environment_id"]
+    assert manager.gc()["removed_environment_ids"] == []
+    manager.release(reference_id=workflow["reference"]["reference_id"])
+    manager.execution_begin(environment_id=environment_id, execution_id="workflow-execution")
+    assert manager.gc()["removed_environment_ids"] == []
+    manager.execution_end(execution_id="workflow-execution")
+    assert manager.gc()["removed_environment_ids"] == [environment_id]
 
 
 def test_lower_roles_cannot_mutate_templates_environments_references_or_gc() -> None:

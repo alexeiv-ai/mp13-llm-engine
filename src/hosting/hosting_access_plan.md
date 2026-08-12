@@ -207,9 +207,9 @@ side-effect-free.
 - [ ] Route toolbox consistency, gate, reconcile, repair, review snapshot,
   references, GC, and archive behavior through generic package/environment
   operations where appropriate.
-- [ ] Keep toolbox-only and generic shared state in separately versioned
+- [x] Keep toolbox-only and generic shared state in separately versioned
   repositories with explicit cross-references.
-- [ ] Prove maintenance cannot remove content referenced by a toolbox, another
+- [x] Prove maintenance cannot remove content referenced by a toolbox, another
   worker kind, an active execution, or a live candidate lease.
 
 ### R9 — public acceptance and handoff
