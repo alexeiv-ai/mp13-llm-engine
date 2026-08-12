@@ -1,6 +1,7 @@
 # Unified hosting configuration and package/environment cutover plan
 
-Status: active breaking-change plan
+Status: active breaking-change plan; execution paused by user after the
+R3.2/R8.2 workflow-fixture cut on 2026-08-12
 
 This plan supersedes the completed toolbox-specific access plan. It defines the
 clean cut to one host-owned configuration file and one worker-neutral package

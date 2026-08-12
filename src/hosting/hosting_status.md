@@ -905,6 +905,22 @@ the slice.
   tests/test_hosting_service_security.py tests/test_hosting_configuration_v3.py
   -q --maxfail=30` passed all 97 tests; the control module compiles cleanly
 
+### TEST-R8.2C — workflow fixture v3 cut (paused checkpoint)
+
+- Date: 2026-08-12
+- Plan IDs: R3.2, R6.5, R8.2, and R9.3/R9.4 (partial); P0/P2; high expertise
+- Outcome: durable workflow-operation and workflow-helper fixtures now load v3
+  hosting configuration; 108 retired control-file constructor uses were removed,
+  and Python helper facade coverage requires the generic `environments` root
+- Removal proof: both workflow suites contain zero `control_state_file` or
+  `access_control.json` matches
+- Proof: the seven-test durable operation suite passed; the full helper suite
+  reached 114 passed and two failures in 174.68 seconds, after which the stale
+  root assertion was corrected and both formerly failing tests passed together
+  in 4.58 seconds
+- Pending after resume: rerun the complete 116-test helper suite before treating
+  this paused checkpoint as final R8.2 aggregate evidence
+
 Append one concise entry per completed slice. Include exact commands, counts,
 durations where useful, negative-path results, commit pin, and dependent receipt
 impact. Do not paste an unstructured full test transcript.
@@ -913,7 +929,9 @@ impact. Do not paste an unstructured full test transcript.
 
 Current blockers: none recorded
 
-Execution pause: none; R3.2 is active.
+Execution pause: requested by the user on 2026-08-12 after the R3.2/R8.2
+workflow-fixture checkpoint. Resume with the full workflow-helper rerun, then
+continue R7 adoption and repository-wide R9.4 removal work.
 
 External evidence required before final completion:
 
