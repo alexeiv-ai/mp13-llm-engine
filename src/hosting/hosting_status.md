@@ -15,8 +15,10 @@ compact evidence index, and external completion gates.
 **R7.2 is active at the durable candidate-record boundary.** R7.1 planning and selective revision is complete:
 generic locks/requests, CAS changes, evidence, child replanning, exact public
 projections, and stale/retry/restart/concurrency safety proofs are committed.
-The strict v3 candidate retention/quota policy prerequisite is complete. Next,
-split preparation from publication and persist the exact warmed candidate.
+The strict v3 candidate retention/quota policy, durable candidate repository,
+pre-publication rollout seam, and candidate operation kinds are committed.
+Next, share confirmation/pin/approval validation between one-shot apply and
+candidate preparation, then persist the exact warmed candidate from that seam.
 
 Resume in this order:
 
@@ -73,11 +75,12 @@ The pre-R7 P0 clean-cut items are complete.
 
 ### R7.2 candidate lifecycle
 
-- Split existing candidate preparation from publication without adding a worker
-  kind or generic code-execution endpoint.
-- Implement durable candidate records, bounded read, requested lifetime,
-  renewal, in-flight execution leases, restart reconciliation, quotas, expiry,
-  discard, and exact warmed-candidate publication.
+- Wire the committed pre-publication seam to durable candidate preparation
+  without adding a worker kind or generic code-execution endpoint.
+- Expose the committed bounded records, requested lifetime, renewal, and
+  in-flight lease primitives through get/renew/execute/publish/discard.
+- Add restart reconciliation, resource cleanup, stale-pin revalidation, and
+  exact warmed-candidate publication.
 - Enforce the same execution gates, sandbox, host-API/data/network approvals,
   callbacks, audit, timeout, and cancellation policy as active tools.
 - Add `toolbox_candidate_retention_ms` and
@@ -112,6 +115,10 @@ The pre-R7 P0 clean-cut items are complete.
 | CODE/TEST-R7.1E | Authorized selective revision validates complete decisions/evidenced denials, preserves active exclusions, cascades dependents, and fully replans parent-bound immutable children (including empty results); expanded lane passed 143 tests. |
 | CODE/TEST-R7.1F | Public plans enforce the frozen exact v2 projection with nested change IDs; confirmation emits the exact v1 projection or revision-required failure without a receipt; expanded lane passed 153 tests. |
 | CODE/TEST-R7.1G | Planned artifacts are rehashed at confirmation; stale approvals do not consume, same-request restart retry is idempotent, changed requests fail, and materialization failure acquires no reference/spawns no worker; expanded lane passed 156 tests. |
+| CODE/TEST-R7.2A | Strict v3 lifecycle policy normalizes bounded candidate retention/quota defaults and exposes sanitized health; configuration/startup/setup lane passed 31 tests. |
+| CODE/TEST-R7.2B | Actor-bound candidate records persist bounded projections, repeated idempotent renewal, quotas, terminal states, and expiry-deferring execution leases across restart; focused lane passed 25 tests. |
+| CODE/TEST-R7.2C | Rollout preparation is split before publication while one-shot apply preserves atomic routing and failure cleanup; rollout/atomic lane passed 11 tests. |
+| CODE/TEST-R7.2D | Candidate prepare/publish/discard have distinct durable operation kinds and strict phase sets; operation contract/repository lane passed 55 tests. |
 | CODE-R8A–C | Versioned neutral state, Python/JS shared manager adoption, GC/repair controls passed focused coverage. |
 | CODE/TEST-R9 partial | Structured auth, role/hash authority, redaction, startup modes, generic lifecycle, and retry/restart identity passed focused coverage. |
 | TEST-R8.2C checkpoint | Workflow operation suite passed; full helper suite passed 116 tests on resume. |
