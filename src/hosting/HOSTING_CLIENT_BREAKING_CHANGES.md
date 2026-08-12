@@ -1,6 +1,6 @@
 # Unified hosting client breaking changes
 
-Status: reset for the unified hosting configuration and package/environment cut
+Status: R0 contract frozen; parent implementation and dependent adoption pending
 
 This is the active handoff for the breaking plan in
 [`hosting_access_plan.md`](hosting_access_plan.md). The previous toolbox rollout
@@ -17,15 +17,380 @@ Do not begin a client-visible parent implementation slice until its exact
 request, response, error, capability, and version contract is frozen here.
 Directional names in this reset are not permission to infer missing payloads.
 
-- [ ] Record the new daemon/control contract major version.
-- [ ] Publish a complete retained/renamed/removed command manifest.
-- [ ] Publish exact request and response schemas for every renamed command.
-- [ ] Publish generic readiness codes and the old-to-new disposition table.
-- [ ] Publish startup/configuration argument signatures.
-- [ ] Publish operation kinds, selectors, progress phases, and receipts.
-- [ ] Publish state/receipt contract versions and old-version rejection errors.
+- [x] Record the new daemon/control contract major version.
+- [x] Publish a complete retained/renamed/removed command manifest.
+- [x] Publish exact request and response schemas for every renamed command.
+- [x] Publish generic readiness codes and the old-to-new disposition table.
+- [x] Publish startup/configuration argument signatures.
+- [x] Publish operation kinds, selectors, progress phases, and receipts.
+- [x] Publish state/receipt contract versions and old-version rejection errors.
 - [ ] Record the parent implementation pin.
 - [ ] Record each dependent owner, revision, test receipt, and adoption status.
+
+### 1.1 Frozen R0 contract
+
+The following is the R0 freeze. It is the exact client-visible contract for the
+first breaking implementation slice; later slices may add fields only through
+the versioned rules below. Unknown fields are rejected. No old command, field,
+file, or state record is translated or used as a fallback.
+
+#### Control version and envelope
+
+- The daemon/control major is **3**, named `hosting.control.v3`.
+- Every control response includes `contract: "hosting.control.v3"` and
+  `contract_major: 3`; capability negotiation advertises the same values.
+- A request sent with another major, or without a supported contract marker,
+  fails with:
+
+```json
+{
+  "ok": false,
+  "error": "contract_mismatch",
+  "error_code": "hosting_contract_major_unsupported",
+  "error_details": {
+    "expected_contract": "hosting.control.v3",
+    "expected_major": 3,
+    "received_contract": "hosting.control.v2"
+  }
+}
+```
+
+- A request envelope is `{contract, request_id, command, payload}`. `request_id`
+  is an opaque non-empty ASCII identifier, at most 256 bytes, and is stable
+  across retries. Responses are `{ok, result}` or the error object above;
+  durable operations additionally return the versioned operation status below.
+- The daemon version begins at `3.0.0` for this cut. The existing worker IPC
+  protocol versions are independent and are not control-channel versions.
+
+#### Configuration authority, roots, and records
+
+`<config root>/hosting/hosting_config.json` is the only static hosting
+authority and has contract `hosting.configuration.v3`. The top-level MP13
+configuration owns these logical roots:
+
+```json
+{
+  "category_dirs": {
+    "hosting_root_dir": "@home/.mp13-llm/hosting",
+    "packages_root_dir": "@home/.mp13-llm/packages",
+    "environments_root_dir": "@home/.mp13-llm/environments"
+  }
+}
+```
+
+The only root-definition anchors are `@home`, `@config`, and `@temp`.
+Persistent root definitions cannot use `@project`, another persistent label,
+an absolute path, `..`, or a traversal escape. After host-local resolution the
+three persistent roots must be existing-or-creatable directories and must not
+overlap one another. Normal hosting configuration values may reference
+`@hosting`, `@packages`, and `@environments` with forward-slash logical paths;
+logical values are preserved on save and resolved only at a host boundary.
+
+Root examples are frozen: `@home/.mp13-llm/packages` and
+`@config/hosting` are valid root values; `@project/packages`,
+`@home/../outside`, `C:\\outside`, and a root value of `@packages` are
+rejected. `@packages/artifacts` is valid in a normal hosting value, while a
+cycle such as `hosting_root_dir: "@packages"` plus
+`packages_root_dir: "@hosting"` is rejected before resolution.
+
+The layout and writer authority are fixed:
+
+| Location | Class | Writer |
+|---|---|---|
+| `hosting/hosting_config.json` | static configuration | local hosting setup/config library only |
+| `hosting/keyring/` | key and credential material | local setup/keyring writer; daemon reads |
+| `hosting/audit/` | append-only audit records | daemon only |
+| `hosting/state/` | mutable daemon and operation state | daemon only |
+| `hosting/scratch/` | incomplete uploads/builds | daemon only; policy-based reap |
+| `packages/artifacts/`, `packages/locks/` | immutable package content/locks | daemon only |
+| `environments/templates/`, `environments/receipts/`, `environments/content/` | immutable templates, receipts, and built environments | daemon only |
+
+Setup may create directories but may not write daemon records. The daemon
+reads static configuration at startup and never rewrites it. Remote responses
+contain logical roots only; local setup inspection may additionally return
+resolved paths. Credential values, tokens, key material, and unrestricted host
+paths are never returned.
+
+#### Authorization and artifact identity
+
+The effective role and scope are evaluated from the server-side authenticated
+session. Password and public-key sessions with the same role and scope are
+equivalent.
+
+| Operation | Minimum authority |
+|---|---|
+| source or credential policy | `admin` |
+| package upload for an assigned consumer | `worker_user` for that consumer, or `admin` |
+| package lock approval | `dependency_approver` or `admin` |
+| template create/replace/activate/deprecate/revoke | `admin` |
+| environment request/reference acquire/release for an assigned consumer | `worker_user` for that consumer, or `admin` |
+| environment removal and garbage collection | `admin` |
+| toolbox or worker administration outside the caller's assignment | `admin` |
+| read-only status/list/diagnostics | `diagnostic_user`, `worker_user`, or `admin` as scoped |
+
+Every received artifact is streamed into daemon-owned scratch space, hashed by
+the daemon with SHA-256, and promoted atomically under the resulting canonical
+identity `sha256:<64 lowercase hex digits>`. A caller-supplied digest is an
+optional expectation; it never proves stored bytes. Audit records contain an
+event ID, actor ID, effective role/scope, request/operation ID, result, and
+configuration revision, but never secrets or unrestricted paths.
+
+The authorization table applies identically to password and public-key
+sessions: a matching role/scope pair receives the same allow or deny result;
+the authentication method is recorded for audit only.
+
+#### Neutral package and environment records
+
+The strict record contracts are:
+
+`hosting.package_source.v1`, `hosting.package_policy.v1`,
+`hosting.package_lock.v1`, `hosting.environment_template.v1`,
+`hosting.environment_request.v1`, `hosting.environment_lock.v1`,
+`hosting.environment_receipt.v1`, and `hosting.environment_reference.v1`.
+
+All reject unknown fields. IDs are 1–128 byte opaque ASCII values; revisions
+are positive integers; digests use the canonical `sha256:` form. References
+always contain `consumer_kind`, `consumer_id`, and `revision`. The minimum
+schemas are:
+
+```json
+{
+  "contract": "hosting.package_source.v1",
+  "source_id": "internal-wheelhouse",
+  "kind": "local",
+  "locator": "@packages/artifacts",
+  "credential_ref": null,
+  "enabled": true,
+  "priority": 100
+}
+```
+
+```json
+{
+  "contract": "hosting.package_policy.v1",
+  "policy_id": "default",
+  "revision": 1,
+  "allowed_source_ids": ["internal-wheelhouse"],
+  "allowed_platforms": ["win_amd64"],
+  "allowed_runtimes": ["python"],
+  "max_artifact_bytes": 67108864,
+  "require_sha256": true,
+  "optional_verifier": null
+}
+```
+
+```json
+{
+  "contract": "hosting.package_lock.v1",
+  "lock_id": "lock-01",
+  "revision": 1,
+  "policy_id": "default",
+  "policy_revision": 1,
+  "artifacts": [{"artifact_id": "sha256:0000000000000000000000000000000000000000000000000000000000000000", "size_bytes": 1234, "source_id": "internal-wheelhouse"}],
+  "dependencies": [{"name": "numpy", "version": "1.26.4", "artifact_id": "sha256:0000000000000000000000000000000000000000000000000000000000000000"}],
+  "lock_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+}
+```
+
+```json
+{
+  "contract": "hosting.environment_template.v1",
+  "template_id": "py-compute",
+  "revision": 3,
+  "runtime_kind": "python",
+  "builder_id": "python-venv-v1",
+  "package_lock_id": "lock-01",
+  "platforms": ["win_amd64"],
+  "state": "active"
+}
+```
+
+```json
+{
+  "contract": "hosting.environment_request.v1",
+  "request_id": "req-01",
+  "consumer_kind": "toolbox",
+  "consumer_id": "toolbox-01",
+  "revision": 7,
+  "template_id": "py-compute",
+  "template_revision": 3,
+  "package_lock_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+  "runtime_kind": "python",
+  "platform": "win_amd64",
+  "configuration_revision": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+}
+```
+
+`hosting.environment_lock.v1` records the immutable content key and the exact
+runtime, platform, template revision, package-lock digest, and policy inputs.
+`hosting.environment_receipt.v1` adds the verified environment ID, content key,
+receipt revision, and logical root reference. `hosting.environment_reference.v1`
+contains `{reference_id, environment_id, consumer_kind, consumer_id, revision,
+acquired_at_ms, released_at_ms|null}`. None of these records contains a
+credential, token, or resolved absolute path.
+
+The same request shape is used by non-toolbox workers. For example, a Python
+workflow helper uses `consumer_kind: "workflow_python_helper"`, its stable
+`consumer_id`, and its own definition revision while resolving the same package
+lock and template as a toolbox; it does not use a toolbox-owned record.
+
+#### Command cutover and readiness
+
+The renamed command payloads are strict and use the common envelope. Successful
+upload responses return an artifact identity; asynchronous commands return a
+`hosting.operation_status.v3` operation reference.
+
+| Removed command | Replacement | Request payload | Success result |
+|---|---|---|---|
+| `toolbox-artifact-upload-begin` | `package-artifact-upload-begin` | `source_id`, `total_size`, optional `expected_digest`, `request_id` | `upload_id`, `chunk_size`, `expires_at_ms`, `configuration_revision` |
+| `toolbox-artifact-upload-chunk` | `package-artifact-upload-chunk` | `upload_id`, `chunk_index`, `offset`, `chunk_base64url` | `upload_id`, `received_bytes`, `next_chunk_index` |
+| `toolbox-artifact-upload-status` | `package-artifact-upload-status` | `upload_id` | `upload_id`, `state`, `received_bytes`, optional `computed_digest` |
+| `toolbox-artifact-upload-cancel` | `package-artifact-upload-cancel` | `upload_id`, `request_id` | `upload_id`, `state: cancelled` |
+| `toolbox-artifact-upload-commit` | `package-artifact-upload-commit` | `upload_id`, `request_id` | `artifact_id`, `digest`, `size_bytes`, `receipt` |
+| `toolbox-template-list` | `environment-template-list` | `include_revoked` (boolean, default false) | `templates[]`, `configuration_revision` |
+| `toolbox-template-describe` | `environment-template-describe` | `template_id`, optional `revision` | one `hosting.environment_template.v1` record |
+| `toolbox-template-construct` | `environment-template-construct` | `template_id`, `base_revision`, `imports[]`, `package_requirements[]`, `request_id` | operation status |
+| `toolbox-template-activate` | `environment-template-activate` | `template_id`, `revision`, `request_id` | template record |
+| `toolbox-template-replace` | `environment-template-replace` | `template_id`, `expected_active_revision`, `replacement`, `request_id` | template record |
+| `toolbox-template-deprecate` | `environment-template-deprecate` | `template_id`, `revision`, `request_id` | template record |
+| `toolbox-template-revoke` | `environment-template-revoke` | `template_id`, `revision`, `request_id` | template record |
+| `toolbox-template-prewarm` | `environment-template-prewarm` | `template_id`, optional `revision`, `runtime_kind`, `platform`, `request_id` | operation status |
+| `toolbox-environment-remove` | `environment-remove` | `environment_id`, `request_id` | operation status, or a frozen removal-denial code |
+
+`toolbox-get-definition`, `toolbox-plan-definition`,
+`toolbox-confirm-definition-plan`, `toolbox-approve-confirmed-definition-plan`,
+`toolbox-apply-definition`, `toolbox-execute`, and toolbox describe,
+consistency, repair, reconcile, review, references, and archive commands remain
+toolbox-specific. `toolbox-gc` is replaced by generic `hosting-gc`; its selector
+is `{kind: "host_scope", id: "hosting"}` and it marks from every worker
+reference before sweeping.
+
+The complete toolbox command disposition is:
+
+- retained: `toolbox-get-definition`, `toolbox-plan-definition`,
+  `toolbox-confirm-definition-plan`,
+  `toolbox-approve-confirmed-definition-plan`, `toolbox-apply-definition`,
+  `toolbox-execute`, `toolbox-describe`, `toolbox-describe-refresh`,
+  `toolbox-consistency`, `toolbox-gate`, `toolbox-reconcile`,
+  `toolbox-references`, `toolbox-repair`, and `toolbox-review-snapshot`;
+- renamed: every upload/template/environment command enumerated in the table
+  above, plus `toolbox-gc` to `hosting-gc`; and
+- removed without an alias: `toolbox-state-archive-v1`. The v3 daemon rejects
+  old state directly and provides only the separately authorized local cleanup
+  procedure; it does not expose a remote legacy-state archive command.
+
+Strings such as `toolbox-host`, `toolbox-ready`, `toolbox-executor-v1`, and
+`toolbox-host-capability-dispatch` are internal selectors, readiness states, or
+worker contracts rather than control commands. Their owning slices either
+retain them for toolbox execution semantics or version them independently;
+they are not command aliases.
+
+The exact generic readiness codes are:
+
+| Old code | New code |
+|---|---|
+| `toolbox_configuration_missing` | `hosting_configuration_missing` |
+| `toolbox_configuration_incomplete` | `hosting_configuration_incomplete` |
+| `toolbox_configuration_invalid` | `hosting_configuration_invalid` |
+| `toolbox_source_binding_invalid` | `package_source_invalid` |
+| — | `hosting_configuration_unsupported` |
+| — | `package_source_unavailable` |
+| — | `package_credential_unavailable` |
+| — | `package_policy_rejected` |
+| — | `package_artifact_hash_mismatch` |
+| — | `environment_template_unavailable` |
+| — | `environment_build_failed` |
+| — | `environment_referenced`, `environment_busy`, `environment_retained` |
+
+Readiness uses `hosting.readiness.v1` with exactly `status` (`ready`,
+`degraded`, or `unavailable`), `code`, `summary`, `subsystem`, and
+`configuration_revision`. It never includes credentials or resolved paths.
+
+#### Durable operations
+
+The operation contracts are `hosting.operation_ref.v3`,
+`hosting.operation_status.v3`, `hosting.result_ref.v3`, and
+`hosting.result_omission.v3`. Operation kinds and selectors are:
+
+| Kind | Selector | Phases |
+|---|---|---|
+| `package_artifact_upload` | `upload_id` | `validation`, `ingress`, `hashing`, `promotion`, `receipt` |
+| `environment_template` | `template_id` | `validation`, `resolution`, `artifact_verification`, `environment_build`, `receipt_commit`, `publication`, `cleanup` |
+| `environment_remove` | `environment_id` | `validation`, `reference_check`, `removal`, `cleanup` |
+| `hosting_gc` | `host_scope=hosting` | `validation`, `mark`, `sweep`, `cleanup` |
+
+The status shape is `{contract, api_status, operation, lifecycle, request_id,
+created_at_ms, updated_at_ms, reason, result, progress}`. A retry with the same
+`(owner_actor_id, receipt_namespace, request_id)` and identical fingerprint
+returns the original operation; a different fingerprint returns
+`operation_idempotency_conflict` and performs no mutation.
+
+#### Clean-cut state and rejection
+
+The new repositories use the record contracts above plus
+`hosting.upload.v1`, `hosting.operation.v3`, and `hosting.configuration.v3`.
+The following are rejected as unsupported, never read as fallback data:
+
+- `access_control.json`, toolbox launcher JSON, and the five toolbox startup
+  mapping fields;
+- `hosting.toolbox.artifact_store.v2`, `hosting.toolbox.artifact_uploads.v1`,
+  `hosting.toolbox.environment.v2`, `hosting.toolbox.environment_references.v1`,
+  `hosting.toolbox.template_catalog_state.v1`, and toolbox-owned receipt/state
+  identifiers;
+- unversioned or v1 operation/result envelopes and all old toolbox command
+  names; and
+- `toolbox_venvs`, `runtime_envs`, and `toolbox_environment_cache`.
+
+The stable rejection is `{ok:false, error:"unsupported_state_contract",
+error_code:"state_contract_unsupported", error_details:{received_contract,
+supported_contracts}}`. A host containing only `access_control.json` fails with
+`hosting_configuration_missing`; it is not imported. Legacy environments are
+rebuilt under `@environments` and are never discovered, reused, referenced, or
+garbage-collected by the new daemon. Operator cleanup is a separate local
+action.
+
+#### Host-local root customization
+
+The host-local setup API uses `hosting.setup.v1` requests:
+
+```json
+{
+  "contract": "hosting.setup.v1",
+  "operation": "plan|apply|inspect|status|reset",
+  "config_file": "C:/host/mp13.json",
+  "roots": {
+    "hosting_root_dir": "@home/.mp13-llm/hosting",
+    "packages_root_dir": "@home/.mp13-llm/packages",
+    "environments_root_dir": "@home/.mp13-llm/environments"
+  },
+  "expected_config_revision": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+  "expected_hosting_revision": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+  "allow_nonempty_destinations": false,
+  "confirm": false
+}
+```
+
+`plan` returns logical roots, local resolved roots, revisions, and preflight
+results for permissions, collisions, free space, non-empty destinations,
+daemon activity, and cross-volume moves. `apply` requires matching expected
+revisions and `confirm:true`; it returns `hosting.setup.result.v1` with the new
+revisions and journal state. `inspect` and `status` are local-only and may show
+resolved paths. `reset` requires `confirm:true`, preserves audit history, and
+does not delete packages or environments.
+
+When both top-level configuration and `hosting_config.json` change, the setup
+library writes a local journal with phases `prepared`, `top_level_written`,
+`hosting_written`, and `committed`. Each file uses locked temporary write,
+fsync, and replace semantics. Recovery is idempotent; active-daemon relocation,
+unsafe destinations, and unapproved cross-volume moves are refused. No remote
+control command can relocate roots, and no cross-filesystem atomic rename is
+claimed.
+
+If interrupted in `prepared`, recovery discards the temporary files; in
+`top_level_written`, it restores the last complete pair; in
+`hosting_written`, it completes or rolls back both files according to the
+recorded target revisions; and in `committed`, it only removes journal scratch.
+Every recovery path is idempotent and leaves one declared revision pair.
 
 ## 2. Ownership and rollout
 
@@ -75,9 +440,10 @@ and `environments_root_dir`, exposed as `@hosting`, `@packages`, and
 not manufacture daemon-local absolute paths.
 
 Daemon startup receives only the top-level MP13 configuration location needed
-to resolve the hosting configuration locally. The exact Python parameter, CLI
-flag, and control-setting names remain gated by R0.5 and must be inserted here
-before implementation.
+to resolve the hosting configuration locally. The frozen local parameter is
+`mp13_config_file`; the CLI flag is `--mp13-config-file`; and the locally owned
+channel setting is `engine_host_mp13_config_file`. None may contain credentials
+or a hosting-specific launcher map.
 
 Static authentication, source, credential, dependency, retention, and root
 policy is host-local and becomes active after deliberate daemon restart.
@@ -91,8 +457,8 @@ operations after startup and do not rewrite `hosting_config.json`.
 - [ ] Remove the old CLI/control-setting names and conflict branching.
 - [ ] Stop reading `access_control.json` as readiness or configured-state truth.
 - [ ] Do not expose credentials or host paths in arguments, logs, status, or UI.
-- [ ] If the dependent owns local daemon bootstrap, adopt the exact new
-  top-level configuration argument after R0.5 freezes it.
+- [ ] If the dependent owns local daemon bootstrap, adopt
+  `--mp13-config-file`/`engine_host_mp13_config_file`.
 
 ## 4. Authorization and artifact identity
 
@@ -156,13 +522,13 @@ role-probing workaround.
 
 | Removed | Replacement | Exact payload status |
 |---|---|---|
-| `toolbox-artifact-upload-begin` | `package-artifact-upload-begin` | Pending R0.5 |
-| `toolbox-artifact-upload-chunk` | `package-artifact-upload-chunk` | Pending R0.5 |
-| `toolbox-artifact-upload-status` | `package-artifact-upload-status` | Pending R0.5 |
-| `toolbox-artifact-upload-cancel` | `package-artifact-upload-cancel` | Pending R0.5 |
-| `toolbox-artifact-upload-commit` | `package-artifact-upload-commit` | Pending R0.5 |
-| `toolbox-template-*` | `environment-template-*` | Pending R0.5 |
-| `toolbox-environment-remove` | `environment-remove` | Pending R0.5 |
+| `toolbox-artifact-upload-begin` | `package-artifact-upload-begin` | Frozen in §1.1 |
+| `toolbox-artifact-upload-chunk` | `package-artifact-upload-chunk` | Frozen in §1.1 |
+| `toolbox-artifact-upload-status` | `package-artifact-upload-status` | Frozen in §1.1 |
+| `toolbox-artifact-upload-cancel` | `package-artifact-upload-cancel` | Frozen in §1.1 |
+| `toolbox-artifact-upload-commit` | `package-artifact-upload-commit` | Frozen in §1.1 |
+| `toolbox-template-*` | `environment-template-*` | Frozen in §1.1 |
+| `toolbox-environment-remove` | `environment-remove` | Frozen in §1.1 |
 
 There are no old-name aliases. Generic package/environment requests and
 references carry `consumer_kind`, `consumer_id`, and `revision` where frozen by
@@ -180,11 +546,11 @@ semantics:
 - `toolbox-apply-definition`
 - `toolbox-execute`
 - toolbox describe, consistency, gate, reconcile, repair, review, references,
-  GC, and archive commands whose exact disposition is recorded by R0.5
+  GC, and archive commands; `toolbox-gc` is replaced by `hosting-gc`.
 
 Retaining a name does not guarantee that every nested package/environment
-field remains unchanged. R0.5 must publish any nested identity, receipt,
-operation, or readiness changes before the owning parent slice begins.
+field remains unchanged. Nested identities, receipts, operations, and readiness
+use the frozen generic contracts in §1.1.
 
 ### Removed environment ownership
 
@@ -210,7 +576,7 @@ The following current readiness family is removed:
 - `toolbox_configuration_invalid`
 - `toolbox_source_binding_invalid`
 
-R0.5 must replace this section with an exact mapping covering:
+The exact mapping is:
 
 - unsupported/missing/invalid hosting configuration;
 - unavailable package source or credential;
@@ -239,8 +605,9 @@ Plans and operations pin the active hosting configuration revision. A restart
 under changed static policy makes incompatible pending work stale; clients
 must re-plan rather than silently continuing under new policy.
 
-The exact durable operation kinds, selectors, phases, retry rules, cancellation
-rules, and receipts for renamed generic commands are pending R0.4/R0.5.
+The durable operation kinds, selectors, phases, retry rules, cancellation rules,
+and receipts are frozen in §1.1. Static policy changes invalidate a pending
+operation whose pinned configuration revision is no longer compatible.
 
 ## 9. State and local data cut
 
@@ -253,14 +620,62 @@ rules, and receipts for renamed generic commands are pending R0.4/R0.5.
   remain separate records/data even though static configuration has one
   authority.
 
-R0.6 must add the exact old contract identifiers, new contract identifiers,
-and stable rejection errors here before their implementation slice begins.
+The exact old/new identifiers and stable rejection error are frozen in §1.1;
+implementations must fail closed with `state_contract_unsupported` and must not
+attempt migration or legacy discovery.
 
 ## 10. Adoption receipt
 
+### 10.1 Dependent implementation map (R1.1/R1.4)
+
+The inspected dependent is `mp13-docs`, branch `redesign/cards_workflows`, at
+revision `a36400e8af908f702a4db84e4fdb1894ac28da36`. The inspection was read-only.
+Its existing untracked `parent_project_feature.md` is user-owned and was not
+read, edited, or included as evidence.
+
+The dependent team owns these changes:
+
+| Boundary | Stable files and symbols | Required adoption |
+|---|---|---|
+| Contract gate | `src/backend/app/factory.py::MIN_HOST_DAEMON_VERSION`, `REQUIRED_HOST_DAEMON_CAPABILITIES`; `src/backend/platform/hosting/daemon_contract.py::ensure_min_daemon_contract` | Require `hosting.control.v3`, major 3, daemon `3.0.0+`, and the generic package/environment capabilities. Reject v2 rather than branching around it. |
+| Authentication | `src/backend/platform/hosting/hosting_admin.py::_require_authentication_result_mapping`, `public_key_session_payload`; `src/backend/platform/hosting/daemon_sessions.py::ensure_daemon_session_for_backend_client` | Preserve `token`, `role`, `scope`, `auth_method`, `key_id`, and `reused` for both fresh and cached sessions. Keep token redaction only in external projections. |
+| Readiness projection | `src/backend/platform/capabilities/parent_truth.py::sanitize_parent_toolbox_summary`; `src/backend/platform/capabilities/runtimes.py`; `src/backend/platform/toolboxes/definition_coordinator.py::_PARENT_RUNTIME_FAILURE_CODES` | Replace the four removed toolbox configuration codes with the §1.1 generic readiness codes and retain `subsystem` plus `configuration_revision`. |
+| UI remediation | `src/ui/web/static/js/features/chat/CapabilityToolsPanel.js::normalizeRuntime`, `readinessRemediation` | Branch on the frozen generic codes, distinguish configuration/package/environment failures, and remove mandatory-signed-package guidance. |
+| Toolbox plan/apply shapes | `src/backend/platform/toolboxes/definition_coordinator.py::_safe_environments`, `_safe_plan`, `_safe_confirmation`, `_safe_operation_status`, `ToolboxDefinitionCoordinator`; `src/backend/platform/toolboxes/hosted_store.py` | Carry package-lock and environment identities, consumer kind/ID/revision, configuration revision, and v3 operation records without translating old state. |
+| Capability routes | `src/backend/app/routers/capabilities.py`; `src/backend/platform/capabilities/runtimes.py`; `src/ui/web/static/js/features/chat/CapabilityToolsController.js` | Adopt generic environment/template/package responses while keeping toolbox definition semantics toolbox-specific. |
+| Startup/configuration | `src/backend/platform/hosting/hosting_admin.py::plan_local_hosting_config_payload`, `apply_local_hosting_config_payload`; `src/backend/app/routers/hosting_config.py` | Use `engine_host_mp13_config_file`/`--mp13-config-file`, logical roots, and `hosting.setup.v1`; remove `access_control.json` readiness assumptions. |
+
+No direct generic command strings are currently present in dependent production
+code; the dependent primarily calls typed parent-channel helpers. The only
+removed command-family match is the intentional negative assertion in
+`tests/backend_infra/test_toolbox_replacement_residuals.py`; it must be updated
+to assert all command names in §1.1 are absent rather than treated as a runtime
+caller.
+
+Minimum dependent proof is:
+
+- `tests/backend_infra/test_backend_client_auth.py`: fresh and cached
+  role-bearing public-key results plus an admin-only call without re-handshake;
+- `tests/backend_infra/test_parent_toolbox_truth.py` and
+  `test_capability_runtimes.py`: exact readiness mapping and sanitized
+  configuration revision;
+- `tests/backend_infra/test_toolbox_definition_coordinator.py` and
+  `test_hosting_definition_adoption.py`: generic locks, references, v3
+  operations, retry, restart, and stale-policy rejection;
+- UI contract tests for `CapabilityToolsPanel.js` and
+  `CapabilityToolsController.js`: generic remediation and no host-path/secret
+  projection; and
+- `tests/backend_infra/test_toolbox_replacement_residuals.py`: removed command,
+  field, code, and compatibility vocabulary has no production matches.
+
+The dependent owner is the `mp13-docs` maintainer team; no individual owner is
+declared in-repository. Completion therefore requires a named maintainer in the
+receipt below, a full dependent commit, the commands/results above, and the
+parent implementation pin against which they ran.
+
 | Field | Required value | Current value |
 |---|---|---|
-| Parent contract major | Exact version | Pending R0.5 |
+| Parent contract major | Exact version | `hosting.control.v3` / `3` |
 | Parent implementation pin | Full commit | Pending |
 | Dependent owner | Team/person | Pending |
 | Dependent revision | Full commit | Pending |

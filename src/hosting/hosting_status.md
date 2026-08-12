@@ -2,7 +2,7 @@
 
 Last updated: 2026-08-11
 
-Status: active; contract freeze not started
+Status: active; R0–R1 complete; paused before R2
 
 This is the fresh execution ledger for
 [`hosting_access_plan.md`](hosting_access_plan.md). The prior toolbox corrective
@@ -13,30 +13,30 @@ complete.
 
 ## 1. Current gate
 
-Current continuous block: A — contract freeze (`average`, P0)
+Current continuous block: C — implementation and acceptance (`high`, P0–P2)
 
 Active slice: none
 
-Implementation is gated on R0.1–R0.7 and the exact client-visible portions of
-[`HOSTING_CLIENT_BREAKING_CHANGES.md`](HOSTING_CLIENT_BREAKING_CHANGES.md).
-This is a planned sequencing gate, not a technical blocker.
+R0.1–R0.7 and R1.1–R1.5 are complete. Work is intentionally paused before R2;
+no production implementation slice has started and no dependent adoption is
+claimed.
 
 ## 2. Progress ledger
 
 | Work | Priority | Expertise | Status | Evidence |
 |---|---:|---|---|---|
-| R0.1 File ownership/layout | P0 | average | Not started | — |
-| R0.2 Root-label semantics | P0 | average | Not started | — |
-| R0.3 Authority/artifact identity | P0 | average | Not started | — |
-| R0.4 Generic contracts | P0 | average | Not started | — |
-| R0.5 Commands/readiness/version | P0 | average | Not started | — |
-| R0.6 Clean-cut state behavior | P0 | average | Not started | — |
-| R0.7 Host-local root customization | P0 | average | Not started | — |
-| R1.1 Exact dependent handoff | P0 | medium | Not started | — |
-| R1.2 Production inventory | P0 | medium | Not started | — |
-| R1.3 Tests/fixtures inventory | P0 | medium | Not started | — |
-| R1.4 Dependent read-only inventory | P0 | medium | Not started | — |
-| R1.5 Documentation cutover map | P0 | medium | Not started | — |
+| R0.1 File ownership/layout | P0 | average | Complete | DOC-R0 |
+| R0.2 Root-label semantics | P0 | average | Complete | DOC-R0 |
+| R0.3 Authority/artifact identity | P0 | average | Complete | DOC-R0 |
+| R0.4 Generic contracts | P0 | average | Complete | DOC-R0 |
+| R0.5 Commands/readiness/version | P0 | average | Complete | DOC-R0 |
+| R0.6 Clean-cut state behavior | P0 | average | Complete | DOC-R0 |
+| R0.7 Host-local root customization | P0 | average | Complete | DOC-R0 |
+| R1.1 Exact dependent handoff | P0 | medium | Complete | DOC-R1 |
+| R1.2 Production inventory | P0 | medium | Complete | DOC-R1 |
+| R1.3 Tests/fixtures inventory | P0 | medium | Complete | DOC-R1 |
+| R1.4 Dependent read-only inventory | P0 | medium | Complete | DOC-R1 |
+| R1.5 Documentation cutover map | P0 | medium | Complete | DOC-R1 |
 | R2 Shared paths/config foundation | P0 | high | Not started | — |
 | R3 Unified hosting configuration | P0 | high | Not started | — |
 | R4 Single-path daemon startup | P0 | high | Not started | — |
@@ -70,10 +70,13 @@ exact implementable contracts:
 - clean major-version cut with no compatibility readers, aliases, or legacy
   environment reuse.
 
-## 4. Provisional inventory
+## 4. R1 owned inventory
 
-This is navigation input only. R1.2–R1.5 must replace it with an exhaustive,
-owned inventory before implementation.
+This is the R1.2–R1.5 implementation, test, dependent, and documentation map.
+Searches covered production, tests, docs, examples, re-exports, constructor
+calls, command strings, readiness codes, serialized contracts, and legacy
+paths. R2–R9 owners must repeat the relevant searches at completion because
+this inventory is a starting snapshot, not zero-result proof.
 
 ### Configuration and startup seams
 
@@ -121,6 +124,110 @@ owned inventory before implementation.
 - `src/backend/platform/toolboxes/definition_coordinator.py`
 - `src/ui/web/static/js/features/chat/CapabilityToolsPanel.js`
 - `tests/backend_infra/test_parent_toolbox_truth.py`
+
+### 4.1 Production ownership by implementation slice
+
+| Owner | Production files/symbol families |
+|---|---|
+| R2 shared roots/setup | `src/mp13_engine/mp13_config_paths.py`; `src/app/config.py`; `src/app/mp13chat.py`; `hosting_config.py`; `src/hosting/hosting_setup_api.py`; `src/hosting/hosting_config_cli.py`; `src/hosting/transport_bootstrap_api.py`; `src/app/hosted_chat_demo.py` |
+| R3 unified configuration | `src/hosting/service/constants.py`; `service/host_service.py`; `service/state.py`; `daemon/diagnostics.py`; the configuration readers/writers in `hosting_config_cli.py`, `hosting_setup_api.py`, and `transport_bootstrap_api.py` |
+| R4 single startup input | `src/hosting/daemon/foreground.py`; `background.py`; `local_ipc.py`; delete `daemon/toolbox_launch_config.py`; `src/hosting/engine_host_channel.py`; `engine_host_cli.py`; `service/host_service.py` constructors |
+| R5 generic packages | `src/hosting/toolbox/host_project_config.py`; `dependency_policy.py`; `builtin_resolver.py`; `src/hosting/service/toolbox_artifact_store.py`; `toolbox_artifact_uploads.py`; `toolbox_artifact_upload_service.py`; `toolbox_https_acquisition.py`; package portions of `toolbox_catalog.py`, `toolbox_definition_resolution.py`, `toolbox_host_config_state.py`, `auth.py`, `policy.py`, `local_ipc.py`, channel and CLI |
+| R6 generic environments | `src/hosting/toolbox/environment.py`; `hermetic_environment.py`; environment identities in `bundle_models.py`; `src/hosting/service/toolbox_catalog.py`; `toolbox_env.py`; `proxy.py`; `src/hosting/sandbox/runtime_base.py`; `python_runtime.py`; `js_runtime.py`; `toolbox_runtime.py`; generic command portions of daemon/channel/CLI/auth/policy |
+| R7 toolbox adoption | `src/hosting/toolbox/orchestration.py`; `staging.py`; `hosted_ref.py`; toolbox fields in `bundle_models.py`; `src/hosting/service/toolbox_definition_resolution.py`; `toolbox_plans.py`; `toolbox_confirmations.py`; `toolbox_rollout.py`; `toolbox_materialization.py`; `toolbox_runtime.py`; `toolbox_env.py`; `toolbox_state_v2.py`; `sandbox/toolbox_runtime.py` |
+| R8 worker-neutral state | `src/hosting/service/operation_repository.py`; `hosted_operations.py`; generic package/environment repositories created by R5/R6; `workflow_helpers.py`; `src/hosting/sandbox/python_runtime.py`; `js_runtime.py`; `workflow_python_contract.py`; `workflow_python_node_runtime.py`; `workflow_js_node_runtime.py`; workflow IPC modules; maintenance/GC in `toolbox_env.py` and state cutover readers |
+| R9 public/acceptance | `src/hosting/client_realm_api.py`; `engine_host_channel.py`; `engine_host_cli.py`; `engine_host_cli_interactive.py`; `daemon/local_ipc.py`; `service/auth.py`; `policy.py`; `control.py`; `core.py`; capability declarations, generated CLI examples/help, and every permanent document in §4.4 |
+
+Re-exports in `src/hosting/__init__.py` and `src/hosting/toolbox/__init__.py`
+belong to the slice that removes or adds the exported contract. A file touching
+multiple rows is owned by the earliest dependency slice for its foundational
+change and revisited by later consumers; it is not evidence that later work is
+already complete.
+
+### 4.2 Test and fixture ownership
+
+| Owner | Primary proof locations | Required negative proof |
+|---|---|---|
+| R2 | `tests/test_config_paths_remote_model.py`, `test_app_config_host_auth.py`, `test_hosting_config.py`, `test_mp13chat_hosted_toolbox_api.py` | unknown label, cycle, traversal, overlap, Windows/POSIX normalization, interrupted journal phases, active-daemon/non-empty/cross-volume refusal |
+| R3 | `tests/test_hosting_config.py`, `test_hosting_daemon_startup.py`, `test_hosting_service_security.py`, `test_hosting_secure_state.py` | only-old-file startup, unknown/secret fields, invalid version/type, sentinel secret and resolved-path redaction |
+| R4 | `tests/test_hosting_daemon_startup.py`, `test_hosting_daemon_pidfile.py`, `test_engine_host_cli_remote_args.py`, `test_engine_host_channel.py` | old constructor/settings/flag rejection, pre-bind validation, direct/background/service/relay-equivalent parity |
+| R5 | `tests/test_hosting_toolbox_artifact_uploads.py`, `test_hosting_toolbox_artifact_store.py`, `test_hosting_toolbox_https_acquisition.py`, `test_hosted_toolbox_dependency_policy.py`, `test_hosting_toolbox_host_config.py` | denied role, size/order/hash/source/credential/policy failures, disconnect/restart/concurrent commit, old command rejection |
+| R6 | `tests/test_hosted_toolbox_hermetic_environment_contract.py`, `test_hosted_toolbox_hermetic_builder.py`, `test_hosted_toolbox_catalog_control.py`, `test_hosted_toolbox_template_prewarm.py`, `test_hosting_toolbox_maintenance_v2.py`, runtime-base tests | key separation, build coalescing, referenced/active removal denial, incomplete build, legacy-root non-discovery, old type/command rejection |
+| R7 | `tests/test_hosting_toolbox_definition_resolution.py`, `test_hosting_toolbox_definition_transport.py`, `test_hosting_toolbox_definition_service.py`, `test_hosting_toolbox_definition_matrix.py`, `test_hosting_toolbox_atomic_routing.py`, `test_hosting_r7_acceptance.py`, `test_hosting_toolbox_sandbox.py` | mutation between plan/apply, stale approval/config revision, retry/restart, reference leak, duplicate build/execution |
+| R8 | `tests/test_hosting_operation_repository.py`, `test_hosting_operation_contract.py`, `test_hosting_toolbox_state_v2.py`, `test_workflow_helper_service.py`, `test_workflow_js_node_runtime.py`, `test_hosting_python_runtime_base.py`, `test_hosting_js_runtime_base.py`, `test_hosting_workflow_operations.py` | corrupt/truncated/old state, concurrent writer/create/GC, all-consumer mark, active execution, bounded listing/quota |
+| R9 | `tests/test_engine_host_channel.py`, `test_engine_host_cli_remote_args.py`, `test_engine_host_cli_interactive.py`, `test_hosting_auth_roles.py`, `test_hosting_daemon_acl.py`, `test_hosting_toolbox_removed_surface.py`, `test_hosted_toolbox_contract_docs.py`, aggregate repository lanes | fresh/cached auth equivalence, lower-role denials, secret/path/process-argument redaction, old vocabulary zero results, no-double lifecycle |
+
+Serialized-fixture decisions: fixtures embedded in
+`test_hosted_toolbox_hermetic_environment_contract.py`,
+`test_hosting_python_runtime_base.py`, `test_hosting_resolved_toolbox_rollout.py`,
+`test_hosting_toolbox_definition_resolution.py`,
+`test_hosting_toolbox_host_config.py`, `test_hosting_toolbox_sandbox.py`, and
+`test_workflow_helper_service.py` become new generic fixtures when testing the
+new path; each suite keeps one minimal old-contract fixture solely to prove
+`state_contract_unsupported`. No JSON resource outside those test modules was
+found carrying the removed environment contracts. The home-state audit found
+no implicit `Path.home()`/default hosting-root test dependency; the sole
+`expanduser()` match operates on an already explicit fixture path.
+
+Native/platform lanes: Windows is mandatory for path/permissions, service and
+venv behavior; POSIX is mandatory for resolver normalization, permissions,
+foreground/background startup, Python environments, and Node environments.
+SSH relay-equivalent tests are required on both; real SSH/service-manager lanes
+are recorded with an owner if unavailable. R1 does not claim these lanes ran.
+
+### 4.3 Dependent repository inspection
+
+Inspected read-only: `O:/repos/mp13-docs`, branch `redesign/cards_workflows`,
+revision `a36400e8af908f702a4db84e4fdb1894ac28da36`. Its pre-existing untracked
+`parent_project_feature.md` was not inspected or modified.
+
+- Contract/version ownership: `src/backend/app/factory.py` constants and
+  `src/backend/platform/hosting/daemon_contract.py::ensure_min_daemon_contract`.
+- Structured auth ownership:
+  `hosting_admin.py::_require_authentication_result_mapping`,
+  `public_key_session_payload`, and
+  `daemon_sessions.py::ensure_daemon_session_for_backend_client`. The current
+  fresh and cached paths already consume mappings; adoption must prove all five
+  authority fields plus `reused`, not merely a token.
+- Readiness ownership: `capabilities/parent_truth.py`,
+  `capabilities/runtimes.py`,
+  `toolboxes/definition_coordinator.py::_PARENT_RUNTIME_FAILURE_CODES`, and
+  `CapabilityToolsPanel.js::normalizeRuntime/readinessRemediation`.
+- Generic identity/response ownership:
+  `toolboxes/definition_coordinator.py`, `toolboxes/hosted_store.py`,
+  `app/routers/capabilities.py`, `CapabilityToolsController.js`, and
+  `CapabilityToolsPanel.js`.
+- No removed generic command is a production literal today. The residual test
+  `tests/backend_infra/test_toolbox_replacement_residuals.py` intentionally
+  constructs a removed name and must remain a negative scan.
+
+Owner: the `mp13-docs` maintainer team; no individual CODEOWNER/MAINTAINERS
+entry exists. Required evidence: named maintainer, full dependent revision,
+parent pin, focused auth/readiness/coordinator/UI/residual tests, and aggregate
+dependent suite receipt. This repository does not edit that worktree.
+
+### 4.4 Permanent documentation and example ownership
+
+| Document/example | Owner | Required cutover |
+|---|---|---|
+| `CONFIG.md` | R2 | three top-level roots/labels, anchors, resolution, containment, local customization |
+| `src/hosting/HOSTING_CONFIG_SCRIPT.md` | R2–R3 | one authority, logical/resolved status, plan/apply/recovery/reset, data/record layout |
+| `src/hosting/HOSTING_ACCESS.md` | R3, R5–R6, R9 | role authority, credential handling, daemon hashing, generic lifecycle, audit/redaction, v3 operations |
+| `src/hosting/HOSTED_TOOLBOX_CONTRACT.md` | R5–R7 | generic package locks/environment requests/references beneath retained toolbox semantics; remove signing baseline |
+| `src/hosting/ENGINE_HOST_CLI.md` | R4, R9 | one config argument and exact generic commands/examples; remove old flags/names |
+| `src/hosting/sandbox/SANDBOX_ARCHITECTURE.md` | R6–R8 | neutral environment ownership, content keys, adapters, references, retention/GC |
+| `src/hosting/HOSTING.md` | R4, R8–R9 | developer orientation, startup examples, generic worker/package/environment lifecycle |
+| `src/hosting/sandbox/GENERIC_WORKER.md`, `WORKFLOW_HELPER_WORKER.md`, `JS_NODE_WORKER.md`, `PY_NODE_WORKER.md`, `TOOLBOX_WORKER.md` | R7–R9 | consumer kinds, manager handoff, references/release, no toolbox-owned environment assumptions |
+| `README.md` and `demo/demo_hosted_toolbox_attach.py` | R7–R9 | hosted attach terminology/examples and v3 startup expectations |
+| generated help/examples in `src/hosting/engine_host_cli.py` and `engine_host_cli_interactive.py` | owning R4/R5/R6/R9 slice | exact flags, commands, payloads, codes, no credentials or absolute mainstream paths |
+| `INSTALL.md`, `GOTCHAS.md`, `APPLAYERS.md` | R9 review | current matches are generic project environment/toolbox prose; update only if final terminology/search proves affected |
+
+Removal scan patterns are the §5 list plus `hosting.toolbox.artifact_store.v2`,
+`hosting.toolbox.artifact_uploads.v1`, `hosting.toolbox.environment.v2`,
+`hosting.toolbox.environment_references.v1`,
+`hosting.toolbox.template_catalog_state.v1`, mandatory `trust_key_ids`/signed
+manifest language, and the v1/unversioned operation/result contracts. Permanent
+documents must not link to this plan, status ledger, or dependent handoff.
 
 ## 5. Required removal searches
 
@@ -195,6 +302,47 @@ the slice.
   `poetry run pytest -q tests/test_hosted_toolbox_contract_docs.py` passed 9/9
 - Plan completion credited: none
 
+### DOC-R0 — contract freeze
+
+- Date: 2026-08-11
+- Scope: R0.1–R0.7 documentation freeze only; no production behavior changed
+- Files:
+  - `src/hosting/hosting_access_plan.md`
+  - `src/hosting/HOSTING_CLIENT_BREAKING_CHANGES.md`
+  - `src/hosting/hosting_status.md`
+- Outcome: froze `hosting.control.v3`, the one-file authority and root-label
+  semantics, role/artifact rules, neutral package/environment record schemas,
+  generic command/readiness cutover, clean-cut rejection behavior, and the
+  journaled host-local root setup contract. Marked R0.1–R0.7 complete.
+- Validation: `poetry run pytest -q tests/test_hosted_toolbox_contract_docs.py`
+  passed 9/9; `git diff --check` passed; no production files changed.
+- Negative-path contract proof recorded: unsupported control major,
+  unsupported state contract, legacy `access_control.json`, legacy environment
+  roots, traversal roots, and remote root relocation are all fail-closed.
+- Dependent handoff impact: exact client-visible contract is frozen; R1.1 has
+  not started and no dependent owner or adoption receipt is claimed.
+
+### DOC-R1 — handoff and inventory
+
+- Date: 2026-08-11
+- Scope: R1.1–R1.5 documentation/inventory only; no production or dependent
+  files changed
+- Parent searches: all named legacy fields, flags, classes, paths, command
+  strings, readiness codes, re-exports, constructors, state contracts, tests,
+  fixtures, permanent docs, examples, and generated CLI help sources
+- Dependent inspection: `O:/repos/mp13-docs` at
+  `a36400e8af908f702a4db84e4fdb1894ac28da36`, read-only; its existing untracked
+  `parent_project_feature.md` remained untouched
+- Outcome: exact stable dependent symbols and proof requirements added to the
+  handoff; production ownership assigned to R2–R9; test/fixture/native lanes
+  assigned; documentation and final removal patterns assigned
+- Validation: all Markdown JSON examples parsed; R0/R1 plan sections contain no
+  unchecked item; permanent-to-transient backlink scan returned zero;
+  `poetry run pytest -q tests/test_hosted_toolbox_contract_docs.py` passed 9/9;
+  `git diff --check` passed
+- Dependent handoff impact: implementable handoff is ready, but delivery,
+  named owner acknowledgment, revision, tests, and receipt remain R9.6 work
+
 Append one concise entry per completed slice. Include exact commands, counts,
 durations where useful, negative-path results, commit pin, and dependent receipt
 impact. Do not paste an unstructured full test transcript.
@@ -202,6 +350,8 @@ impact. Do not paste an unstructured full test transcript.
 ## 8. Blockers and external evidence
 
 Current blockers: none recorded
+
+Execution pause: R2 is the next authorized slice and has not started.
 
 External evidence required before final completion:
 

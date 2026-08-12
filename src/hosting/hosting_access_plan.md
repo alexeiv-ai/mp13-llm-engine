@@ -355,25 +355,26 @@ one proof that secrets or host-only paths are absent from remote output.
 
 #### R0.1 Freeze file ownership and directory layout
 
-- [ ] Specify `hosting.configuration.v3` as the only static hosting authority.
-- [ ] Classify each path as configuration, secret material, audit, mutable
+- [x] Specify `hosting.configuration.v3` as the only static hosting authority.
+- [x] Classify each path as configuration, secret material, audit, mutable
   state, scratch, immutable package content, or built environment content.
-- [ ] State which process may write each class. The daemon reads static config;
+- [x] State which process may write each class. The daemon reads static config;
   only the local hosting setup/config library writes it.
-- [ ] Record the exact old files and directories that become invalid.
+- [x] Record the exact old files and directories that become invalid.
 
-Proof: the contract and layout are stated consistently in this plan,
-`HOSTING_CONFIG_SCRIPT.md`, and `HOSTING_CLIENT_BREAKING_CHANGES.md`.
+Proof: the frozen contract and layout are stated consistently in this plan and
+`HOSTING_CLIENT_BREAKING_CHANGES.md`; permanent setup documentation remains
+owned by R2–R3 and is not updated ahead of shipped behavior.
 
 #### R0.2 Freeze root-label semantics
 
-- [ ] Define `hosting_root_dir`, `packages_root_dir`, and
+- [x] Define `hosting_root_dir`, `packages_root_dir`, and
   `environments_root_dir` in the existing top-level `category_dirs` contract.
-- [ ] Define `@hosting`, `@packages`, and `@environments`, including allowed
+- [x] Define `@hosting`, `@packages`, and `@environments`, including allowed
   nesting, normalization, containment, and cycle rejection.
-- [ ] Define which stable anchors may appear in root definitions and prohibit
+- [x] Define which stable anchors may appear in root definitions and prohibit
   persistent roots based on `@project`.
-- [ ] Define the authorized local status shape containing logical and resolved
+- [x] Define the authorized local status shape containing logical and resolved
   paths and the sanitized remote status shape.
 
 Proof: table-driven examples cover Windows and POSIX syntax, traversal,
@@ -381,13 +382,13 @@ unknown labels, cycles, and roots outside an allowed containment policy.
 
 #### R0.3 Freeze authority and artifact identity
 
-- [ ] Define the minimum role for source management, credential management,
+- [x] Define the minimum role for source management, credential management,
   package upload, environment template changes, environment removal, and GC.
-- [ ] Define daemon-computed SHA-256 as the canonical artifact identity.
-- [ ] Define caller-supplied hashes as optional expectations only.
-- [ ] Remove publisher-key and signed-manifest requirements from the baseline
+- [x] Define daemon-computed SHA-256 as the canonical artifact identity.
+- [x] Define caller-supplied hashes as optional expectations only.
+- [x] Remove publisher-key and signed-manifest requirements from the baseline
   contract; name the extension point for a future optional verifier.
-- [ ] Define audit fields without tokens, passwords, credential values, or
+- [x] Define audit fields without tokens, passwords, credential values, or
   unrestricted local paths.
 
 Proof: the authorization matrix includes positive and negative cases for both
@@ -395,12 +396,12 @@ password and public-key sessions that grant the same role.
 
 #### R0.4 Freeze generic package/environment contracts
 
-- [ ] Specify every neutral type listed in section 3.5 and its serialized
+- [x] Specify every neutral type listed in section 3.5 and its serialized
   contract/version.
-- [ ] Require `consumer_kind`, `consumer_id`, and `revision` on references.
-- [ ] Define immutable package locks, environment locks, build receipts,
+- [x] Require `consumer_kind`, `consumer_id`, and `revision` on references.
+- [x] Define immutable package locks, environment locks, build receipts,
   reference lifecycle, and content-address keys.
-- [ ] Define restart, retry, cancellation, incomplete-build cleanup, and
+- [x] Define restart, retry, cancellation, incomplete-build cleanup, and
   concurrent-build behavior.
 
 Proof: examples show one toolbox consumer and at least one non-toolbox worker
@@ -408,11 +409,11 @@ consumer resolving the same package and environment contracts.
 
 #### R0.5 Freeze command and readiness cutover
 
-- [ ] Enumerate every retained, renamed, and removed control command.
-- [ ] Specify exact request, success, error, cached-result, and status payloads.
-- [ ] Specify the replacement for every `toolbox_configuration_*` readiness
+- [x] Enumerate every retained, renamed, and removed control command.
+- [x] Specify exact request, success, error, cached-result, and status payloads.
+- [x] Specify the replacement for every `toolbox_configuration_*` readiness
   code and any dependent UI state derived from it.
-- [ ] State the new daemon contract major and rejection response for an old
+- [x] State the new daemon contract major and rejection response for an old
   client or command.
 
 Proof: a machine-readable or table-driven command manifest has no aliases and
@@ -420,26 +421,26 @@ every removed command has exactly one disposition.
 
 #### R0.6 Freeze clean-cut state behavior
 
-- [ ] Inventory old configuration, operation, upload, template, environment,
+- [x] Inventory old configuration, operation, upload, template, environment,
   reference, and receipt contract identifiers.
-- [ ] Specify fail-fast behavior for each old format.
-- [ ] Require environment rebuild under the generic roots and prohibit legacy
+- [x] Specify fail-fast behavior for each old format.
+- [x] Require environment rebuild under the generic roots and prohibit legacy
   discovery or reuse.
-- [ ] Define operator cleanup instructions separately from daemon behavior.
+- [x] Define operator cleanup instructions separately from daemon behavior.
 
 Proof: no item says "fallback," "try old," "migrate automatically," or
 "translate" as an implementation requirement.
 
 #### R0.7 Freeze host-local root customization
 
-- [ ] Define plan/apply/inspect/status/reset payloads for changing the three
+- [x] Define plan/apply/inspect/status/reset payloads for changing the three
   top-level roots through the hosting setup library.
-- [ ] Define preflight checks for permissions, collisions, free space,
+- [x] Define preflight checks for permissions, collisions, free space,
   non-empty destinations, daemon activity, and cross-volume moves.
-- [ ] Use a local journal and idempotent recovery for a change spanning the
+- [x] Use a local journal and idempotent recovery for a change spanning the
   top-level configuration and hosting configuration. Do not claim a
   cross-filesystem atomic rename.
-- [ ] Prohibit remote control-channel root relocation.
+- [x] Prohibit remote control-channel root relocation.
 
 Proof: interruption points and recovery outcomes are enumerated before code is
 changed.
@@ -448,12 +449,12 @@ changed.
 
 #### R1.1 Produce the exact dependent-client handoff
 
-- [ ] Update `HOSTING_CLIENT_BREAKING_CHANGES.md` with the command manifest,
+- [x] Update `HOSTING_CLIENT_BREAKING_CHANGES.md` with the command manifest,
   payloads, readiness mapping, version negotiation, and old-name removals.
-- [ ] Include client session metadata requirements: cached authentication must
+- [x] Include client session metadata requirements: cached authentication must
   preserve token, role, auth method, scope, and key ID without repeating the
   handshake.
-- [ ] Give dependent implementers stable navigation/search terms rather than
+- [x] Give dependent implementers stable navigation/search terms rather than
   relying only on current line numbers.
 
 Proof: another engineer can implement the client cut without reading daemon
@@ -461,26 +462,26 @@ internals or inferring a payload.
 
 #### R1.2 Inventory the production change radius
 
-- [ ] Search all production callers of `toolbox_host_project_configuration`,
+- [x] Search all production callers of `toolbox_host_project_configuration`,
   `toolbox_artifact_sources`, `toolbox_trust_public_keys`,
   `toolbox_source_credentials`, `toolbox_dependency_policy`,
   `--toolbox-config-file`, and `engine_host_toolbox_config_file`.
-- [ ] Search imports and instantiations of toolbox-specific package policy,
+- [x] Search imports and instantiations of toolbox-specific package policy,
   environment managers, builders, receipts, references, and legacy paths.
-- [ ] Search command strings, dispatch tables, capability declarations,
+- [x] Search command strings, dispatch tables, capability declarations,
   readiness codes, audit actions, and operation kinds.
-- [ ] Record the file list and ownership per R2–R9 in `hosting_status.md`.
+- [x] Record the file list and ownership per R2–R9 in `hosting_status.md`.
 
 Proof: the inventory includes indirect re-exports and documentation examples,
 not only class definitions.
 
 #### R1.3 Inventory tests and fixtures
 
-- [ ] Assign existing unit, integration, daemon, channel, CLI, setup, toolbox,
+- [x] Assign existing unit, integration, daemon, channel, CLI, setup, toolbox,
   sandbox, workflow, and native-platform tests to R2–R9.
-- [ ] List fixtures serialized under removed contracts and decide whether each
+- [x] List fixtures serialized under removed contracts and decide whether each
   becomes a new fixture or a deliberate rejection fixture.
-- [ ] Identify tests that accidentally pass because of default home-directory
+- [x] Identify tests that accidentally pass because of default home-directory
   state and make their roots explicit.
 
 Proof: every production boundary in R2–R9 has a named proof location and at
@@ -488,22 +489,22 @@ least one negative-path test target.
 
 #### R1.4 Inventory the dependent repository without editing it
 
-- [ ] Locate direct command strings, readiness codes, authentication result
+- [x] Locate direct command strings, readiness codes, authentication result
   narrowing, and package/environment response assumptions.
-- [ ] Record exact files and stable symbols in the breaking-change handoff.
-- [ ] Identify owner and adoption evidence required for final acceptance.
+- [x] Record exact files and stable symbols in the breaking-change handoff.
+- [x] Identify owner and adoption evidence required for final acceptance.
 
 Proof: the inspection records all known affected dependent surfaces while the
 dependent worktree remains unchanged.
 
 #### R1.5 Prepare the documentation cutover map
 
-- [ ] Assign all hosting startup, configuration, security, toolbox, and worker
+- [x] Assign all hosting startup, configuration, security, toolbox, and worker
   documentation to an implementation work item.
-- [ ] List examples that expose credentials, absolute mainstream paths, old
+- [x] List examples that expose credentials, absolute mainstream paths, old
   flags, mandatory signing, or toolbox-owned environments.
-- [ ] Define the final `rg` removal patterns used by R9.
-- [ ] Remove permanent-document backlinks and tests that treat this plan,
+- [x] Define the final `rg` removal patterns used by R9.
+- [x] Remove permanent-document backlinks and tests that treat this plan,
   `hosting_status.md`, or `HOSTING_CLIENT_BREAKING_CHANGES.md` as normative.
 
 Proof: no known user-facing document is left without an owning work item.
