@@ -779,6 +779,18 @@ the slice.
   --maxfail=30` passed 10 tests; the file contains zero legacy control-state
   constructor or authority filename matches
 
+### TEST-R3.2J — secure-state daemon fixture cut
+
+- Date: 2026-08-12
+- Plan IDs: R3.2 fixture removal and R9.2/R9.4 (partial); P0/P2; high expertise
+- Outcome: secure-state daemon projection loads v3 configuration while keeping
+  keyring, sessions, challenges, audits, and bootstrap records under the
+  resolved hosting root; remote setup status omits the resolved hosting path and
+  the retired monolithic authority record
+- Proof: `python -m pytest tests/test_hosting_secure_state.py -q --maxfail=20`
+  passed three tests, including local/remote path projection and restrictive
+  state-file handling
+
 Append one concise entry per completed slice. Include exact commands, counts,
 durations where useful, negative-path results, commit pin, and dependent receipt
 impact. Do not paste an unstructured full test transcript.

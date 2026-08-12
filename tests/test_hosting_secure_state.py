@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from hosting.daemon import EngineHostDaemon
+from tests.hosting_v3_fixtures import write_hosting_configuration
 from hosting.secure_state import (
     SecureStateFormatError,
     SecureStateLockedError,
@@ -61,17 +62,16 @@ def test_daemon_reports_hosting_owned_secure_state_status(tmp_path: Path) -> Non
         port=0,
         pid_file=tmp_path / "daemon.pid",
         engines_state_file=tmp_path / "managed_engines.json",
-        control_state_file=tmp_path / "access_control.json",
+        mp13_config_file=write_hosting_configuration(tmp_path),
     )
-    daemon.svc.set_control_config(require_auth=False)
-
     result = daemon.svc.hosting_setup_summary()
 
     assert result["status"] == "ok"
-    assert result["hosting_root"] == str(tmp_path)
+    assert "hosting_root" not in result
+    assert result["configuration"]["contract"] == "hosting.configuration.v3"
     assert result["secure_state"]["daemon_secure_state_read_enabled"] is False
-    assert "access_control" in result["secure_state"]["files"]
-    assert result["secure_state"]["files"]["access_control"]["state"] == "plaintext"
+    assert "access_control" not in result["secure_state"]["files"]
+    assert result["secure_state"]["files"]["keys"]["state"] == "missing"
 
     raw = json.dumps({"seq": 1, "cmd": "hosting-secure-state-status", "payload": {}})
     dispatched = asyncio.run(daemon._dispatch(raw, peer_host="127.0.0.1"))  # noqa: SLF001
