@@ -67,6 +67,13 @@ def test_full_configuration_and_sanitized_inspection(tmp_path: Path) -> None:
         "roles": {"admin": {"permissions": ["*"]}},
         "session_policy": {"ttl_seconds": 300, "idle_timeout_seconds": 60, "max_sessions_per_key": 2},
         "audit": {"event_limit": 100, "retention_seconds": 3600},
+        "lifecycle": {
+            "profile": "service_managed",
+            "on_terminal_disconnect": "keep_daemon_running",
+            "terminal_control_enabled": False,
+            "owner_disconnect_shutdown": False,
+        },
+        "claims": {"owner_ttl_seconds": 120, "audit_event_limit": 200},
     }
     payload["package_management"]["credentials"] = {"private-index": "SENTINEL_SECRET"}
     payload["package_management"]["sources"] = {
@@ -101,6 +108,14 @@ def test_full_configuration_and_sanitized_inspection(tmp_path: Path) -> None:
                 authentication={"require_auth": False, "connectivity_mode": "truly_remote"}
             ),
             "hosting_configuration_policy_conflict",
+        ),
+        (
+            lambda value: value["control"].update(lifecycle={"profile": "legacy_daemon"}),
+            "hosting_configuration_value_invalid",
+        ),
+        (
+            lambda value: value["control"].update(claims={"owner_ttl_seconds": "SENTINEL_SECRET"}),
+            "hosting_configuration_type_invalid",
         ),
     ],
 )

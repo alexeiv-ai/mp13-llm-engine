@@ -7,7 +7,15 @@ from hosting.hosting_configuration import parse_hosting_configuration
 from mp13_engine.mp13_config_paths import resolve_config_paths
 
 
-def hosting_configuration(root: Path):
+def hosting_configuration(
+    root: Path,
+    *,
+    require_auth: bool = False,
+    connectivity_mode: str = "local_only",
+    endpoint_mode: str = "exclusive",
+    lifecycle: dict | None = None,
+    claims: dict | None = None,
+):
     root = Path(root).resolve()
     _, resolver = resolve_config_paths(
         {"category_dirs": {
@@ -18,7 +26,18 @@ def hosting_configuration(root: Path):
     )
     return parse_hosting_configuration({
         "contract": "hosting.configuration.v3",
-        "control": {"authentication": {}, "roles": {}, "session_policy": {}, "audit": {}},
+        "control": {
+            "authentication": {
+                "require_auth": require_auth,
+                "connectivity_mode": connectivity_mode,
+                "endpoint_mode": endpoint_mode,
+            },
+            "roles": {},
+            "session_policy": {},
+            "audit": {},
+            "lifecycle": dict(lifecycle or {}),
+            "claims": dict(claims or {}),
+        },
         "package_management": {
             "artifact_root": "@packages/artifacts", "lock_root": "@packages/locks",
             "sources": {}, "credentials": {},
@@ -35,7 +54,15 @@ def hosting_configuration(root: Path):
     }, resolver)
 
 
-def write_hosting_configuration(root: Path) -> Path:
+def write_hosting_configuration(
+    root: Path,
+    *,
+    require_auth: bool = False,
+    connectivity_mode: str = "local_only",
+    endpoint_mode: str = "exclusive",
+    lifecycle: dict | None = None,
+    claims: dict | None = None,
+) -> Path:
     root = Path(root).resolve()
     config = root / "mp13_config.json"
     config.write_text(json.dumps({"category_dirs": {
@@ -44,7 +71,14 @@ def write_hosting_configuration(root: Path) -> Path:
     }}), encoding="utf-8")
     authority = root / "hosting" / "hosting_config.json"
     authority.parent.mkdir(parents=True, exist_ok=True)
-    model = hosting_configuration(root)
+    model = hosting_configuration(
+        root,
+        require_auth=require_auth,
+        connectivity_mode=connectivity_mode,
+        endpoint_mode=endpoint_mode,
+        lifecycle=lifecycle,
+        claims=claims,
+    )
     def plain(value):
         if isinstance(value, Mapping):
             return {str(key): plain(item) for key, item in value.items()}

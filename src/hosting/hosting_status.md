@@ -647,6 +647,23 @@ the slice.
   recovery, queued cancellation, Python/JS recreation, and real daemon restart
   with the original terminal operation and external result identity
 
+### CODE/TEST-R3.2D — immutable lifecycle and claim policy fixture cut
+
+- Date: 2026-08-12
+- Plan IDs: R3.1/R3.2 fixture migration and R9.3 lifecycle acceptance;
+  P0/P2; high expertise
+- Outcome: the strict v3 `control` schema now owns lifecycle and claim-retention
+  policy; daemon ACL tests configure static policy before construction and use
+  resolved hosting state paths instead of mutating policy after startup or
+  assuming the retired root layout
+- Proof: `python -m pytest tests/test_hosting_configuration_v3.py
+  tests/test_hosting_daemon_acl.py -q --maxfail=20` passed 59 tests, including
+  invalid lifecycle/type rejection, authenticated ACL denials, restart-activated
+  SSH connectivity policy, operation persistence, and lifecycle shutdown gates
+- Dependent impact: consumers that author full v3 control policy may add the
+  optional `lifecycle` and `claims` objects; static changes still require an
+  explicit daemon restart
+
 Append one concise entry per completed slice. Include exact commands, counts,
 durations where useful, negative-path results, commit pin, and dependent receipt
 impact. Do not paste an unstructured full test transcript.

@@ -4,8 +4,9 @@ The only static hosting authority is
 `<config root>/hosting/hosting_config.json`. It uses the strict
 `hosting.configuration.v3` contract and contains `control`,
 `package_management`, and `environment_management` sections. Mutable keys,
-sessions, audits, claims, operations, uploads, and environments are separate
-records under the resolved hosting, package, and environment roots.
+sessions, audit events, active claims, operations, uploads, and environments
+are separate records under the resolved hosting, package, and environment
+roots. Lifecycle and claim-retention policy remain static configuration.
 
 The top-level MP13 configuration owns the logical roots. Persistent root
 definitions use only `@home`, `@config`, or `@temp`; normal hosting values use
@@ -54,7 +55,17 @@ unrestricted host paths.
     "authentication": {},
     "roles": {},
     "session_policy": {},
-    "audit": {}
+    "audit": {},
+    "lifecycle": {
+      "profile": "detached_user_process",
+      "on_terminal_disconnect": "keep_daemon_running",
+      "terminal_control_enabled": true,
+      "owner_disconnect_shutdown": false
+    },
+    "claims": {
+      "owner_ttl_seconds": 120,
+      "audit_event_limit": 200
+    }
   },
   "package_management": {
     "artifact_root": "@packages/artifacts",

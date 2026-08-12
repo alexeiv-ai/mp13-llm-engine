@@ -142,7 +142,11 @@ def parse_hosting_configuration(payload: Mapping[str, Any], resolver: PathResolv
         raise HostingConfigurationError("hosting_configuration_unsupported", "contract")
 
     control = _mapping(data.get("control"), "control")
-    _exact_keys(control, {"authentication", "roles", "session_policy", "audit"}, "control")
+    _exact_keys(
+        control,
+        {"authentication", "roles", "session_policy", "audit", "lifecycle", "claims"},
+        "control",
+    )
     authentication = _mapping(control.get("authentication"), "control.authentication")
     _exact_keys(
         authentication,
@@ -175,6 +179,28 @@ def parse_hosting_configuration(payload: Mapping[str, Any], resolver: PathResolv
     _exact_keys(audit, {"event_limit", "retention_seconds"}, "control.audit")
     for key in audit:
         _optional_int(audit, key, "control.audit", minimum=1)
+    lifecycle = _mapping(control.get("lifecycle", {}), "control.lifecycle")
+    _exact_keys(
+        lifecycle,
+        {"profile", "on_terminal_disconnect", "terminal_control_enabled", "owner_disconnect_shutdown"},
+        "control.lifecycle",
+    )
+    if "profile" in lifecycle:
+        profile = _string(lifecycle["profile"], "control.lifecycle.profile")
+        if profile not in {"foreground_terminal_bound", "detached_user_process", "service_managed"}:
+            raise HostingConfigurationError("hosting_configuration_value_invalid", "control.lifecycle.profile")
+    if "on_terminal_disconnect" in lifecycle:
+        disconnect = _string(lifecycle["on_terminal_disconnect"], "control.lifecycle.on_terminal_disconnect")
+        if disconnect not in {"stop_daemon", "keep_daemon_running"}:
+            raise HostingConfigurationError(
+                "hosting_configuration_value_invalid", "control.lifecycle.on_terminal_disconnect"
+            )
+    _optional_bool(lifecycle, "terminal_control_enabled", "control.lifecycle")
+    _optional_bool(lifecycle, "owner_disconnect_shutdown", "control.lifecycle")
+    claims = _mapping(control.get("claims", {}), "control.claims")
+    _exact_keys(claims, {"owner_ttl_seconds", "audit_event_limit"}, "control.claims")
+    for key in claims:
+        _optional_int(claims, key, "control.claims", minimum=1)
 
     package = _mapping(data.get("package_management"), "package_management")
     _exact_keys(package, {"artifact_root", "lock_root", "sources", "credentials", "dependency_policy", "verification"}, "package_management")

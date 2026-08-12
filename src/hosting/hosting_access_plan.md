@@ -126,7 +126,9 @@ normative structure is:
     "authentication": {},
     "roles": {},
     "session_policy": {},
-    "audit": {}
+    "audit": {},
+    "lifecycle": {},
+    "claims": {}
   },
   "package_management": {
     "artifact_root": "@packages/artifacts",

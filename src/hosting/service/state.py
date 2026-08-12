@@ -552,7 +552,10 @@ class StateMixin:
         authentication = dict(static.get("authentication") or {})
         session_policy = dict(static.get("session_policy") or {})
         audit = dict(static.get("audit") or {})
+        lifecycle = dict(static.get("lifecycle") or {})
+        claims = dict(static.get("claims") or {})
         default = dict(self._default_control_payload()["control_config"])
+        lifecycle_profile = str(lifecycle.pop("profile", default["lifecycle_profile"]))
         default.update(
             {
                 "ssh_key": authentication.get("ssh_key_ref"),
@@ -564,6 +567,12 @@ class StateMixin:
                 "session_policy": session_policy,
                 "roles": dict(static.get("roles") or {}),
                 "audit_policy": audit,
+                "lifecycle_profile": lifecycle_profile,
+                "lifecycle_policy": self._normalize_lifecycle_policy(lifecycle_profile, lifecycle),
+                "claim_acl_policy": {
+                    "owner_ttl_seconds": max(10, min(int(claims.get("owner_ttl_seconds", 120)), 24 * 3600)),
+                    "audit_event_limit": max(20, min(int(claims.get("audit_event_limit", 200)), 2000)),
+                },
             }
         )
         default.pop("auth", None)

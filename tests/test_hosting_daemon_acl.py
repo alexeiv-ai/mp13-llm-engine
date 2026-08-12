@@ -8,14 +8,30 @@ from pathlib import Path
 
 from hosting.daemon import EngineHostDaemon
 from hosting.daemon.diagnostics import daemon_report_path_for_config, write_daemon_report
+from tests.hosting_v3_fixtures import write_hosting_configuration
 
 
-def _make_daemon(tmp_path: Path) -> EngineHostDaemon:
+def _make_daemon(
+    tmp_path: Path,
+    *,
+    require_auth: bool = False,
+    connectivity_mode: str = "local_only",
+    endpoint_mode: str = "exclusive",
+    lifecycle: dict | None = None,
+    claims: dict | None = None,
+) -> EngineHostDaemon:
     return EngineHostDaemon(
         port=0,
         pid_file=tmp_path / "daemon.pid",
         engines_state_file=tmp_path / "managed_engines.json",
-        control_state_file=tmp_path / "access_control.json",
+        mp13_config_file=write_hosting_configuration(
+            tmp_path,
+            require_auth=require_auth,
+            connectivity_mode=connectivity_mode,
+            endpoint_mode=endpoint_mode,
+            lifecycle=lifecycle,
+            claims=claims,
+        ),
     )
 
 
@@ -82,9 +98,8 @@ def _issue_mgmt_session(daemon: EngineHostDaemon, key_id: str, key_secret: str) 
 
 
 def test_daemon_unauthorized_command_denied(tmp_path: Path) -> None:
-    daemon = _make_daemon(tmp_path)
+    daemon = _make_daemon(tmp_path, require_auth=True)
     daemon.svc.auth_upsert_key(key_id="admin", key_secret="secret", role="admin")
-    daemon.svc.set_control_config(require_auth=True)
 
     out = _dispatch(daemon, seq=1, cmd="discover-running", payload={})
     assert out["ok"] is False
@@ -93,8 +108,7 @@ def test_daemon_unauthorized_command_denied(tmp_path: Path) -> None:
 
 
 def test_daemon_lists_live_consumers(tmp_path: Path) -> None:
-    daemon = _make_daemon(tmp_path)
-    daemon.svc.set_control_config(require_auth=True)
+    daemon = _make_daemon(tmp_path, require_auth=True)
     token = _issue_mgmt_session(daemon, "admin-main", "secret")
     actor_id = daemon.svc.resolve_actor_id_from_session_token(token)
     assert actor_id
@@ -132,8 +146,7 @@ def test_daemon_lists_live_consumers(tmp_path: Path) -> None:
 
 
 def test_daemon_non_member_denied_on_shared_claim(tmp_path: Path) -> None:
-    daemon = _make_daemon(tmp_path)
-    daemon.svc.set_control_config(require_auth=True)
+    daemon = _make_daemon(tmp_path, require_auth=True)
     token_a = _issue_mgmt_session(daemon, "admin-a", "secret-a")
     token_b = _issue_mgmt_session(daemon, "admin-b", "secret-b")
 
@@ -156,8 +169,7 @@ def test_daemon_non_member_denied_on_shared_claim(tmp_path: Path) -> None:
 
 
 def test_daemon_exclusive_owner_conflict_denied(tmp_path: Path) -> None:
-    daemon = _make_daemon(tmp_path)
-    daemon.svc.set_control_config(require_auth=True)
+    daemon = _make_daemon(tmp_path, require_auth=True)
     token_a = _issue_mgmt_session(daemon, "owner-a", "secret-a")
     token_b = _issue_mgmt_session(daemon, "owner-b", "secret-b")
 
@@ -180,10 +192,10 @@ def test_daemon_exclusive_owner_conflict_denied(tmp_path: Path) -> None:
 
 
 def test_daemon_orphan_takeover_policy(tmp_path: Path) -> None:
-    daemon = _make_daemon(tmp_path)
-    daemon.svc.set_control_config(
+    daemon = _make_daemon(
+        tmp_path,
         require_auth=True,
-        claim_acl_policy={"owner_ttl_seconds": 10, "audit_event_limit": 200},
+        claims={"owner_ttl_seconds": 10, "audit_event_limit": 200},
     )
     token_a = _issue_mgmt_session(daemon, "owner-a", "secret-a")
     token_b = _issue_mgmt_session(daemon, "owner-b", "secret-b")
@@ -214,8 +226,7 @@ def test_daemon_orphan_takeover_policy(tmp_path: Path) -> None:
 
 
 def test_daemon_localhost_force_override_requires_confirmation(tmp_path: Path) -> None:
-    daemon = _make_daemon(tmp_path)
-    daemon.svc.set_control_config(require_auth=True)
+    daemon = _make_daemon(tmp_path, require_auth=True)
     token_a = _issue_mgmt_session(daemon, "owner-a", "secret-a")
     token_b = _issue_mgmt_session(daemon, "owner-b", "secret-b")
 
@@ -260,8 +271,7 @@ def test_daemon_localhost_force_override_requires_confirmation(tmp_path: Path) -
 
 
 def test_daemon_force_override_requires_reason(tmp_path: Path) -> None:
-    daemon = _make_daemon(tmp_path)
-    daemon.svc.set_control_config(require_auth=True)
+    daemon = _make_daemon(tmp_path, require_auth=True)
     token_a = _issue_mgmt_session(daemon, "owner-a", "secret-a")
     token_b = _issue_mgmt_session(daemon, "owner-b", "secret-b")
 
@@ -290,8 +300,7 @@ def test_daemon_force_override_requires_reason(tmp_path: Path) -> None:
 
 
 def test_daemon_emergency_force_override_allows_without_confirmation_and_audits_high(tmp_path: Path) -> None:
-    daemon = _make_daemon(tmp_path)
-    daemon.svc.set_control_config(require_auth=True)
+    daemon = _make_daemon(tmp_path, require_auth=True)
     token_a = _issue_mgmt_session(daemon, "owner-a", "secret-a")
     token_b = _issue_mgmt_session(daemon, "owner-b", "secret-b")
 
@@ -334,8 +343,7 @@ def test_daemon_emergency_force_override_allows_without_confirmation_and_audits_
 
 
 def test_daemon_emergency_stale_owner_reason_denied_when_owner_still_active(tmp_path: Path) -> None:
-    daemon = _make_daemon(tmp_path)
-    daemon.svc.set_control_config(require_auth=True)
+    daemon = _make_daemon(tmp_path, require_auth=True)
     token_a = _issue_mgmt_session(daemon, "owner-a", "secret-a")
     token_b = _issue_mgmt_session(daemon, "owner-b", "secret-b")
 
@@ -367,10 +375,10 @@ def test_daemon_emergency_stale_owner_reason_denied_when_owner_still_active(tmp_
 
 
 def test_daemon_emergency_stale_owner_reason_allowed_when_owner_is_orphan(tmp_path: Path) -> None:
-    daemon = _make_daemon(tmp_path)
-    daemon.svc.set_control_config(
+    daemon = _make_daemon(
+        tmp_path,
         require_auth=True,
-        claim_acl_policy={"owner_ttl_seconds": 10, "audit_event_limit": 200},
+        claims={"owner_ttl_seconds": 10, "audit_event_limit": 200},
     )
     token_a = _issue_mgmt_session(daemon, "owner-a", "secret-a")
     token_b = _issue_mgmt_session(daemon, "owner-b", "secret-b")
@@ -409,8 +417,7 @@ def test_daemon_emergency_stale_owner_reason_allowed_when_owner_is_orphan(tmp_pa
 
 
 def test_displaced_owner_is_denied_until_reclaim_then_cleared(tmp_path: Path) -> None:
-    daemon = _make_daemon(tmp_path)
-    daemon.svc.set_control_config(require_auth=True)
+    daemon = _make_daemon(tmp_path, require_auth=True)
     token_a = _issue_mgmt_session(daemon, "owner-a", "secret-a")
     token_b = _issue_mgmt_session(daemon, "owner-b", "secret-b")
 
@@ -488,8 +495,7 @@ def test_displaced_owner_is_denied_until_reclaim_then_cleared(tmp_path: Path) ->
 
 
 def test_daemon_non_localhost_shared_claim_denied(tmp_path: Path) -> None:
-    daemon = _make_daemon(tmp_path)
-    daemon.svc.set_control_config(require_auth=True)
+    daemon = _make_daemon(tmp_path, require_auth=True)
     token = _issue_mgmt_session(daemon, "admin-x", "secret-x")
 
     denied = _dispatch(
@@ -504,12 +510,7 @@ def test_daemon_non_localhost_shared_claim_denied(tmp_path: Path) -> None:
 
 
 def test_daemon_no_auth_forces_exclusive_claim_even_if_shared_requested(tmp_path: Path) -> None:
-    daemon = _make_daemon(tmp_path)
-    daemon.svc.set_control_config(
-        require_auth=False,
-        access_profile={"connectivity_mode": "local_only"},
-        endpoint_mode_default="exclusive",
-    )
+    daemon = _make_daemon(tmp_path, require_auth=False, connectivity_mode="local_only", endpoint_mode="exclusive")
 
     out = _dispatch(
         daemon,
@@ -524,8 +525,7 @@ def test_daemon_no_auth_forces_exclusive_claim_even_if_shared_requested(tmp_path
 
 
 def test_daemon_operation_start_and_status(tmp_path: Path) -> None:
-    daemon = _make_daemon(tmp_path)
-    daemon.svc.set_control_config(require_auth=True)
+    daemon = _make_daemon(tmp_path, require_auth=True)
     token = _issue_mgmt_session(daemon, "admin-op", "secret-op")
 
     started = _dispatch(
@@ -564,8 +564,7 @@ def test_daemon_operation_start_and_status(tmp_path: Path) -> None:
 
 
 def test_daemon_operation_start_copies_outer_session_token(tmp_path: Path) -> None:
-    daemon = _make_daemon(tmp_path)
-    daemon.svc.set_control_config(require_auth=True)
+    daemon = _make_daemon(tmp_path, require_auth=True)
     token = _issue_mgmt_session(daemon, "admin-op", "secret-op")
 
     started = _dispatch(
@@ -953,8 +952,8 @@ def test_daemon_operation_status_survives_memory_reload(tmp_path: Path) -> None:
     assert status["ok"] is True
     result = dict(status.get("result") or {})
     assert result.get("operation_id") == op_id
-    assert (tmp_path / "state" / "operations.json").exists()
-    assert (tmp_path / "state" / "operation_audit.jsonl").exists()
+    assert (daemon.svc.hosting_root / "state" / "operations.json").exists()
+    assert (daemon.svc.hosting_root / "state" / "operation_audit.jsonl").exists()
 
 
 def test_daemon_unload_model_records_completed_operation(tmp_path: Path) -> None:
@@ -984,7 +983,9 @@ def test_daemon_unload_model_records_completed_operation(tmp_path: Path) -> None
     )
 
     assert out["ok"] is True
-    operations = json.loads((tmp_path / "state" / "operations.json").read_text(encoding="utf-8"))
+    operations = json.loads(
+        (daemon.svc.hosting_root / "state" / "operations.json").read_text(encoding="utf-8")
+    )
     op = dict(operations["operations"][0])
     assert op["command"] == "unload-model"
     assert op["status"] == "completed"
@@ -993,7 +994,9 @@ def test_daemon_unload_model_records_completed_operation(tmp_path: Path) -> None
     assert op["result"]["removed_binding"] is True
     audit_rows = [
         json.loads(line)
-        for line in (tmp_path / "state" / "operation_audit.jsonl").read_text(encoding="utf-8").splitlines()
+        for line in (daemon.svc.hosting_root / "state" / "operation_audit.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
         if line.strip()
     ]
     assert [row["event"] for row in audit_rows] == ["created", "updated"]
@@ -1025,7 +1028,9 @@ def test_daemon_discover_prune_records_operation(tmp_path: Path) -> None:
 
     assert out["ok"] is True
     assert out["result"] == []
-    operations = json.loads((tmp_path / "state" / "operations.json").read_text(encoding="utf-8"))
+    operations = json.loads(
+        (daemon.svc.hosting_root / "state" / "operations.json").read_text(encoding="utf-8")
+    )
     op = dict(operations["operations"][0])
     assert op["command"] == "prune-stale-registration"
     assert op["status"] == "completed"
@@ -1081,8 +1086,7 @@ def test_daemon_operation_cancel_marks_running_task_canceled(tmp_path: Path) -> 
 
 
 def test_daemon_operation_cancel_requires_operation_session_token(tmp_path: Path) -> None:
-    daemon = _make_daemon(tmp_path)
-    daemon.svc.set_control_config(require_auth=True)
+    daemon = _make_daemon(tmp_path, require_auth=True)
     token = _issue_mgmt_session(daemon, "admin-cancel", "secret-cancel")
 
     def _slow_call_service(cmd: str, payload: dict) -> dict:
@@ -1206,11 +1210,10 @@ def test_daemon_operation_cancel_tears_down_late_connect_engine_id(tmp_path: Pat
 
 
 def test_owner_disconnect_shutdown_policy_sets_stop_event_for_exclusive_owner(tmp_path: Path) -> None:
-    daemon = _make_daemon(tmp_path)
-    daemon.svc.set_control_config(
+    daemon = _make_daemon(
+        tmp_path,
         require_auth=True,
-        lifecycle_profile="detached_user_process",
-        lifecycle_policy={"owner_disconnect_shutdown": True},
+        lifecycle={"profile": "detached_user_process", "owner_disconnect_shutdown": True},
     )
     token = _issue_mgmt_session(daemon, "owner-main", "secret-main")
     claimed = _dispatch(
@@ -1228,11 +1231,10 @@ def test_owner_disconnect_shutdown_policy_sets_stop_event_for_exclusive_owner(tm
 
 
 def test_owner_disconnect_exclusive_owner_still_stops_daemon_when_policy_disabled(tmp_path: Path) -> None:
-    daemon = _make_daemon(tmp_path)
-    daemon.svc.set_control_config(
+    daemon = _make_daemon(
+        tmp_path,
         require_auth=True,
-        lifecycle_profile="detached_user_process",
-        lifecycle_policy={"owner_disconnect_shutdown": False},
+        lifecycle={"profile": "detached_user_process", "owner_disconnect_shutdown": False},
     )
     token = _issue_mgmt_session(daemon, "owner-main", "secret-main")
     claimed = _dispatch(
@@ -1250,11 +1252,10 @@ def test_owner_disconnect_exclusive_owner_still_stops_daemon_when_policy_disable
 
 
 def test_daemon_terminal_control_disabled_blocks_shutdown_token_path(tmp_path: Path) -> None:
-    daemon = _make_daemon(tmp_path)
-    daemon.svc.set_control_config(
+    daemon = _make_daemon(
+        tmp_path,
         require_auth=True,
-        lifecycle_profile="service_managed",
-        lifecycle_policy={"terminal_control_enabled": False},
+        lifecycle={"profile": "service_managed", "terminal_control_enabled": False},
     )
     daemon._stop_event = asyncio.Event()  # noqa: SLF001
     out = _dispatch(
@@ -1322,11 +1323,10 @@ def test_daemon_report_path_uses_sanitized_default_when_configuration_is_missing
 
 
 def test_daemon_terminal_control_disabled_blocks_endpoint_mode_override(tmp_path: Path) -> None:
-    daemon = _make_daemon(tmp_path)
-    daemon.svc.set_control_config(
+    daemon = _make_daemon(
+        tmp_path,
         require_auth=True,
-        lifecycle_profile="service_managed",
-        lifecycle_policy={"terminal_control_enabled": False},
+        lifecycle={"profile": "service_managed", "terminal_control_enabled": False},
     )
     token = _issue_mgmt_session(daemon, "admin-override", "secret-override")
     out = _dispatch(
@@ -1340,8 +1340,7 @@ def test_daemon_terminal_control_disabled_blocks_endpoint_mode_override(tmp_path
 
 
 def test_daemon_endpoint_mode_override_requires_auth_token(tmp_path: Path) -> None:
-    daemon = _make_daemon(tmp_path)
-    daemon.svc.set_control_config(require_auth=True)
+    daemon = _make_daemon(tmp_path, require_auth=True)
     out = _dispatch(
         daemon,
         seq=1,
@@ -1354,8 +1353,7 @@ def test_daemon_endpoint_mode_override_requires_auth_token(tmp_path: Path) -> No
 
 
 def test_daemon_registers_lists_and_closes_host_capability_session(tmp_path: Path) -> None:
-    daemon = _make_daemon(tmp_path)
-    daemon.svc.set_control_config(require_auth=True)
+    daemon = _make_daemon(tmp_path, require_auth=True)
     token = _issue_mgmt_session(daemon, "admin-cap", "secret-cap")
     actor_id = daemon.svc.resolve_actor_id_from_session_token(token)
 
@@ -1421,8 +1419,7 @@ def test_daemon_registers_lists_and_closes_host_capability_session(tmp_path: Pat
 
 
 def test_daemon_registers_service_broker_host_capability_session(tmp_path: Path) -> None:
-    daemon = _make_daemon(tmp_path)
-    daemon.svc.set_control_config(require_auth=True)
+    daemon = _make_daemon(tmp_path, require_auth=True)
     token = _issue_mgmt_session(daemon, "admin-cap-service", "secret-cap-service")
 
     registered = _dispatch(
@@ -1450,8 +1447,7 @@ def test_daemon_registers_service_broker_host_capability_session(tmp_path: Path)
 
 
 def test_daemon_rejects_duplicate_host_capability_method_unless_override_requested(tmp_path: Path) -> None:
-    daemon = _make_daemon(tmp_path)
-    daemon.svc.set_control_config(require_auth=True)
+    daemon = _make_daemon(tmp_path, require_auth=True)
     token = _issue_mgmt_session(daemon, "admin-cap-dup", "secret-cap-dup")
     base_payload = {
         "session_token": token,
@@ -1488,10 +1484,9 @@ def test_daemon_rejects_duplicate_host_capability_method_unless_override_request
 
 
 def test_daemon_host_capability_session_register_preserves_ssh_auth_binding(tmp_path: Path) -> None:
-    daemon = _make_daemon(tmp_path)
+    daemon = _make_daemon(tmp_path, require_auth=True, connectivity_mode="local_only")
     binding = {"target": "user@example-host", "key_fingerprint": "SHA256:abc"}
     daemon.svc.auth_upsert_key(key_id="admin-cap-ssh", key_secret="secret-cap-ssh", role="admin")
-    daemon.svc.set_control_config(require_auth=True, access_profile={"connectivity_mode": "local_only"})
     issued = daemon.svc.auth_issue_session(
         key_id="admin-cap-ssh",
         key_secret="secret-cap-ssh",
@@ -1500,7 +1495,7 @@ def test_daemon_host_capability_session_register_preserves_ssh_auth_binding(tmp_
         ssh_binding=binding,
     )
     token = str(issued["token"])
-    daemon.svc.set_control_config(require_auth=True, access_profile={"connectivity_mode": "ssh_tunnel_only"})
+    daemon = _make_daemon(tmp_path, require_auth=True, connectivity_mode="ssh_tunnel_only")
     payload = {
         "session_token": token,
         "session_id": "cap-session-ssh",
@@ -1544,8 +1539,7 @@ def test_daemon_host_capability_session_register_preserves_ssh_auth_binding(tmp_
 
 
 def test_daemon_closes_disconnect_scoped_host_capability_sessions(tmp_path: Path) -> None:
-    daemon = _make_daemon(tmp_path)
-    daemon.svc.set_control_config(require_auth=True)
+    daemon = _make_daemon(tmp_path, require_auth=True)
     token = _issue_mgmt_session(daemon, "admin-disconnect-cap", "secret-disconnect-cap")
     actor_id = daemon.svc.resolve_actor_id_from_session_token(token)
     assert actor_id
@@ -1578,8 +1572,7 @@ def test_daemon_closes_disconnect_scoped_host_capability_sessions(tmp_path: Path
 
 
 def test_capability_authority_lease_retain_renew_terminal_and_revoke(tmp_path: Path) -> None:
-    daemon = _make_daemon(tmp_path)
-    daemon.svc.set_control_config(require_auth=True)
+    daemon = _make_daemon(tmp_path, require_auth=True)
     token = _issue_mgmt_session(daemon, "admin-authority", "secret-authority")
     actor_id = daemon.svc.resolve_actor_id_from_session_token(token)
     expires_at_ms = int(time.time() * 1000) + 60_000
@@ -1664,8 +1657,7 @@ def test_capability_authority_lease_retain_renew_terminal_and_revoke(tmp_path: P
 
 
 def test_capability_authority_lease_rejects_unsafe_retention_and_legacy_boolean(tmp_path: Path) -> None:
-    daemon = _make_daemon(tmp_path)
-    daemon.svc.set_control_config(require_auth=True)
+    daemon = _make_daemon(tmp_path, require_auth=True)
     token = _issue_mgmt_session(daemon, "admin-authority-invalid", "secret-authority-invalid")
     base = {
         "session_token": token,
@@ -1690,8 +1682,7 @@ def test_capability_authority_lease_rejects_unsafe_retention_and_legacy_boolean(
 
 
 def test_capability_authority_expiry_unauthorized_revoke_and_close_race(tmp_path: Path) -> None:
-    daemon = _make_daemon(tmp_path)
-    daemon.svc.set_control_config(require_auth=True)
+    daemon = _make_daemon(tmp_path, require_auth=True)
     owner_token = _issue_mgmt_session(daemon, "authority-race-owner", "authority-race-owner-secret")
     other_token = _issue_mgmt_session(daemon, "authority-race-other", "authority-race-other-secret")
     owner_id = daemon.svc.resolve_actor_id_from_session_token(owner_token)
