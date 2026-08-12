@@ -50,6 +50,7 @@ from .toolbox_host_config_state import AtomicJsonToolboxHostConfigurationReposit
 from .toolbox_artifact_store import AtomicToolboxArtifactStore
 from .toolbox_approvals import AtomicJsonToolboxDependencyApprovalRepository
 from .toolbox_confirmations import AtomicJsonToolboxConfirmationRepository
+from .toolbox_candidates import AtomicJsonToolboxDefinitionCandidateRepository
 from ..toolbox.target import detect_current_toolbox_target
 from ..toolbox.hermetic_environment import PythonEnvironmentBuilder
 from .workflow_helpers import WorkflowHelperMixin
@@ -139,6 +140,12 @@ class EngineHostService(CoreMixin, MetricsMixin, StateMixin, ConfigMixin, Contro
         )
         self._toolbox_confirmations = AtomicJsonToolboxConfirmationRepository(
             self.hosting_root / "state" / "toolbox_definition_confirmations.json"
+        )
+        candidate_policy = dict(hosting_configuration.control["lifecycle"])
+        self._toolbox_definition_candidates = AtomicJsonToolboxDefinitionCandidateRepository(
+            self.hosting_root / "state" / "toolbox_definition_candidates.json",
+            retention_ms=int(candidate_policy["toolbox_candidate_retention_ms"]),
+            limit_per_actor=int(candidate_policy["toolbox_candidate_limit_per_actor"]),
         )
         self._configured_toolbox_dependency_policy = None
         self._model_runtime_identity = (
