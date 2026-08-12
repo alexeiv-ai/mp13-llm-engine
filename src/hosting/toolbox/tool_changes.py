@@ -73,6 +73,7 @@ class ToolboxToolChange:
                 raise ValueError("tool_change_add_target_invalid")
         else:
             target = _tool_key(row["target_tool_key"])
+        request: ToolboxAutoAssignmentRequestV2 | ToolboxManualAssignmentRequestV2 | None
         if kind == "remove":
             if row["request_kind"] is not None or row["request"] is not None:
                 raise ValueError("tool_change_remove_request_invalid")
@@ -350,10 +351,12 @@ def merge_toolbox_tool_changes(
         toolbox_id=active.toolbox_id,
         expected_revision=authoritative,
         auto_requests=tuple(
-            request for kind, request in merged.values() if kind == "auto"
+            request for kind, request in merged.values()
+            if kind == "auto" and isinstance(request, ToolboxAutoAssignmentRequestV2)
         ),
         manual_requests=tuple(
-            request for kind, request in merged.values() if kind == "manual"
+            request for kind, request in merged.values()
+            if kind == "manual" and isinstance(request, ToolboxManualAssignmentRequestV2)
         ),
         intrinsics=active.intrinsics,
     )
@@ -574,8 +577,14 @@ def revise_toolbox_definition_plan(
     revised = ToolboxDefinitionSpec(
         toolbox_id=active_definition.toolbox_id,
         expected_revision=proposed_definition.expected_revision,
-        auto_requests=tuple(value for kind, value in merged.values() if kind == "auto"),
-        manual_requests=tuple(value for kind, value in merged.values() if kind == "manual"),
+        auto_requests=tuple(
+            value for kind, value in merged.values()
+            if kind == "auto" and isinstance(value, ToolboxAutoAssignmentRequestV2)
+        ),
+        manual_requests=tuple(
+            value for kind, value in merged.values()
+            if kind == "manual" and isinstance(value, ToolboxManualAssignmentRequestV2)
+        ),
         intrinsics=ToolboxIntrinsicSelection(
             names=tuple(sorted(active_intrinsics)),
             include_guides=intrinsic_source.include_guides,

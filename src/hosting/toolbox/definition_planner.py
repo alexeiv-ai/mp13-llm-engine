@@ -306,10 +306,10 @@ def _definition_items(
     definition: ToolboxDefinitionSpec,
 ) -> tuple[dict[str, tuple[str, Any]], dict[str, str]]:
     items: dict[str, tuple[str, Any]] = {}
-    for request in definition.auto_requests:
-        items[request.stable_key] = ("auto", request)
-    for request in definition.manual_requests:
-        items[request.stable_key] = ("manual", request)
+    for auto_request in definition.auto_requests:
+        items[auto_request.stable_key] = ("auto", auto_request)
+    for manual_request in definition.manual_requests:
+        items[manual_request.stable_key] = ("manual", manual_request)
     for name in definition.intrinsics.names:
         items[f"intrinsic:{name}"] = ("intrinsic", name)
     advertised: dict[str, str] = {}
@@ -399,18 +399,18 @@ def reduce_toolbox_confirmation(
             )
         )
         declined = not decision.accept_package_changes and bool(package_change_distributions)
-        for mutation in alternative.package_mutations:
-            if not declined or mutation.mutation == "removal":
-                package_mutations.append(mutation.to_dict())
+        for package_mutation in alternative.package_mutations:
+            if not declined or package_mutation.mutation == "removal":
+                package_mutations.append(package_mutation.to_dict())
         if decision.accept_package_changes:
             approval_required = approval_required or offer.dependency_approval_required
-        for mutation in offer.tool_mutations:
-            if mutation.tool_key in expected_changes:
+        for tool_mutation in offer.tool_mutations:
+            if tool_mutation.tool_key in expected_changes:
                 raise ValueError("toolbox_confirmation_tool_offered_twice")
-            expected_changes[mutation.tool_key] = mutation.change
-            tool_environment[mutation.tool_key] = offer.environment_id
+            expected_changes[tool_mutation.tool_key] = tool_mutation.change
+            tool_environment[tool_mutation.tool_key] = offer.environment_id
             if declined:
-                declined_distributions[mutation.tool_key] = package_change_distributions
+                declined_distributions[tool_mutation.tool_key] = package_change_distributions
         for edge in offer.dependency_edges:
             all_edges[edge.tool_key] = edge
 
@@ -1007,42 +1007,42 @@ def plan_toolbox_definition(
     model = definition if isinstance(definition, ToolboxDefinitionSpec) else ToolboxDefinitionSpec.from_dict(definition)
     _validate_definition_namespace(model)
     members: list[_ResolvedMember] = []
-    for request in model.auto_requests:
+    for auto_request in model.auto_requests:
         members.append(
             _resolve_member(
                 kind="auto",
-                stable_key=request.stable_key,
-                request=request,
-                files=request.files,
-                dependency_mode=request.dependency.mode,
-                requested_template_id=request.dependency.template_id,
-                declared_imports=request.dependency.declared_imports,
-                package_requirements=request.dependency.package_requirements,
+                stable_key=auto_request.stable_key,
+                request=auto_request,
+                files=auto_request.files,
+                dependency_mode=auto_request.dependency.mode,
+                requested_template_id=auto_request.dependency.template_id,
+                declared_imports=auto_request.dependency.declared_imports,
+                package_requirements=auto_request.dependency.package_requirements,
                 templates=templates,
                 python_abi=python_abi,
                 platform=platform,
                 runtime_identity=runtime_identity,
-                sandbox_policy=request.sandbox_policy,
-                assigned_tool_keys=(request.stable_key,),
+                sandbox_policy=auto_request.sandbox_policy,
+                assigned_tool_keys=(auto_request.stable_key,),
             )
         )
-    for request in model.manual_requests:
+    for manual_request in model.manual_requests:
         members.append(
             _resolve_member(
                 kind="manual",
-                stable_key=request.stable_key,
-                request=request,
-                files=request.files,
-                dependency_mode=request.dependency.mode,
-                requested_template_id=request.dependency.template_id,
-                declared_imports=request.dependency.declared_imports,
-                package_requirements=request.dependency.package_requirements,
+                stable_key=manual_request.stable_key,
+                request=manual_request,
+                files=manual_request.files,
+                dependency_mode=manual_request.dependency.mode,
+                requested_template_id=manual_request.dependency.template_id,
+                declared_imports=manual_request.dependency.declared_imports,
+                package_requirements=manual_request.dependency.package_requirements,
                 templates=templates,
                 python_abi=python_abi,
                 platform=platform,
                 runtime_identity=runtime_identity,
-                sandbox_policy=request.sandbox_policy,
-                assigned_tool_keys=(request.stable_key,),
+                sandbox_policy=manual_request.sandbox_policy,
+                assigned_tool_keys=(manual_request.stable_key,),
             )
         )
     if model.intrinsics.names:
@@ -1114,32 +1114,32 @@ def plan_toolbox_definition(
                 for file in member.request.files:
                     files_by_path.setdefault(file.normalized_path(), file)
             if member.kind == "auto":
-                request = member.request
-                assert isinstance(request, ToolboxAutoAssignmentRequestV2)
+                auto_request = member.request
+                assert isinstance(auto_request, ToolboxAutoAssignmentRequestV2)
                 auto_tools.append(
                     ToolboxBundleAutoTool(
-                        module_name=request.module_name,
-                        callable_name=request.callable_name,
-                        activate=request.activate,
-                        hidden=request.hidden,
-                        non_restartable=request.non_restartable,
-                        guide_content=dict(request.guide_content) if request.guide_content is not None else None,
-                        guide_description=request.guide_description,
-                        callback_signature=dict(request.callback_signature) if request.callback_signature is not None else None,
-                        concurrency=dict(request.concurrency) if request.concurrency is not None else None,
+                        module_name=auto_request.module_name,
+                        callable_name=auto_request.callable_name,
+                        activate=auto_request.activate,
+                        hidden=auto_request.hidden,
+                        non_restartable=auto_request.non_restartable,
+                        guide_content=dict(auto_request.guide_content) if auto_request.guide_content is not None else None,
+                        guide_description=auto_request.guide_description,
+                        callback_signature=dict(auto_request.callback_signature) if auto_request.callback_signature is not None else None,
+                        concurrency=dict(auto_request.concurrency) if auto_request.concurrency is not None else None,
                     )
                 )
             elif member.kind == "manual":
-                request = member.request
-                assert isinstance(request, ToolboxManualAssignmentRequestV2)
+                manual_request = member.request
+                assert isinstance(manual_request, ToolboxManualAssignmentRequestV2)
                 manual_tools.append(
                     ToolboxBundleTool(
-                        definition=dict(request.tool_definition),
-                        entrypoint=f"{request.module_name}:{request.callable_name}",
-                        hidden=request.hidden,
-                        non_restartable=request.non_restartable,
-                        callback_signature=dict(request.callback_signature) if request.callback_signature is not None else None,
-                        concurrency=dict(request.concurrency) if request.concurrency is not None else None,
+                        definition=dict(manual_request.tool_definition),
+                        entrypoint=f"{manual_request.module_name}:{manual_request.callable_name}",
+                        hidden=manual_request.hidden,
+                        non_restartable=manual_request.non_restartable,
+                        callback_signature=dict(manual_request.callback_signature) if manual_request.callback_signature is not None else None,
+                        concurrency=dict(manual_request.concurrency) if manual_request.concurrency is not None else None,
                     )
                 )
             else:

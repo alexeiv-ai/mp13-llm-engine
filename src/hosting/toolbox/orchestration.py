@@ -259,18 +259,18 @@ class ToolboxSandboxOrchestrator:
         if not tid:
             raise ValueError("toolbox_id_required")
         grouped: Dict[str, Dict[str, Any]] = {}
-        for request in list(requests or []):
-            profile = request.sandbox_profile or SandboxProfileSpec()
+        for auto_request in list(requests or []):
+            profile = auto_request.sandbox_profile or SandboxProfileSpec()
             profile_key = profile.normalized_profile_id()
             row = grouped.setdefault(profile_key, {"profile": profile, "files": [], "auto_tools": [], "tools": []})
-            row["files"].extend(list(request.files or []))
-            row["auto_tools"].append(request.to_auto_tool())
-        for request in list(manual_requests or []):
-            profile = request.sandbox_profile or SandboxProfileSpec()
+            row["files"].extend(list(auto_request.files or []))
+            row["auto_tools"].append(auto_request.to_auto_tool())
+        for manual_request in list(manual_requests or []):
+            profile = manual_request.sandbox_profile or SandboxProfileSpec()
             profile_key = profile.normalized_profile_id()
             row = grouped.setdefault(profile_key, {"profile": profile, "files": [], "auto_tools": [], "tools": []})
-            row["files"].extend(list(request.files or []))
-            row["tools"].append(request.to_bundle_tool())
+            row["files"].extend(list(manual_request.files or []))
+            row["tools"].append(manual_request.to_bundle_tool())
         out: List[ToolboxSandboxAssignment] = []
         for row in grouped.values():
             profile = row["profile"]
