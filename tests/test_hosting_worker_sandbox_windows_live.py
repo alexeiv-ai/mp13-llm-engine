@@ -38,10 +38,11 @@ def _sandbox_policy() -> WorkerSandboxPolicy:
     )
 
 
-def _probe_pipe_hello(*, pipe: str, auth: str) -> tuple[object, object]:
+def _probe_pipe_hello(*, pipe: str, auth: str, timeout_seconds: float = 30.0) -> tuple[object, object]:
     resp = None
     last_exc = None
-    for _ in range(50):
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
         try:
             conn = Client(address=pipe, family="AF_PIPE", authkey=auth.encode("utf-8"))
             conn.send({"kind": "hello"})
@@ -121,6 +122,7 @@ def test_windows_low_il_worker_serves_named_pipe_rpc_with_minimal_helper(tmp_pat
     auth = "tok-" + secrets.token_hex(8)
     script = (
         "import sys;"
+        "print('low-il-helper-ready', flush=True);"
         "from multiprocessing.connection import Listener;"
         "listener = Listener(address=sys.argv[1], family='AF_PIPE', authkey=sys.argv[2].encode('utf-8'));"
         "conn = listener.accept();"
@@ -154,6 +156,7 @@ def test_windows_low_il_worker_serves_named_pipe_rpc_with_minimal_helper(tmp_pat
 
     assert resp == {"status": "ok", "echo": {"kind": "hello"}}, repr(last_exc)
     assert code == 0
+    assert "low-il-helper-ready" in (tmp_path / "ipcmini.log").read_text(encoding="utf-8")
 
 
 @pytest.mark.skipif(

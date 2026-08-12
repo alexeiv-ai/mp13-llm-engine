@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import ctypes
+import msvcrt
+import os
 import subprocess
 from ctypes import wintypes
 from dataclasses import dataclass
@@ -25,6 +27,7 @@ CREATE_NEW_CONSOLE = 0x00000010
 CREATE_NO_WINDOW = 0x08000000
 CREATE_UNICODE_ENVIRONMENT = 0x00000400
 STARTF_USESHOWWINDOW = 0x00000001
+STARTF_USESTDHANDLES = 0x00000100
 SW_HIDE = 0
 SYNCHRONIZE = 0x00100000
 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
@@ -286,27 +289,35 @@ def launch_restricted_worker(
 
     restricted = _create_restricted_token(integrity_level)
     try:
-        si = STARTUPINFOW()
-        si.cb = ctypes.sizeof(si)
-        si.dwFlags = STARTF_USESHOWWINDOW
-        si.wShowWindow = SW_HIDE
-        pi = PROCESS_INFORMATION()
-        env_block = _build_env_block(env)
-        command_line = subprocess.list2cmdline(list(argv or []))
-        flags = CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW
-        created = advapi32.CreateProcessAsUserW(
-            restricted,
-            None,
-            ctypes.c_wchar_p(command_line),
-            None,
-            None,
-            False,
-            flags,
-            ctypes.c_wchar_p(env_block),
-            ctypes.c_wchar_p(str(cwd) if cwd else None),
-            ctypes.byref(si),
-            ctypes.byref(pi),
-        )
+        with open(log_path, "ab", buffering=0) as log_fp, open(os.devnull, "rb", buffering=0) as stdin_fp:
+            log_handle = msvcrt.get_osfhandle(log_fp.fileno())
+            stdin_handle = msvcrt.get_osfhandle(stdin_fp.fileno())
+            os.set_handle_inheritable(log_handle, True)
+            os.set_handle_inheritable(stdin_handle, True)
+            si = STARTUPINFOW()
+            si.cb = ctypes.sizeof(si)
+            si.dwFlags = STARTF_USESHOWWINDOW | STARTF_USESTDHANDLES
+            si.wShowWindow = SW_HIDE
+            si.hStdInput = wintypes.HANDLE(stdin_handle)
+            si.hStdOutput = wintypes.HANDLE(log_handle)
+            si.hStdError = wintypes.HANDLE(log_handle)
+            pi = PROCESS_INFORMATION()
+            env_block = _build_env_block(env)
+            command_line = subprocess.list2cmdline(list(argv or []))
+            flags = CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW
+            created = advapi32.CreateProcessAsUserW(
+                restricted,
+                None,
+                ctypes.c_wchar_p(command_line),
+                None,
+                None,
+                True,
+                flags,
+                ctypes.c_wchar_p(env_block),
+                ctypes.c_wchar_p(str(cwd) if cwd else None),
+                ctypes.byref(si),
+                ctypes.byref(pi),
+            )
         if not created:
             _raise_last_error("CreateProcessAsUserW")
         if use_job_object:
@@ -324,7 +335,7 @@ def launch_restricted_worker(
                 "mode": "restricted_token_low_il_job" if use_job_object else "restricted_token_low_il",
                 "integrity_level": str(integrity_level),
                 "job_object": bool(use_job_object),
-                "log_capture": "file_created_no_stdio_redirect",
+                "log_capture": "stdout_stderr",
             },
         )
     finally:
