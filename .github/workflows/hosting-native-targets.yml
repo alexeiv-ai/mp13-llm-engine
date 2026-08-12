@@ -59,5 +59,5 @@ jobs:
         run: >-
           python -m pytest -q -x
           tests/test_hosting_r6_restart_healing.py
-          tests/test_hosting_r7_acceptance.py
+          tests/test_hosting_toolbox_definition_resolution.py
           tests/test_hosting_toolbox_target.py

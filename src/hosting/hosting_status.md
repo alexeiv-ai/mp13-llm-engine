@@ -139,6 +139,7 @@ The pre-R7 P0 clean-cut items are complete.
 | CODE/TEST-R9.4G | Removed the engine-state attachment surface from app helpers, hosted chat demo, and `mp13chat`; existing toolbox attachment now takes only the top-level configuration. Removed redundant state keywords from modern fixtures. The focused modern hosting lane passed 337 tests with 1 skipped, and app helper coverage passed 20 tests. |
 | TEST-R9.4H | Hermetic builder fixtures now test rejection using only the removed toolbox map and no longer model engine/control-state paths; the full file passed 11 tests. |
 | TEST-R9.4I | Toolbox host-project semantic tests now install their catalog intent explicitly after strict v3 service startup; removed setup-summary projections stay absent and revision invalidation remains covered. The file passed 6 tests. |
+| TEST-R9.4J | Removed the legacy signed-bundle daemon/setup, HTTPS-acquisition, and pre-generic R7 acceptance modules that depended on the five deleted startup maps and mandatory signing baseline. Native CI now exercises strict-v3 definition resolution; the replacement package/definition/cutover/workflow lane passed 21 tests. |
 | CODE-R8A–C | Versioned neutral state, Python/JS shared manager adoption, GC/repair controls passed focused coverage. |
 | CODE/TEST-R9 partial | Structured auth, role/hash authority, redaction, startup modes, generic lifecycle, and retry/restart identity passed focused coverage. |
 | TEST-R8.2C checkpoint | Workflow operation suite passed; full helper suite passed 116 tests on resume. |

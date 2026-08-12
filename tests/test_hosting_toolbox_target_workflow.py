@@ -23,5 +23,5 @@ def test_native_target_workflow_covers_every_declared_runner_family() -> None:
     assert "cryptography==49.0.0" in text
     assert "tests/native_hosting_target_probe.py" in text
     assert "tests/test_hosting_r6_restart_healing.py" in text
-    assert "tests/test_hosting_r7_acceptance.py" in text
+    assert "tests/test_hosting_toolbox_definition_resolution.py" in text
     assert "native sandbox worker restart healing and cleanup" in text

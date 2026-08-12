@@ -10,7 +10,6 @@ import pytest
 
 _PROCESS_TEST_MODULES = {
     "test_hosting_r6_restart_healing.py",
-    "test_hosting_r7_acceptance.py",
     "test_hosting_toolbox_sandbox.py",
     "test_hosting_worker_sandbox.py",
     "test_hosting_worker_sandbox_windows_live.py",
