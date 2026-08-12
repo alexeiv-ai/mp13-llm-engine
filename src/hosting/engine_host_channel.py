@@ -3477,11 +3477,11 @@ class EngineHostControlChannel:
             payload={"request_id": str(request_id or "").strip()},
         )
 
-    def toolbox_environment_remove(
+    def environment_remove(
         self, *, environment_digest: str, request_id: str
     ) -> Dict[str, Any]:
         res = self._invoke(
-            "toolbox-environment-remove",
+            "environment-remove",
             {
                 "environment_digest": str(environment_digest or "").strip(),
                 "request_id": str(request_id or "").strip(),
@@ -3564,18 +3564,18 @@ class EngineHostControlChannel:
         res = self._invoke("model-runtime-status", {})
         return dict(res or {})
 
-    def toolbox_template_list(self) -> Dict[str, Any]:
-        res = self._invoke("toolbox-template-list", {})
+    def environment_template_list(self) -> Dict[str, Any]:
+        res = self._invoke("environment-template-list", {})
         return dict(res or {})
 
-    def toolbox_template_describe(
+    def environment_template_describe(
         self,
         *,
         template_id: str,
         template_digest: Optional[str] = None,
     ) -> Dict[str, Any]:
         res = self._invoke(
-            "toolbox-template-describe",
+            "environment-template-describe",
             {
                 "template_id": str(template_id or "").strip(),
                 "template_digest": str(template_digest or "").strip() or None,
@@ -3583,7 +3583,7 @@ class EngineHostControlChannel:
         )
         return dict(res or {})
 
-    def toolbox_template_construct(
+    def environment_template_construct(
         self,
         *,
         template_id: str,
@@ -3593,7 +3593,7 @@ class EngineHostControlChannel:
         request_id: str,
     ) -> Dict[str, Any]:
         return self.start_host_operation(
-            command="toolbox-template-construct",
+            command="environment-template-construct",
             payload={
                 "template_id": str(template_id or "").strip(),
                 "base_template_digest": str(base_template_digest or "").strip(),
@@ -3605,11 +3605,11 @@ class EngineHostControlChannel:
             },
         )
 
-    def toolbox_template_activate(
+    def environment_template_activate(
         self, *, template_id: str, template_digest: str
     ) -> Dict[str, Any]:
         res = self._invoke(
-            "toolbox-template-activate",
+            "environment-template-activate",
             {
                 "template_id": str(template_id or "").strip(),
                 "template_digest": str(template_digest or "").strip(),
@@ -3617,7 +3617,7 @@ class EngineHostControlChannel:
         )
         return dict(res or {})
 
-    def toolbox_template_replace(
+    def environment_template_replace(
         self,
         *,
         template_id: str,
@@ -3625,7 +3625,7 @@ class EngineHostControlChannel:
         replacement_digest: str,
     ) -> Dict[str, Any]:
         res = self._invoke(
-            "toolbox-template-replace",
+            "environment-template-replace",
             {
                 "template_id": str(template_id or "").strip(),
                 "expected_active_digest": str(expected_active_digest or "").strip(),
@@ -3634,11 +3634,11 @@ class EngineHostControlChannel:
         )
         return dict(res or {})
 
-    def toolbox_template_deprecate(
+    def environment_template_deprecate(
         self, *, template_id: str, template_digest: str
     ) -> Dict[str, Any]:
         res = self._invoke(
-            "toolbox-template-deprecate",
+            "environment-template-deprecate",
             {
                 "template_id": str(template_id or "").strip(),
                 "template_digest": str(template_digest or "").strip(),
@@ -3646,11 +3646,11 @@ class EngineHostControlChannel:
         )
         return dict(res or {})
 
-    def toolbox_template_revoke(
+    def environment_template_revoke(
         self, *, template_id: str, template_digest: str
     ) -> Dict[str, Any]:
         res = self._invoke(
-            "toolbox-template-revoke",
+            "environment-template-revoke",
             {
                 "template_id": str(template_id or "").strip(),
                 "template_digest": str(template_digest or "").strip(),
@@ -3658,7 +3658,7 @@ class EngineHostControlChannel:
         )
         return dict(res or {})
 
-    def toolbox_template_prewarm(
+    def environment_template_prewarm(
         self,
         *,
         template_id: str,
@@ -3668,7 +3668,7 @@ class EngineHostControlChannel:
         template_digest: Optional[str] = None,
     ) -> Dict[str, Any]:
         res = self._invoke(
-            "toolbox-template-prewarm",
+            "environment-template-prewarm",
             {
                 "template_id": str(template_id or "").strip(),
                 "template_digest": str(template_digest or "").strip() or None,

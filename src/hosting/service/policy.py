@@ -22,7 +22,7 @@ class PolicyMixin:
             raise PermissionError("empty_command")
         if (
             c.startswith("workflow-python-")
-            or c.startswith("toolbox-template-")
+            or c.startswith("environment-template-")
         ):
             row = dict(payload or {})
             selection = {
@@ -178,7 +178,7 @@ class PolicyMixin:
             "hosted-operation-result",
             "hosted-operation-cancel",
             "toolbox-gc",
-            "toolbox-environment-remove",
+            "environment-remove",
             "package-artifact-upload-begin",
             "package-artifact-upload-chunk",
             "package-artifact-upload-status",
@@ -190,14 +190,14 @@ class PolicyMixin:
             "toolbox-confirm-definition-plan",
             "toolbox-approve-confirmed-definition-plan",
             "toolbox-apply-definition",
-            "toolbox-template-list",
-            "toolbox-template-describe",
-            "toolbox-template-construct",
-            "toolbox-template-activate",
-            "toolbox-template-replace",
-            "toolbox-template-deprecate",
-            "toolbox-template-revoke",
-            "toolbox-template-prewarm",
+            "environment-template-list",
+            "environment-template-describe",
+            "environment-template-construct",
+            "environment-template-activate",
+            "environment-template-replace",
+            "environment-template-deprecate",
+            "environment-template-revoke",
+            "environment-template-prewarm",
             "toolbox-references",
             "toolbox-consistency",
             "toolbox-review-snapshot",

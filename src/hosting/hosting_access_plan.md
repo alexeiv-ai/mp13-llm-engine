@@ -674,11 +674,11 @@ commands fail with the frozen version/unknown-command response.
 
 ##### R6.1 Replace toolbox-owned manager and builder types
 
-- [ ] Implement the neutral environment contracts from R0.
+- [x] Implement the neutral environment contracts from R0.
 - [ ] Replace `ToolboxEnvironmentManager`, the compatibility-only
   `RuntimeEnvironmentManager` subclass, and hermetic toolbox names with one
   `EnvironmentManager` and generic builders.
-- [ ] Keep runtime-specific mechanics behind adapters rather than in the shared
+- [x] Keep runtime-specific mechanics behind adapters rather than in the shared
   contract.
 
 Proof: imports and type tests show toolbox and non-toolbox consumers depend on
@@ -686,20 +686,20 @@ the neutral interface; old aliases are absent.
 
 ##### R6.2 Use generic roots and content keys
 
-- [ ] Store reusable environments under resolved `@environments` roots and
+- [x] Store reusable environments under resolved `@environments` roots and
   transient builds under `@hosting/scratch`.
-- [ ] Derive keys from runtime/builder identity, platform, exact package lock,
+- [x] Derive keys from runtime/builder identity, platform, exact package lock,
   environment template revision, and relevant policy inputs.
-- [ ] Publish a receipt only after validation and atomic promotion.
+- [x] Publish a receipt only after validation and atomic promotion.
 
 Proof: same inputs reuse one valid environment; changed package/template/
 runtime/platform inputs produce distinct identities; incomplete builds do not.
 
 ##### R6.3 Add generic references and concurrency control
 
-- [ ] Store references with `consumer_kind`, `consumer_id`, and `revision`.
-- [ ] Serialize builders per environment key while allowing unrelated builds.
-- [ ] Prevent removal/GC of referenced or active environments and make release
+- [x] Store references with `consumer_kind`, `consumer_id`, and `revision`.
+- [x] Serialize builders per environment key while allowing unrelated builds.
+- [x] Prevent removal/GC of referenced or active environments and make release
   idempotent.
 
 Proof: concurrent toolbox and non-toolbox tests cover build coalescing,
@@ -707,8 +707,8 @@ reference acquisition/release, active execution, removal denial, and restart.
 
 ##### R6.4 Cut generic template and environment commands
 
-- [ ] Replace `toolbox-template-*` with `environment-template-*`.
-- [ ] Replace `toolbox-environment-remove` with `environment-remove`.
+- [x] Replace `toolbox-template-*` with `environment-template-*`.
+- [x] Replace `toolbox-environment-remove` with `environment-remove`.
 - [ ] Generalize operation kinds, audit events, receipts, dispatch, channel,
   CLI, status, and capability declarations.
 

@@ -42,6 +42,7 @@ class CoreMixin:
             "capability_authority_leases_v1": True,
             "package_artifact_ingress_v1": True,
             "package_locks_v1": True,
+            "environment_management_v1": True,
         }
 
     @staticmethod

@@ -2292,8 +2292,8 @@ class EngineHostDaemon:
                     "toolbox-plan-definition",
                     "toolbox-confirm-definition-plan",
                     "toolbox-apply-definition",
-                    "toolbox-environment-remove",
-                    "toolbox-template-construct",
+                    "environment-remove",
+                    "environment-template-construct",
                     "toolbox-gc",
                     "toolbox-repair",
                     "toolbox-reconcile",
@@ -2485,7 +2485,7 @@ class EngineHostDaemon:
                 "toolbox-plan-definition",
                 "toolbox-confirm-definition-plan",
                 "toolbox-apply-definition",
-                "toolbox-template-construct",
+                "environment-template-construct",
                 "toolbox-gc",
                 "toolbox-repair",
                 "toolbox-reconcile",
@@ -3214,8 +3214,8 @@ class EngineHostDaemon:
                 request_id=str(payload.get("request_id") or ""),
                 owner_actor_id=str(payload.get("_claim_actor_id") or "service:local"),
             )
-        if cmd == "toolbox-environment-remove":
-            return svc.toolbox_environment_remove(
+        if cmd == "environment-remove":
+            return svc.environment_remove(
                 environment_digest=str(payload.get("environment_digest") or ""),
                 request_id=str(payload.get("request_id") or ""),
                 owner_actor_id=str(payload.get("_claim_actor_id") or "service:local"),
@@ -3263,8 +3263,8 @@ class EngineHostDaemon:
                 owner_actor_id=actor,
                 authority_id=actor,
             )
-        if cmd == "toolbox-template-list":
-            return svc.toolbox_template_list()
+        if cmd == "environment-template-list":
+            return svc.environment_template_list()
         if cmd == "package-artifact-upload-begin":
             return svc.package_artifact_upload_begin(
                 actor_id=str(payload.get("_claim_actor_id") or "service:local"),
@@ -3307,14 +3307,14 @@ class EngineHostDaemon:
                 artifacts=list(payload.get("artifacts") or []),
                 dependencies=list(payload.get("dependencies") or []),
             )
-        if cmd == "toolbox-template-describe":
-            return svc.toolbox_template_describe(
+        if cmd == "environment-template-describe":
+            return svc.environment_template_describe(
                 template_id=str(payload.get("template_id") or ""),
                 template_digest=str(payload.get("template_digest") or "").strip() or None,
             )
-        if cmd == "toolbox-template-construct":
+        if cmd == "environment-template-construct":
             actor = str(payload.get("_claim_actor_id") or "service:local")
-            return svc.toolbox_template_construct(
+            return svc.environment_template_construct(
                 template_id=str(payload.get("template_id") or ""),
                 base_template_digest=str(payload.get("base_template_digest") or ""),
                 imports=[str(item or "") for item in list(payload.get("imports") or [])],
@@ -3325,33 +3325,33 @@ class EngineHostDaemon:
                 request_id=str(payload.get("request_id") or ""),
                 owner_actor_id=actor,
             )
-        if cmd == "toolbox-template-activate":
-            return svc.toolbox_template_activate(
+        if cmd == "environment-template-activate":
+            return svc.environment_template_activate(
                 template_id=str(payload.get("template_id") or ""),
                 template_digest=str(payload.get("template_digest") or ""),
                 actor_id=str(payload.get("_claim_actor_id") or "service:local"),
             )
-        if cmd == "toolbox-template-replace":
-            return svc.toolbox_template_replace(
+        if cmd == "environment-template-replace":
+            return svc.environment_template_replace(
                 template_id=str(payload.get("template_id") or ""),
                 expected_active_digest=str(payload.get("expected_active_digest") or ""),
                 replacement_digest=str(payload.get("replacement_digest") or ""),
                 actor_id=str(payload.get("_claim_actor_id") or "service:local"),
             )
-        if cmd == "toolbox-template-deprecate":
-            return svc.toolbox_template_deprecate(
+        if cmd == "environment-template-deprecate":
+            return svc.environment_template_deprecate(
                 template_id=str(payload.get("template_id") or ""),
                 template_digest=str(payload.get("template_digest") or ""),
                 actor_id=str(payload.get("_claim_actor_id") or "service:local"),
             )
-        if cmd == "toolbox-template-revoke":
-            return svc.toolbox_template_revoke(
+        if cmd == "environment-template-revoke":
+            return svc.environment_template_revoke(
                 template_id=str(payload.get("template_id") or ""),
                 template_digest=str(payload.get("template_digest") or ""),
                 actor_id=str(payload.get("_claim_actor_id") or "service:local"),
             )
-        if cmd == "toolbox-template-prewarm":
-            return svc.toolbox_template_prewarm(
+        if cmd == "environment-template-prewarm":
+            return svc.environment_template_prewarm(
                 template_id=str(payload.get("template_id") or ""),
                 template_digest=str(payload.get("template_digest") or "").strip() or None,
                 python_abi=str(payload.get("python_abi") or ""),

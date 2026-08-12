@@ -65,17 +65,17 @@ _WORKFLOW_PYTHON_OBSERVE_COMMANDS = {
 }
 
 _TOOLBOX_TEMPLATE_CONSUMER_COMMANDS = {
-    "toolbox-template-list",
-    "toolbox-template-describe",
+    "environment-template-list",
+    "environment-template-describe",
 }
 
 _TOOLBOX_TEMPLATE_ADMIN_COMMANDS = {
-    "toolbox-template-construct",
-    "toolbox-template-activate",
-    "toolbox-template-replace",
-    "toolbox-template-deprecate",
-    "toolbox-template-revoke",
-    "toolbox-template-prewarm",
+    "environment-template-construct",
+    "environment-template-activate",
+    "environment-template-replace",
+    "environment-template-deprecate",
+    "environment-template-revoke",
+    "environment-template-prewarm",
 }
 
 _TOOLBOX_DEFINITION_COMMANDS = {
@@ -90,7 +90,7 @@ _TOOLBOX_DEPENDENCY_APPROVAL_COMMANDS = {
 }
 
 _TOOLBOX_ENVIRONMENT_ADMIN_COMMANDS = {
-    "toolbox-environment-remove",
+    "environment-remove",
 }
 
 _PACKAGE_UPLOAD_COMMANDS = {

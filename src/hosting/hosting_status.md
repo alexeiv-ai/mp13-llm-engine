@@ -15,7 +15,8 @@ complete.
 
 Current continuous block: C — implementation and acceptance (`high`, P0–P2)
 
-Active slice: R3.2–R4 authority/startup cut (`high`, P0)
+Active slice: R6 generic environment subsystem (`high`, P0), with R3.2–R4
+aggregate acceptance still open
 
 R0.1–R0.7, R1.1–R1.5, R2.1–R2.3, R3.1, and R5.1–R5.4 are complete. R3.2–R4
 remain the active authority/startup acceptance slice; no dependent adoption is
@@ -50,7 +51,7 @@ and remaining permanent documents are migrated and the named proofs pass.
 | R3 Unified hosting configuration | P0 | high | Active (R3.1 complete) | CODE-R3.1 |
 | R4 Single-path daemon startup | P0 | high | Not started | — |
 | R5 Generic package subsystem | P0 | high | Complete | CODE-R5 |
-| R6 Generic environment subsystem | P0 | high | Not started | — |
+| R6 Generic environment subsystem | P0 | high | Active (foundation complete) | CODE-R6A |
 | R7 Toolbox adoption | P1 | high | Not started | — |
 | R8 Worker-neutral state/operations | P1 | high | Not started | — |
 | R9 Public surfaces/acceptance/handoff | P2 | high | Not started | — |
@@ -404,6 +405,21 @@ the slice.
   the production legacy command search returned zero results
 - Dependent handoff impact: generic package commands and locks are available;
   toolbox adoption and external dependent receipt remain R7 and R9.6 work
+
+### CODE-R6A — generic environment foundation
+
+- Date: 2026-08-11
+- Plan IDs: R6.1 (partial), R6.2, R6.3, R6.4 (public names); P0; high
+  expertise
+- Production boundary: strict neutral template/request/lock/receipt/reference
+  records, content-addressed manager, runtime adapter boundary, service facade,
+  public command names, role policy, and capability advertisement
+- Positive/negative proof: 13 focused package/environment tests passed; same-key
+  concurrent requests coalesced to one build; toolbox and workflow consumers
+  acquired separate references to identical content; active/retained content
+  resisted removal; legacy-only roots were ignored
+- Remaining in R6: remove the toolbox manager/builder aliases and legacy readers,
+  and generalize the remaining toolbox-owned operation/audit implementation
 
 Append one concise entry per completed slice. Include exact commands, counts,
 durations where useful, negative-path results, commit pin, and dependent receipt

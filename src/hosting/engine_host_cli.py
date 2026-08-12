@@ -126,29 +126,29 @@ EXAMPLES_BY_COMMAND = {
     "toolbox-apply-definition": [
         "Get-Content toolbox-apply.json | python -m hosting.engine_host_cli --payload-stdin toolbox-apply-definition",
     ],
-    "toolbox-template-list": [
-        "python -m hosting.engine_host_cli toolbox-template-list",
+    "environment-template-list": [
+        "python -m hosting.engine_host_cli environment-template-list",
     ],
-    "toolbox-template-describe": [
-        "'{\"template_id\":\"core\"}' | python -m hosting.engine_host_cli --payload-stdin toolbox-template-describe",
+    "environment-template-describe": [
+        "'{\"template_id\":\"core\"}' | python -m hosting.engine_host_cli --payload-stdin environment-template-describe",
     ],
-    "toolbox-template-construct": [
-        "Get-Content template-construct.json | python -m hosting.engine_host_cli --payload-stdin toolbox-template-construct",
+    "environment-template-construct": [
+        "Get-Content template-construct.json | python -m hosting.engine_host_cli --payload-stdin environment-template-construct",
     ],
-    "toolbox-template-activate": [
-        "Get-Content template-activate.json | python -m hosting.engine_host_cli --payload-stdin toolbox-template-activate",
+    "environment-template-activate": [
+        "Get-Content template-activate.json | python -m hosting.engine_host_cli --payload-stdin environment-template-activate",
     ],
-    "toolbox-template-replace": [
-        "Get-Content template-replace.json | python -m hosting.engine_host_cli --payload-stdin toolbox-template-replace",
+    "environment-template-replace": [
+        "Get-Content template-replace.json | python -m hosting.engine_host_cli --payload-stdin environment-template-replace",
     ],
-    "toolbox-template-deprecate": [
-        "Get-Content template-lifecycle.json | python -m hosting.engine_host_cli --payload-stdin toolbox-template-deprecate",
+    "environment-template-deprecate": [
+        "Get-Content template-lifecycle.json | python -m hosting.engine_host_cli --payload-stdin environment-template-deprecate",
     ],
-    "toolbox-template-revoke": [
-        "Get-Content template-lifecycle.json | python -m hosting.engine_host_cli --payload-stdin toolbox-template-revoke",
+    "environment-template-revoke": [
+        "Get-Content template-lifecycle.json | python -m hosting.engine_host_cli --payload-stdin environment-template-revoke",
     ],
-    "toolbox-template-prewarm": [
-        "Get-Content template-prewarm.json | python -m hosting.engine_host_cli --payload-stdin toolbox-template-prewarm",
+    "environment-template-prewarm": [
+        "Get-Content template-prewarm.json | python -m hosting.engine_host_cli --payload-stdin environment-template-prewarm",
     ],
     "toolbox-references": [
         "python -m hosting.engine_host_cli toolbox-references",
@@ -895,20 +895,20 @@ def _build_parser() -> argparse.ArgumentParser:
         "hosting-receipt-ledger-cutover",
         "toolbox-state-archive-v1",
         "toolbox-gc",
-        "toolbox-environment-remove",
+        "environment-remove",
         "toolbox-get-definition",
         "toolbox-plan-definition",
         "toolbox-confirm-definition-plan",
         "toolbox-approve-confirmed-definition-plan",
         "toolbox-apply-definition",
-        "toolbox-template-list",
-        "toolbox-template-describe",
-        "toolbox-template-construct",
-        "toolbox-template-activate",
-        "toolbox-template-replace",
-        "toolbox-template-deprecate",
-        "toolbox-template-revoke",
-        "toolbox-template-prewarm",
+        "environment-template-list",
+        "environment-template-describe",
+        "environment-template-construct",
+        "environment-template-activate",
+        "environment-template-replace",
+        "environment-template-deprecate",
+        "environment-template-revoke",
+        "environment-template-prewarm",
         "toolbox-references",
         "toolbox-consistency",
         "toolbox-review-snapshot",
@@ -1154,7 +1154,7 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
         "toolbox-plan-definition",
         "toolbox-confirm-definition-plan",
         "toolbox-apply-definition",
-        "toolbox-template-construct",
+        "environment-template-construct",
         "toolbox-gc",
         "toolbox-repair",
         "toolbox-reconcile",
@@ -1213,8 +1213,8 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
         return 0
 
     if cmd_name in {
-        "toolbox-template-prewarm",
-        "toolbox-template-construct",
+        "environment-template-prewarm",
+        "environment-template-construct",
         "toolbox-gc",
         "toolbox-repair",
         "toolbox-reconcile",
@@ -2010,9 +2010,9 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
         if cmd == "toolbox-gc":
             _print_ok(svc.toolbox_gc(request_id=str(payload.get("request_id") or "")))
             return 0
-        if cmd == "toolbox-environment-remove":
+        if cmd == "environment-remove":
             _print_ok(
-                svc.toolbox_environment_remove(
+                svc.environment_remove(
                     environment_digest=str(payload.get("environment_digest") or ""),
                     request_id=str(payload.get("request_id") or ""),
                 )
@@ -2064,53 +2064,53 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
                 )
             )
             return 0
-        if cmd == "toolbox-template-list":
-            _print_ok(svc.toolbox_template_list())
+        if cmd == "environment-template-list":
+            _print_ok(svc.environment_template_list())
             return 0
-        if cmd == "toolbox-template-describe":
+        if cmd == "environment-template-describe":
             _print_ok(
-                svc.toolbox_template_describe(
+                svc.environment_template_describe(
                     template_id=str(payload.get("template_id") or ""),
                     template_digest=str(payload.get("template_digest") or "").strip() or None,
                 )
             )
             return 0
-        if cmd == "toolbox-template-activate":
+        if cmd == "environment-template-activate":
             _print_ok(
-                svc.toolbox_template_activate(
+                svc.environment_template_activate(
                     template_id=str(payload.get("template_id") or ""),
                     template_digest=str(payload.get("template_digest") or ""),
                 )
             )
             return 0
-        if cmd == "toolbox-template-replace":
+        if cmd == "environment-template-replace":
             _print_ok(
-                svc.toolbox_template_replace(
+                svc.environment_template_replace(
                     template_id=str(payload.get("template_id") or ""),
                     expected_active_digest=str(payload.get("expected_active_digest") or ""),
                     replacement_digest=str(payload.get("replacement_digest") or ""),
                 )
             )
             return 0
-        if cmd == "toolbox-template-deprecate":
+        if cmd == "environment-template-deprecate":
             _print_ok(
-                svc.toolbox_template_deprecate(
+                svc.environment_template_deprecate(
                     template_id=str(payload.get("template_id") or ""),
                     template_digest=str(payload.get("template_digest") or ""),
                 )
             )
             return 0
-        if cmd == "toolbox-template-revoke":
+        if cmd == "environment-template-revoke":
             _print_ok(
-                svc.toolbox_template_revoke(
+                svc.environment_template_revoke(
                     template_id=str(payload.get("template_id") or ""),
                     template_digest=str(payload.get("template_digest") or ""),
                 )
             )
             return 0
-        if cmd == "toolbox-template-prewarm":
+        if cmd == "environment-template-prewarm":
             _print_ok(
-                svc.toolbox_template_prewarm(
+                svc.environment_template_prewarm(
                     template_id=str(payload.get("template_id") or ""),
                     template_digest=str(payload.get("template_digest") or "").strip() or None,
                     python_abi=str(payload.get("python_abi") or ""),
