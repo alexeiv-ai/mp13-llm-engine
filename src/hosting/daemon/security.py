@@ -8,7 +8,7 @@ import os
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Dict
+from typing import Any, Dict
 
 from .._process_utils import hidden_subprocess_kwargs
 
@@ -92,7 +92,7 @@ def _atomic_write_secure_json(path: Path, payload: Dict[str, Any]) -> None:
         return
     fd, tmp_name = tempfile.mkstemp(prefix=f"{path.name}.", suffix=".tmp", dir=str(path.parent))
     try:
-        os.fchmod(fd, 0o600)
+        os.chmod(tmp_name, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(raw)
         os.replace(tmp_name, path)

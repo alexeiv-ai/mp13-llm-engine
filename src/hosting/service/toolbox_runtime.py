@@ -9,7 +9,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Mapping, Optional, Tuple
 
 from mp13_engine.mp13_toolbox import ToolsView
 
@@ -25,6 +25,9 @@ from ..sandbox.host_capabilities import HostCapabilityBroker
 from ..sandbox.service_broker_registry import service_broker_host_capability_session
 from ..toolbox.callbacks import _HostedToolCallbackRelay
 from .errors import ToolboxRolloutError
+
+if TYPE_CHECKING:
+    from ..sandbox.toolbox_runtime import HostedToolboxRuntimeBase
 
 
 class ToolboxRuntimeMixin:
@@ -3686,8 +3689,8 @@ class ToolboxRuntimeMixin:
         if isinstance(last_error, ToolboxRolloutError):
             raise ToolboxRolloutError(
                 str(last_error),
-                code=last_error.code,
-                details=dict(last_error.details or {}),
+                code=str(getattr(last_error, "code")),
+                details=dict(getattr(last_error, "details") or {}),
             ) from last_error
         raise ToolboxRolloutError(
             f"toolbox_executor_not_ready:{eid}:{last_error}",
