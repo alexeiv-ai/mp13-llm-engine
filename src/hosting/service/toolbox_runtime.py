@@ -504,7 +504,7 @@ class ToolboxRuntimeMixin:
                 lifecycle=HostedOperationLifecycle.TERMINAL_SUCCESS,
                 envelope=result,
             )
-        except Exception as exc:
+        except Exception:
             return self._hosted_operations.finish(
                 operation_id=operation_id,
                 lifecycle=HostedOperationLifecycle.TERMINAL_FAILURE,
@@ -1101,7 +1101,7 @@ class ToolboxRuntimeMixin:
                 lifecycle=HostedOperationLifecycle.TERMINAL_SUCCESS,
                 envelope=result,
             )
-        except Exception as exc:
+        except Exception:
             return self._hosted_operations.finish(
                 operation_id=operation_id,
                 lifecycle=HostedOperationLifecycle.TERMINAL_FAILURE,
@@ -3709,7 +3709,7 @@ class ToolboxRuntimeMixin:
         *,
         timeout_seconds: float = 8.0,
     ) -> Dict[str, Dict[str, Any]]:
-        from ..toolbox_harness import EnvironmentRuntimeAdapter, ToolboxEnvironmentSpec
+        from ..toolbox import EnvironmentRuntimeAdapter, ToolboxEnvironmentSpec
 
         ready: Dict[str, Dict[str, Any]] = {}
         environment_manager = EnvironmentRuntimeAdapter(self.hosting_root)

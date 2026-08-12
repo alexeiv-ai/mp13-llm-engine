@@ -5,7 +5,7 @@ from typing import Any, Dict, Optional, Sequence
 
 from hosting.engine_host_channel import EngineHostControlChannel
 from hosting import HostedToolBoxRef
-from hosting.toolbox_harness import (
+from hosting.toolbox import (
     HostedToolBoxRef,
     ToolboxExecutionHarness,
     ToolboxHarnessConfig,

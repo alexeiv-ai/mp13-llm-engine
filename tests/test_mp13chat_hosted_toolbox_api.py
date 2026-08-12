@@ -25,7 +25,7 @@ from app.context_cursor import ChatContext
 from app.engine_session import EngineSession, InferenceParams
 from hosting.engine_host_channel import EngineHostControlChannel
 from hosting import HostedToolBoxRef
-from hosting.toolbox_harness import ToolboxExecutionHarness
+from hosting.toolbox import ToolboxExecutionHarness
 from mp13_engine.mp13_config import InferenceResponse, ToolCall, ToolCallBlock
 from mp13_engine.mp13_tools_parser import DEFAULT_PROFILE
 from mp13_engine.mp13_toolbox import Toolbox, ToolsScope, ToolsView

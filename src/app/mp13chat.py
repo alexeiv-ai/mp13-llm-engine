@@ -115,7 +115,7 @@ from mp13_engine.mp13_config_paths import (
 from .engine_session import EngineSession, Turn, Command, ChatSession, InferenceParams, Colors
 from .context_cursor import ChatCursor, ChatContext, ChatContextScope, StreamDisplayContext, StreamDisplayPlan, ChatForks
 from mp13_engine.mp13_toolbox import Toolbox, ToolsScope, ToolsView, ToolBoxRef
-from hosting.toolbox_harness import ToolboxExecutionHarness
+from hosting.toolbox import ToolboxExecutionHarness
 from .hosted_tool_runtime import execute_tool_round_on_cursor
 from .hosted_chat_demo import (
     HostedChatDemoRuntime,

@@ -89,7 +89,7 @@ from .secure_state import (
     write_secure_json,
 )
 from .sandbox import WorkerSandboxPolicy
-from .toolbox_harness import (
+from .toolbox import (
     ToolboxBundleFile,
     ToolboxBundleAutoTool,
     ToolboxBundleTool,

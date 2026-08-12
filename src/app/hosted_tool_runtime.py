@@ -5,7 +5,7 @@ import inspect
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence
 
 from app.context_cursor import ChatCursor
-from hosting.toolbox_harness import is_canceled_tool_error, should_resubmit_canceled_tool_call
+from hosting.toolbox import is_canceled_tool_error, should_resubmit_canceled_tool_call
 from mp13_engine.mp13_config import InferenceResponse, ParserProfile, ToolCall, ToolCallBlock
 from mp13_engine.mp13_toolbox import ToolsView
 from mp13_engine.tool_round import coordinate_tool_round, normalize_server_tool_events

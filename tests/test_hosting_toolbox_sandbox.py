@@ -13,13 +13,14 @@ from pathlib import Path
 
 import pytest
 
-from hosting.service.host_service import EngineHostService as _EngineHostService, ToolboxRolloutError
+from hosting.service.errors import ToolboxRolloutError
+from hosting.service.host_service import EngineHostService as _EngineHostService
 from hosting.operation_contract import HostedExecutionKind, HostedOperationSelector, hosted_execution_fingerprint
 from hosting.sandbox.toolbox_runtime import HostedToolboxRuntimeBase
 from hosting.daemon import EngineHostDaemon
 from hosting.engine_host_channel import EngineHostControlChannel
 from hosting import toolbox_executor_ipc
-from hosting.toolbox_harness import (
+from hosting.toolbox import (
     HostedToolBoxRef,
     SandboxProfileSpec,
     ToolboxAutoAssignmentRequest,

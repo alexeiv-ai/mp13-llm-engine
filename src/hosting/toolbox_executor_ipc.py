@@ -27,7 +27,7 @@ from .sandbox.service_broker_registry import (
     invoke_service_broker_method,
     service_broker_host_capability_session,
 )
-from .toolbox_harness import ToolboxWorkerStartupSpec, load_toolbox_from_manifest
+from .toolbox import ToolboxWorkerStartupSpec, load_toolbox_from_manifest
 
 PROTOCOL_VERSION = 1
 
