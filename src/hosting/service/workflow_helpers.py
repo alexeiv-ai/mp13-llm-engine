@@ -1944,6 +1944,7 @@ class WorkflowHelperMixin:
         fingerprint = hosted_execution_fingerprint(
             {
                 "execution_kind": HostedExecutionKind.WORKFLOW_JS.value,
+                "configuration_revision": self.hosting_configuration_revision,
                 "selector": selector.to_dict(),
                 "profile": prof,
                 "environment_name": str(environment_name or "workflow-js-node"),
@@ -1964,6 +1965,7 @@ class WorkflowHelperMixin:
             request_id=request_id,
             fingerprint=fingerprint,
             metadata={
+                "configuration_revision": self.hosting_configuration_revision,
                 "engine_id": eid,
                 "environment_key": effective_key,
                 "profile": prof,
@@ -2707,6 +2709,7 @@ class WorkflowHelperMixin:
         fingerprint = hosted_execution_fingerprint(
             {
                 "execution_kind": HostedExecutionKind.WORKFLOW_PYTHON.value,
+                "configuration_revision": self.hosting_configuration_revision,
                 "selector": selector.to_dict(),
                 "profile": prof,
                 "environment_name": effective_environment_name,
@@ -2726,6 +2729,7 @@ class WorkflowHelperMixin:
             request_id=request_id,
             fingerprint=fingerprint,
             metadata={
+                "configuration_revision": self.hosting_configuration_revision,
                 "engine_id": eid,
                 "environment_key": effective_key,
                 "profile": prof,

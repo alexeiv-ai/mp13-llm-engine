@@ -153,7 +153,7 @@ R7 plan/confirmation field assertions are provisional and must be replaced.
 - [x] **R3.2** Remove every remaining production reader, fixture, example, and
   document that treats `access_control.json` as an authority. Prove the strict
   repository and setup flow are the only path.
-- [ ] **R4.1** Capture and validate a stable configuration revision in every
+- [x] **R4.1** Capture and validate a stable configuration revision in every
   long-running plan/operation affected by restart or policy change.
 - [ ] **R4.2** Remove `--toolbox-config-file`,
   `engine_host_toolbox_config_file`, ephemeral launcher JSON behavior, and all

@@ -2,7 +2,7 @@
 
 Last updated: 2026-08-12
 
-Status: R3.2 complete; ready to open R4.1
+Status: R4.1 complete; ready to open R4.2
 
 This is the current execution ledger for
 [`hosting_access_plan.md`](hosting_access_plan.md). Detailed completed-slice
@@ -12,10 +12,10 @@ compact evidence index, and external completion gates.
 
 ## 1. Current gate and resume order
 
-No slice is active. **R3.2 strict configuration authority cleanup** removed the
-remaining legacy-named runtime-state fixtures while retaining explicit negative
-proof that the legacy file cannot configure a host. The required post-`757c13f`
-workflow-helper checkpoint passed with 116 tests on 2026-08-12.
+No slice is active. **R4.1 unified configuration revision pinning** added the
+strict `hosting.configuration.v3` revision to every hosted-operation fingerprint
+and durable metadata record and to toolbox definition-plan pins independently
+of the toolbox project configuration revision.
 
 Resume in this order:
 
@@ -68,7 +68,6 @@ are authoritative for unfinished item-level work.
 
 ### P0 before R7
 
-- R4.1: capture stable configuration revision in long-running plans/operations.
 - R4.2: finish removal of old startup flag/setting/launcher vocabulary.
 - R6.5: remove final legacy receipt/reference readers and aliases.
 
@@ -110,6 +109,7 @@ are authoritative for unfinished item-level work.
 | CODE-R2 | Shared roots, logical labels, safe host-local setup/journal implemented. |
 | CODE-R3.1/R4A | Strict unified configuration and single-path startup implemented; focused startup/security lanes passed. |
 | TEST-R3.2 | Legacy authority scan leaves only explicit negative/removal evidence; strict configuration/startup/setup lane passed 27 tests. |
+| CODE/TEST-R4.1 | Unified revision pins cover toolbox plans and all hosted-operation creation paths; plan/operation lanes passed 67 tests and helper operations passed 116 tests. |
 | CODE-R5 | Generic package ingress, daemon hashing, locks, commands, and denial paths passed focused coverage. |
 | CODE-R6A–D | Generic environment contracts/manager/commands and legacy-root cut passed focused coverage. |
 | CODE-R7A/B | Generic materializer/package/reference bridges and atomic candidate publication remain valid foundations; old plan/confirmation field assertions are provisional. |
@@ -120,6 +120,8 @@ are authoritative for unfinished item-level work.
 ## 6. External completion gates
 
 - Parent implementation pin and dependent owner/revision/test receipt.
+- Local real-daemon R7 acceptance currently requires the unavailable
+  `typing_inspection` fixture dependency; rerun in the declared dependency lane.
 - Required Windows/POSIX and relay-equivalent lanes.
 - Final secret/path/process-argument redaction proof.
 - R9.7 aggregate, lint, type, and required native/platform results.

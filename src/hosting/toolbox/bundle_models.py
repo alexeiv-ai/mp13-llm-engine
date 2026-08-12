@@ -813,6 +813,7 @@ class ToolboxEnvironmentMutationSpec:
 class ToolboxPlanPins:
     active_definition_revision: str | None
     target: str
+    configuration_revision: str
     catalog_revision: str
     host_config_revision: str
     dependency_policy_revision: str
@@ -827,8 +828,8 @@ class ToolboxPlanPins:
             )
         object.__setattr__(self, "target", _bounded_plan_text(self.target, label="toolbox_plan_target", maximum=128))
         for name in (
-            "catalog_revision", "host_config_revision", "dependency_policy_revision",
-            "source_set_revision",
+            "configuration_revision", "catalog_revision", "host_config_revision",
+            "dependency_policy_revision", "source_set_revision",
         ):
             object.__setattr__(self, name, require_digest(getattr(self, name), label=f"toolbox_plan_{name}"))
 
@@ -836,6 +837,7 @@ class ToolboxPlanPins:
         return {
             "active_definition_revision": self.active_definition_revision,
             "target": self.target,
+            "configuration_revision": self.configuration_revision,
             "catalog_revision": self.catalog_revision,
             "host_config_revision": self.host_config_revision,
             "dependency_policy_revision": self.dependency_policy_revision,
@@ -849,7 +851,8 @@ class ToolboxPlanPins:
             row,
             {
                 "active_definition_revision", "target", "catalog_revision",
-                "host_config_revision", "dependency_policy_revision", "source_set_revision",
+                "configuration_revision", "host_config_revision",
+                "dependency_policy_revision", "source_set_revision",
             },
             label="toolbox_plan_pins",
         )

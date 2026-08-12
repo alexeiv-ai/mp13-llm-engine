@@ -1324,6 +1324,7 @@ class ToolboxTemplateCatalogMixin:
             {
                 "execution_kind": HostedExecutionKind.TOOLBOX_SETUP.value,
                 "host_scope": "toolbox-host",
+                "configuration_revision": self.hosting_configuration_revision,
                 "config_revision": configuration.config_revision,
                 "source_set_revision": configuration.source_set_revision,
                 "target": configuration.target.name,
@@ -1337,6 +1338,7 @@ class ToolboxTemplateCatalogMixin:
             request_id=rid,
             fingerprint=fingerprint,
             metadata={
+                "configuration_revision": self.hosting_configuration_revision,
                 "config_revision": configuration.config_revision,
                 "source_set_revision": configuration.source_set_revision,
                 "target": configuration.target.name,
@@ -1582,6 +1584,7 @@ class ToolboxTemplateCatalogMixin:
         fingerprint = hosted_execution_fingerprint(
             {
                 "execution_kind": HostedExecutionKind.ENVIRONMENT_TEMPLATE_PREWARM.value,
+                "configuration_revision": self.hosting_configuration_revision,
                 "template_id": target_id,
                 "template_digest": target_digest,
                 "target": target,
@@ -1596,7 +1599,11 @@ class ToolboxTemplateCatalogMixin:
             namespace=f"environment_template_prewarm:{target_id}",
             request_id=rid,
             fingerprint=fingerprint,
-            metadata={"template_digest": target_digest, "target": target},
+            metadata={
+                "configuration_revision": self.hosting_configuration_revision,
+                "template_digest": target_digest,
+                "target": target,
+            },
         )
         if prepared["action"] != "dispatch":
             status = prepared.get("status")
@@ -1777,6 +1784,7 @@ class ToolboxTemplateCatalogMixin:
         fingerprint = hosted_execution_fingerprint(
             {
                 "execution_kind": HostedExecutionKind.TOOLBOX_TEMPLATE_CONSTRUCT.value,
+                "configuration_revision": self.hosting_configuration_revision,
                 "template_id": target_id,
                 "base_template_digest": base_digest,
                 "imports": list(intent.imports),
@@ -1795,6 +1803,7 @@ class ToolboxTemplateCatalogMixin:
             request_id=rid,
             fingerprint=fingerprint,
             metadata={
+                "configuration_revision": self.hosting_configuration_revision,
                 "base_template_digest": base_digest,
                 "config_revision": configuration.config_revision,
                 "source_set_revision": configuration.source_set_revision,

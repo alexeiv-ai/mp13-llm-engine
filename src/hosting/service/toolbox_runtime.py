@@ -207,6 +207,7 @@ class ToolboxRuntimeMixin:
         fingerprint = hosted_execution_fingerprint(
             {
                 "definition": model.to_dict(),
+                "configuration_revision": self.hosting_configuration_revision,
                 "operator_details": bool(operator_details),
                 "ttl_ms": int(ttl_ms),
                 "authority_id": str(authority_id or "").strip(),
@@ -221,6 +222,7 @@ class ToolboxRuntimeMixin:
             fingerprint=fingerprint,
             metadata={
                 "toolbox_id": model.toolbox_id,
+                "configuration_revision": self.hosting_configuration_revision,
                 "retain_terminal_result": True,
             },
         )
@@ -337,6 +339,7 @@ class ToolboxRuntimeMixin:
         pins = ToolboxPlanPins(
             active_definition_revision=active_revision,
             target=context["target"],
+            configuration_revision=self.hosting_configuration_revision,
             catalog_revision=context["catalog_revision"],
             host_config_revision=configuration.config_revision,
             dependency_policy_revision=context["policy"].revision,
@@ -412,6 +415,7 @@ class ToolboxRuntimeMixin:
                 "plan_id": plan.plan_id,
                 "choices": [item.to_dict() for item in choices],
                 "authority_id": authority,
+                "configuration_revision": plan.pins.configuration_revision,
             }
         )
         prepared = self._hosted_operations.prepare(
@@ -421,7 +425,11 @@ class ToolboxRuntimeMixin:
             namespace=f"toolbox-definition-confirmation:{plan.toolbox_id}",
             request_id=str(request_id or "").strip(),
             fingerprint=fingerprint,
-            metadata={"toolbox_id": plan.toolbox_id, "plan_id": plan.plan_id},
+            metadata={
+                "toolbox_id": plan.toolbox_id,
+                "plan_id": plan.plan_id,
+                "configuration_revision": plan.pins.configuration_revision,
+            },
         )
         status = dict(prepared.get("status") or {})
         if prepared.get("action") != "dispatch":
@@ -574,7 +582,8 @@ class ToolboxRuntimeMixin:
             context = self._toolbox_definition_planning_context()
             configuration = context["configuration"]
             if configuration is None or (
-                context["catalog_revision"] != plan.pins.catalog_revision
+                self.hosting_configuration_revision != plan.pins.configuration_revision
+                or context["catalog_revision"] != plan.pins.catalog_revision
                 or configuration.config_revision != plan.pins.host_config_revision
                 or configuration.source_set_revision != plan.pins.source_set_revision
                 or context["policy"].revision != plan.pins.dependency_policy_revision
@@ -681,7 +690,8 @@ class ToolboxRuntimeMixin:
         context = self._toolbox_definition_planning_context()
         configuration = context["configuration"]
         if configuration is None or (
-            context["catalog_revision"] != record.pins.catalog_revision
+            self.hosting_configuration_revision != record.pins.configuration_revision
+            or context["catalog_revision"] != record.pins.catalog_revision
             or context["policy"].revision != record.pins.dependency_policy_revision
             or configuration.config_revision != record.pins.host_config_revision
             or configuration.source_set_revision != record.pins.source_set_revision
@@ -755,7 +765,8 @@ class ToolboxRuntimeMixin:
         context = self._toolbox_definition_planning_context()
         configuration = context["configuration"]
         if configuration is None or (
-            context["catalog_revision"] != record.pins.catalog_revision
+            self.hosting_configuration_revision != record.pins.configuration_revision
+            or context["catalog_revision"] != record.pins.catalog_revision
             or context["policy"].revision != record.pins.dependency_policy_revision
             or configuration.config_revision != record.pins.host_config_revision
             or configuration.source_set_revision != record.pins.source_set_revision
@@ -799,6 +810,7 @@ class ToolboxRuntimeMixin:
                 "approval_identity": approval_identity,
                 "catalog_revision": record.pins.catalog_revision,
                 "package_policy_revision": record.pins.dependency_policy_revision,
+                "configuration_revision": record.pins.configuration_revision,
             }
         )
         prepared = self._hosted_operations.prepare(
@@ -812,6 +824,7 @@ class ToolboxRuntimeMixin:
                 "toolbox_id": model.toolbox_id,
                 "definition_revision": model.revision,
                 "plan_id": record.plan_id,
+                "configuration_revision": record.pins.configuration_revision,
             },
         )
         action = str(prepared.get("action") or "")
@@ -1684,10 +1697,16 @@ class ToolboxRuntimeMixin:
             fingerprint=hosted_execution_fingerprint(
                 {
                     "execution_kind": HostedExecutionKind.TOOLBOX_DESCRIBE_REFRESH.value,
+                    "configuration_revision": self.hosting_configuration_revision,
                     "selector": selector.to_dict(),
                 }
             ),
-            metadata={"engine_id": eid, "toolbox_id": tid, "retain_terminal_result": True},
+            metadata={
+                "configuration_revision": self.hosting_configuration_revision,
+                "engine_id": eid,
+                "toolbox_id": tid,
+                "retain_terminal_result": True,
+            },
         )
         status = dict(prepared.get("status") or {})
         if prepared.get("action") != "dispatch":
@@ -1971,6 +1990,7 @@ class ToolboxRuntimeMixin:
         fingerprint = hosted_execution_fingerprint(
             {
                 "execution_kind": HostedExecutionKind.TOOLBOX.value,
+                "configuration_revision": self.hosting_configuration_revision,
                 "selector": selector.to_dict(),
                 "tool": {
                     "name": tool_name,
@@ -1993,6 +2013,7 @@ class ToolboxRuntimeMixin:
             request_id=request_id,
             fingerprint=fingerprint,
             metadata={
+                "configuration_revision": self.hosting_configuration_revision,
                 "engine_id": eid,
                 "toolbox_id": toolbox_identity,
                 "tool_name": tool_name,

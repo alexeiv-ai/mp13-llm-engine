@@ -35,6 +35,7 @@ CATALOG_REVISION = "sha256:" + "c" * 64
 POLICY_REVISION = "sha256:" + "d" * 64
 HOST_CONFIG_REVISION = "sha256:" + "1" * 64
 SOURCE_SET_REVISION = "sha256:" + "2" * 64
+CONFIGURATION_REVISION = "sha256:" + "7" * 64
 
 
 def _auto(name: str, *, body: str | None = None, sandbox: dict | None = None) -> dict:
@@ -136,6 +137,7 @@ def _complete_inputs(definition: dict):
     pins = ToolboxPlanPins(
         active_definition_revision=None,
         target="cp312-win_amd64" if os.name == "nt" else "cp312-manylinux_2_28_x86_64",
+        configuration_revision=CONFIGURATION_REVISION,
         catalog_revision=CATALOG_REVISION,
         host_config_revision=HOST_CONFIG_REVISION,
         dependency_policy_revision=POLICY_REVISION,
@@ -406,6 +408,7 @@ def test_complete_plan_roundtrips_every_pin_offer_artifact_and_edge(tmp_path: Pa
 
     assert duplicate == recovered == created
     assert recovered.pins == pins
+    assert recovered.pins.configuration_revision == CONFIGURATION_REVISION
     assert recovered.environment_mutations == environments
     artifact = recovered.environment_mutations[0].alternatives[0].artifacts[0]
     assert artifact.artifact_digest == "sha256:" + "3" * 64
@@ -437,7 +440,7 @@ def test_complete_plan_identity_changes_with_pin_and_offered_artifact(tmp_path: 
 
     baseline = create(pins, environments, 1_000)
     changed_pins = ToolboxPlanPins(
-        **{**pins.to_dict(), "source_set_revision": "sha256:" + "5" * 64}
+        **{**pins.to_dict(), "configuration_revision": "sha256:" + "5" * 64}
     )
     pin_changed = create(changed_pins, environments, 1_001)
     environment = environments[0]
@@ -468,6 +471,18 @@ def test_complete_plan_identity_changes_with_pin_and_offered_artifact(tmp_path: 
     artifact_changed = create(pins, (changed_environment,), 1_002)
 
     assert len({baseline.plan_id, pin_changed.plan_id, artifact_changed.plan_id}) == 3
+
+
+def test_complete_plan_pins_require_unified_configuration_revision() -> None:
+    _, _, pins, _ = _complete_inputs(_definition("complete", [_auto("Alpha")]))
+    payload = pins.to_dict()
+    payload.pop("configuration_revision")
+
+    with pytest.raises(
+        ValueError,
+        match="toolbox_plan_pins_missing_fields:configuration_revision",
+    ):
+        ToolboxPlanPins.from_dict(payload)
 
 
 def test_complete_plan_processes_do_not_lose_distinct_records(tmp_path: Path) -> None:

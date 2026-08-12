@@ -99,6 +99,7 @@ class ToolboxMaintenanceMixin:
         fingerprint = hosted_execution_fingerprint(
             {
                 "execution_kind": HostedExecutionKind.TOOLBOX_ENVIRONMENT_REMOVE.value,
+                "configuration_revision": self.hosting_configuration_revision,
                 "environment_digest": key,
                 "config_revision": configuration.config_revision,
                 "source_set_revision": configuration.source_set_revision,
@@ -113,6 +114,7 @@ class ToolboxMaintenanceMixin:
             request_id=rid,
             fingerprint=fingerprint,
             metadata={
+                "configuration_revision": self.hosting_configuration_revision,
                 "environment_digest": key,
                 "config_revision": configuration.config_revision,
                 "source_set_revision": configuration.source_set_revision,
@@ -692,6 +694,7 @@ class ToolboxMaintenanceMixin:
         fingerprint = hosted_execution_fingerprint(
             {
                 "execution_kind": HostedExecutionKind.TOOLBOX_MAINTENANCE.value,
+                "configuration_revision": self.hosting_configuration_revision,
                 "action": maintenance_action,
                 "toolbox_ids": selected,
                 "only_inconsistent": bool(only_inconsistent),
@@ -713,6 +716,7 @@ class ToolboxMaintenanceMixin:
             request_id=rid,
             fingerprint=fingerprint,
             metadata={
+                "configuration_revision": self.hosting_configuration_revision,
                 "action": maintenance_action,
                 "toolbox_ids": selected,
                 "only_inconsistent": bool(only_inconsistent),
