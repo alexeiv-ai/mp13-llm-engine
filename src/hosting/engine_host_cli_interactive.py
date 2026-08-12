@@ -2499,13 +2499,13 @@ def _load_engine(args: argparse.Namespace, session_token: Optional[str]) -> Opti
                         models_raw = []
                     models = [dict(item or {}) for item in list(models_raw or []) if isinstance(item, dict)]
                     model_opts: Dict[str, tuple[str, str]] = {}
-                    running_model_by_key: Dict[str, str] = {}
+                    configured_model_by_key: Dict[str, str] = {}
                     for idx, row in enumerate(models, start=1):
                         key = str(idx)
                         path = str(row.get("path") or "").strip()
                         if not path:
                             continue
-                        model_by_key[key] = path
+                        configured_model_by_key[key] = path
                         model_opts[key] = (str(row.get("name") or Path(path).name), path)
                     if model_opts:
                         used_model_menu = True
@@ -2516,7 +2516,7 @@ def _load_engine(args: argparse.Namespace, session_token: Optional[str]) -> Opti
                         if model_choice == "p":
                             model_path = input("Model path: ").strip()
                         else:
-                            model_path = model_by_key.get(model_choice, "")
+                            model_path = configured_model_by_key.get(model_choice, "")
                     else:
                         print(_c('warn', "  Selected config does not specify a model path."))
                         model_path = input("Model path: ").strip()
@@ -2533,7 +2533,7 @@ def _load_engine(args: argparse.Namespace, session_token: Optional[str]) -> Opti
                     session_token = _active_session_token(args, session_token)
                     existing = _get_engines_dict(existing_raw)
                     load_opts: Dict[str, tuple[str, str]] = {}
-                    model_by_key: Dict[str, str] = {}
+                    running_model_by_key: Dict[str, str] = {}
                     target_worker_by_key: Dict[str, str] = {}
                     idx = 1
                     for eid, info in existing.items():
