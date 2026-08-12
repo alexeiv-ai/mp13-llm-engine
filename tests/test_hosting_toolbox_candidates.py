@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 
 import pytest
@@ -257,3 +258,55 @@ def test_service_discard_retires_candidate_worker_and_reference(tmp_path: Path) 
     }
     assert service._find_registration(engine_id) is None  # noqa: SLF001
     assert released == ["ref-candidate"]
+
+
+def test_rollout_recovery_preserves_complete_candidate_and_cleans_stale_restart(
+    tmp_path: Path,
+) -> None:
+    service = EngineHostService(
+        engines_state_file=tmp_path / "engines.json",
+        hosting_configuration=hosting_configuration(tmp_path),
+    )
+    engine_id = "candidate-recover"
+    service.register_spawned(
+        engine_id=engine_id, pid=1234, command=["python", "worker.py"],
+        executor_kind="toolbox_executor", routing_state="candidate",
+        bundle={
+            "toolbox_id": "demo", "definition_revision": DIGESTS[5],
+            "sandbox_profile_id": "profile", "resolved_profile_id": "profile",
+        },
+        environment={"environment_key": DIGESTS[0]},
+        tool_access={"allowed_tool_names": ["Alpha"]},
+    )
+    created_at_ms = int(time.time() * 1000) - 1_000
+    candidate_ref, _ = service._toolbox_definition_candidates.create(  # noqa: SLF001
+        plan_id=DIGESTS[0], confirmation_ref="confirmation_one", toolbox_id="demo",
+        definition_revision=DIGESTS[5], changed_tool_keys=["pkg.tools:Alpha"],
+        pins=_pins(), owner_actor_id="actor:a", authority_id="authority:a",
+        request_id="prepare-recover", requested_lifetime_ms=300_000,
+        retained_payload={
+            "definition": {"toolbox_id": "demo"}, "profiles": {}, "routes": {},
+            "environment_references": ["ref-recover"],
+            "candidate_engine_ids": [engine_id], "readiness": {},
+            "reused_profile_count": 0, "confirmation_result": {},
+            "expected_active_revision": None,
+        },
+        now_ms=created_at_ms,
+    )
+    released = []
+    service._environment_manager.release = (  # type: ignore[method-assign]
+        lambda *, reference_id: released.append(reference_id) or {"state": "released"}
+    )
+
+    preserved = service.recover_toolbox_definition_rollouts()
+    assert preserved["protected_candidate_engine_ids"] == [engine_id]
+    assert service._find_registration(engine_id)["routing_state"] == "candidate"  # noqa: SLF001
+
+    service._retire_toolbox_registration(engine_id)  # noqa: SLF001
+    recovered = service.recover_toolbox_definition_rollouts()
+    assert recovered["expired_candidate_ref_digests"]
+    assert recovered["candidate_cleanup_reference_ids"] == ["ref-recover"]
+    assert service.toolbox_get_definition_candidate(
+        candidate_ref=candidate_ref,
+        owner_actor_id="actor:a", authority_id="authority:a",
+    )["state"] == "expired"

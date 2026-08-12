@@ -1644,12 +1644,35 @@ class ToolboxRuntimeMixin:
         ):
             raise ValueError("candidate_stale")
         expected_engines = set(candidate.retained_payload["candidate_engine_ids"])
+        expected_profiles = dict(candidate.retained_payload["profiles"])
+        live_references = {}
+        cursor = ""
+        while True:
+            page = self._environment_manager.list_references(cursor=cursor, limit=100)
+            for row in list(page.get("references") or []):
+                if row.get("released_at_ms") is None:
+                    live_references[str(row.get("reference_id") or "")] = dict(row)
+            cursor = str(page.get("next_cursor") or "")
+            if not cursor:
+                break
         for engine_id in expected_engines:
             registration = dict(self._find_registration(engine_id) or {})
+            environment = dict(registration.get("environment") or {})
+            bundle = dict(registration.get("bundle") or {})
+            profile_id = str(bundle.get("resolved_profile_id") or "")
+            expected_profile = dict(expected_profiles.get(profile_id) or {})
+            profile = dict(expected_profile.get("profile") or {})
+            reference_id = str(expected_profile.get("environment_reference") or "")
             if (
                 registration.get("routing_state") != "candidate"
-                or str(dict(registration.get("bundle") or {}).get("definition_revision") or "")
-                != candidate.definition_revision
+                or str(bundle.get("definition_revision") or "") != candidate.definition_revision
+                or not expected_profile
+                or environment.get("environment_reference") != reference_id
+                or reference_id not in live_references
+                or live_references[reference_id].get("environment_id")
+                != profile.get("environment_key")
+                or environment.get("venv_lock_hash")
+                != (profile.get("custom_resolved_lock_digest") or profile.get("template_lock_digest"))
             ):
                 raise ValueError("candidate_stale")
 

@@ -20,6 +20,7 @@ from hosting.service.toolbox_state_v2 import (
     ToolboxRevisionConflictError,
 )
 from hosting.toolbox.bundle_models import ResolvedToolboxProfileSpec, ToolboxDefinitionSpec
+from tests.hosting_v3_fixtures import hosting_configuration
 
 
 def _digest(character: str) -> str:
@@ -192,7 +193,7 @@ def test_publish_is_process_safe_cas_and_interrupted_replace_preserves_old_state
 def test_rollout_recovery_resolves_pre_and_post_publication_crash_points(tmp_path: Path) -> None:
     service = EngineHostService(
         engines_state_file=tmp_path / "managed_engines.json",
-        control_state_file=tmp_path / "control_state.json",
+        hosting_configuration=hosting_configuration(tmp_path),
     )
     service._require_toolbox_executor_registration = lambda engine_id, *, command_label: service.get_registration(engine_id)  # type: ignore[method-assign]
     candidate = service.register_spawned(
@@ -309,7 +310,7 @@ def test_rollout_recovery_phase_matrix_uses_active_routes_as_truth(
 ) -> None:
     service = EngineHostService(
         engines_state_file=tmp_path / phase / "managed.json",
-        control_state_file=tmp_path / phase / "control.json",
+        hosting_configuration=hosting_configuration(tmp_path / phase),
     )
     service._require_toolbox_executor_registration = (  # type: ignore[method-assign]
         lambda engine_id, *, command_label: service.get_registration(engine_id)

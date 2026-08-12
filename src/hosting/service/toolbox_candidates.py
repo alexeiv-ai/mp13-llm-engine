@@ -362,6 +362,46 @@ class AtomicJsonToolboxDefinitionCandidateRepository:
                 self._write(state)
             return current
 
+    def list(self, *, now_ms: int) -> tuple[ToolboxDefinitionCandidateRecord, ...]:
+        with _exclusive_process_file_lock(self.lock_path):
+            state = self._read()
+            changed = False
+            records = []
+            for key, raw in state["candidates"].items():
+                record = ToolboxDefinitionCandidateRecord.from_dict(raw)
+                current = self._expire(record, now_ms=now_ms)
+                if current != record:
+                    state["candidates"][key] = current.to_dict()
+                    changed = True
+                records.append(current)
+            if changed:
+                self._write(state)
+        return tuple(sorted(records, key=lambda item: (item.created_at_ms, item.candidate_ref_digest)))
+
+    def expire_stale(
+        self, candidate_ref_digest: str, *, now_ms: int
+    ) -> ToolboxDefinitionCandidateRecord:
+        key = require_digest(candidate_ref_digest, label="toolbox_candidate_ref")
+        with _exclusive_process_file_lock(self.lock_path):
+            state = self._read()
+            raw = state["candidates"].get(key)
+            if raw is None:
+                raise PermissionError("candidate_not_found")
+            record = ToolboxDefinitionCandidateRecord.from_dict(raw)
+            if record.state == "expired":
+                return record
+            if record.state != "ready":
+                raise ValueError("candidate_stale")
+            if record.execution_leases:
+                raise ValueError("candidate_execution_denied")
+            expired = ToolboxDefinitionCandidateRecord.from_dict({
+                **record.to_dict(), "state": "expired",
+                "expires_at_ms": min(record.expires_at_ms, int(now_ms)),
+            })
+            state["candidates"][key] = expired.to_dict()
+            self._write(state)
+            return expired
+
     def renew(
         self,
         candidate_ref: str,

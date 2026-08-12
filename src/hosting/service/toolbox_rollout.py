@@ -595,6 +595,61 @@ class ToolboxDefinitionRolloutCoordinator:
             for snapshot in snapshots.values()
             for route in dict(dict(snapshot or {}).get("tool_routes") or {}).values()
         } - {""}
+        now_ms = self._now_ms()
+        candidate_records = self.service._toolbox_definition_candidates.list(now_ms=now_ms)
+        registrations_by_id = {
+            str(row.get("engine_id") or "").strip(): dict(row)
+            for row in self.service._read_engines()
+            if str(row.get("executor_kind") or "") == "toolbox_executor"
+        }
+        protected_candidate_engine_ids: set[str] = set()
+        expired_candidate_refs: list[str] = []
+        candidate_cleanup_engine_ids: list[str] = []
+        candidate_cleanup_reference_ids: list[str] = []
+        for candidate in candidate_records:
+            payload = dict(candidate.retained_payload)
+            engine_ids = {
+                str(item or "").strip()
+                for item in list(payload.get("candidate_engine_ids") or [])
+                if str(item or "").strip()
+            }
+            references = {
+                str(item or "").strip()
+                for item in list(payload.get("environment_references") or [])
+                if str(item or "").strip()
+            }
+            complete_ready = candidate.state == "ready" and all(
+                engine_id in registrations_by_id
+                and registrations_by_id[engine_id].get("routing_state") == "candidate"
+                and str(dict(registrations_by_id[engine_id].get("bundle") or {}).get("definition_revision") or "")
+                == candidate.definition_revision
+                for engine_id in engine_ids
+            )
+            if complete_ready:
+                protected_candidate_engine_ids.update(engine_ids)
+                continue
+            if candidate.state == "ready" and not candidate.execution_leases:
+                candidate = self.service._toolbox_definition_candidates.expire_stale(
+                    candidate.candidate_ref_digest, now_ms=now_ms
+                )
+            if candidate.state != "expired":
+                continue
+            expired_candidate_refs.append(candidate.candidate_ref_digest)
+            for engine_id in sorted(engine_ids - active_engine_ids):
+                if engine_id in registrations_by_id:
+                    self.service._retire_toolbox_registration(engine_id)
+                    candidate_cleanup_engine_ids.append(engine_id)
+            active_references = {
+                str(item or "").strip()
+                for snapshot in snapshots.values()
+                for item in list(dict(snapshot or {}).get("environment_references") or [])
+            }
+            for reference_id in sorted(references - active_references):
+                try:
+                    self.service._environment_manager.release(reference_id=reference_id)
+                    candidate_cleanup_reference_ids.append(reference_id)
+                except Exception:
+                    pass
         expected_bindings: dict[str, dict[str, Any]] = {}
         runtime_repair_required: list[dict[str, Any]] = []
         for toolbox_id, snapshot in snapshots.items():
@@ -657,6 +712,8 @@ class ToolboxDefinitionRolloutCoordinator:
                     activated.append(engine_id)
                 continue
             if routing_state == "candidate":
+                if engine_id in protected_candidate_engine_ids:
+                    continue
                 self.service._retire_toolbox_registration(engine_id)
                 candidates_removed.append(engine_id)
                 continue
@@ -755,6 +812,10 @@ class ToolboxDefinitionRolloutCoordinator:
                     str(item.get("engine_id") or ""),
                 ),
             ),
+            "protected_candidate_engine_ids": sorted(protected_candidate_engine_ids),
+            "expired_candidate_ref_digests": sorted(expired_candidate_refs),
+            "candidate_cleanup_engine_ids": sorted(set(candidate_cleanup_engine_ids)),
+            "candidate_cleanup_reference_ids": sorted(set(candidate_cleanup_reference_ids)),
         }
 
 

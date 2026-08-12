@@ -167,7 +167,11 @@ class _FakeOrchestrator:
                     "manifest_hash": manifest["manifest_hash"],
                     "definition_revision": definition_revision,
                 },
-                environment={"environment_key": assignment.resolved_profile.environment_key},
+                environment={
+                    "environment_key": assignment.resolved_profile.environment_key,
+                    "environment_reference": assignment.materialization_reference_id,
+                    "venv_lock_hash": assignment.resolved_profile.effective_lock_digest,
+                },
                 tool_access={
                     "allowed_tool_names": sorted(
                         item["name"] for item in [*manifest["tools"], *manifest["auto_tools"]]
@@ -208,6 +212,22 @@ def _install_fake_rollout(service: EngineHostService) -> _FakeOrchestrator:
         return {"reference_id": reference_id, "state": "released"}
 
     service._environment_manager.release = release_reference  # type: ignore[method-assign]
+    service._environment_manager.list_references = (  # type: ignore[method-assign]
+        lambda *, cursor="", limit=100: {
+            "references": [
+                {
+                    "reference_id": reference_id,
+                    "environment_id": environment_id,
+                    "released_at_ms": None,
+                }
+                for reference_id, environment_id in sorted(
+                    service._test_environment_references.items()  # type: ignore[attr-defined]
+                )
+                if reference_id > cursor
+            ][:limit],
+            "next_cursor": None,
+        }
+    )
     service._toolbox_rollout_orchestrator_factory = lambda: orchestrator  # type: ignore[attr-defined]
     service._ensure_toolbox_assignments_ready = (  # type: ignore[method-assign]
         lambda assignments, timeout_seconds=8.0: {

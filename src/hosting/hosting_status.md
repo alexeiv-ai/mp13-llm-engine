@@ -2,7 +2,7 @@
 
 Last updated: 2026-08-12
 
-Status: R7.2 active on durable candidate records
+Status: R7.2 complete; ready for R7.3 maintenance adaptation
 
 This is the current execution ledger for
 [`hosting_access_plan.md`](hosting_access_plan.md). Detailed completed-slice
@@ -12,15 +12,14 @@ compact evidence index, and external completion gates.
 
 ## 1. Current gate and resume order
 
-**R7.2 is active at the durable candidate-record boundary.** R7.1 planning and selective revision is complete:
+**R7.2 candidate lifecycle is complete.** R7.1 planning and selective revision is complete:
 generic locks/requests, CAS changes, evidence, child replanning, exact public
 projections, and stale/retry/restart/concurrency safety proofs are committed.
 The strict v3 candidate retention/quota policy, durable candidate repository,
 pre-publication rollout seam, candidate operation kinds, and shared validated
 candidate preparation, bounded get/renew, and ordinary gated candidate
-execution, exact warmed publication, and discard are committed. Next, add
-expiry cleanup and restart reconciliation, including stale worker/reference
-recovery.
+execution, exact warmed publication, discard, expiry cleanup, and restart
+reconciliation are committed. Open R7.3 at generic maintenance adaptation.
 
 Resume in this order:
 
@@ -46,7 +45,7 @@ after R9.4 removals make R9.7 evidence meaningful.
 | R4 Single startup path | Complete | Final aggregate/platform proof at R9.7. |
 | R5 Generic packages | Complete | Final aggregate/platform proof at R9.7. |
 | R6 Generic environments | Active | Remove final legacy receipt/reference readers; add candidate lifecycle policy fields in R7.2. |
-| R7 Toolbox adoption | R7.1 complete | R7.2 durable candidate/materialization lifecycle. |
+| R7 Toolbox adoption | R7.2 complete | R7.3 generic maintenance adaptation. |
 | R8 Worker-neutral state | Complete | One focused workflow-helper checkpoint rerun remains as noted above. |
 | R9 Acceptance/handoff | Partial | Public signature alignment, lifecycle matrices, removals, docs, dependent receipt, and full/platform lanes. |
 
@@ -75,16 +74,15 @@ are authoritative for unfinished item-level work.
 
 The pre-R7 P0 clean-cut items are complete.
 
-### R7.2 candidate lifecycle
+### R7.3 maintenance adaptation
 
-- Add expiry/discard restart reconciliation without adding a worker kind or
-  generic endpoint.
-- Add restart reconciliation, resource cleanup, stale-pin revalidation, and
-  exact warmed-candidate publication.
-- Enforce the same execution gates, sandbox, host-API/data/network approvals,
-  callbacks, audit, timeout, and cancellation policy as active tools.
-- Add `toolbox_candidate_retention_ms` and
-  `toolbox_candidate_limit_per_actor` to strict host-local lifecycle policy.
+- Route consistency, gate, reconcile, repair, review snapshots, references,
+  GC, and archive through generic package/environment authority where shared.
+- Preserve separately versioned toolbox-only versus generic state and reject
+  removal while a plan, confirmation, operation, execution, or candidate lease
+  remains live.
+- Update maintenance projections and proofs without restoring legacy toolbox
+  environment ownership.
 
 ### R9 closeout
 
@@ -123,6 +121,7 @@ The pre-R7 P0 clean-cut items are complete.
 | CODE/TEST-R7.2F | Authorized prepare/get/renew daemon, channel, and CLI surfaces expose only bounded actor-scoped records; renewal is idempotent and revalidates active/config/catalog/host-policy/source pins plus candidate workers; combined transport/auth/service/repository/operation lane passed 89 tests with no deselections. |
 | CODE/TEST-R7.2G | Candidate execution permits only changed-profile routes, selects the retained candidate worker, forwards ordinary tool/effect/callback/host-API/timeout policy into durable toolbox execution, and holds a lease until terminal cleanup; service/transport/auth/repository lane passed 57 tests. |
 | CODE/TEST-R7.2H | Publish consumes only retained warmed runtime state and emits the existing apply result without rebuild/spawn; discard atomically becomes terminal before retiring non-active workers/references, and both deny in-flight leases; focused lifecycle/transport lane passed 13 tests. |
+| CODE/TEST-R7.2I | Recovery loads durable candidate truth before reconciling workers, preserves complete ready candidates, expires missing-worker candidates, cleans only non-active workers/references, and validates live generic reference/environment/package-lock identity; expanded R7.2 matrix passed 190 tests (one recorded real-daemon dependency fixture deselected). |
 | CODE-R8A–C | Versioned neutral state, Python/JS shared manager adoption, GC/repair controls passed focused coverage. |
 | CODE/TEST-R9 partial | Structured auth, role/hash authority, redaction, startup modes, generic lifecycle, and retry/restart identity passed focused coverage. |
 | TEST-R8.2C checkpoint | Workflow operation suite passed; full helper suite passed 116 tests on resume. |

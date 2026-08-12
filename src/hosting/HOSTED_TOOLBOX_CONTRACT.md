@@ -372,6 +372,14 @@ apply result. Discard transitions the candidate before retiring its non-active
 workers and generic references; either mutation is denied while an execution
 lease remains in flight.
 
+Recovery reads durable candidate records before reconciling registrations.
+Complete ready candidates remain candidate-routed and recoverable; elapsed or
+incomplete candidates become `expired`, and cleanup releases only workers and
+generic references not retained by active toolbox truth. Renewal, execution,
+and publication fail stale when the active definition, configuration, catalog,
+host policy, source set, target, candidate registration, generic environment
+reference, environment identity, or exact environment lock no longer matches.
+
 The resulting plan is stored in the process-safe atomic definition-plan
 repository. Its ID binds toolbox ID, definition revision, expected active
 revision, catalog revision, package-policy revision, resolved profiles, and

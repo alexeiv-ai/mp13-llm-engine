@@ -123,7 +123,7 @@ only in `HOSTING_CLIENT_BREAKING_CHANGES.md`.
 | R4 startup cut | Complete | Final aggregate/platform evidence at R9.7. |
 | R5 generic packages | Complete | Toolbox planning adopts locks at R7.1. |
 | R6 generic environments | Active | Final legacy readers/aliases; candidate policy fields. |
-| R7 toolbox adoption | R7.0 complete | R7.1 planning/revision; R7.2 candidate/materialization. |
+| R7 toolbox adoption | R7.2 complete | R7.3 maintenance adaptation. |
 | R8 neutral state/workers | Complete | One conditional focused checkpoint below. |
 | R9 acceptance/handoff | Partial | Public surfaces, matrices, removals, docs, receipt. |
 
@@ -185,7 +185,7 @@ R7 plan/confirmation field assertions are provisional and must be replaced.
   execution constraints.
 - [x] Split existing candidate rollout at its pre-publication boundary into
   durable prepare/get/renew/execute/publish/discard operations.
-- [ ] Add requested lifetime, repeated renewal, in-flight execution leases,
+- [x] Add requested lifetime, repeated renewal, in-flight execution leases,
   quotas, expiry/discard cleanup, restart recovery, and stale authorization,
   definition, environment, package-lock, and configuration-pin checks.
 - [x] Add the frozen retention/limit fields to strict v3 lifecycle validation
