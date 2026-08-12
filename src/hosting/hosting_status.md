@@ -455,6 +455,18 @@ the slice.
   state version, pagination, concurrent build/commit, active execution,
   reference, and retention denial paths
 
+### DOC-R6/R9A — permanent environment and toolbox guidance cut
+
+- Date: 2026-08-11
+- Plan IDs: R6.5 cleanup guidance and R9.5 (partial); P2; high expertise
+- Outcome: sandbox guidance now describes only `@environments` reusable content,
+  `@hosting/scratch` staging, and generic consumer references; it explicitly
+  requires stopped-host operator archival/rebuild for legacy directories;
+  toolbox documentation uses generic public commands, package locks,
+  daemon-computed hashes, optional verification, and one MP13 configuration
+- Remaining: finish the implementation alias cut, then run the final permanent
+  document search and executable example tests
+
 Append one concise entry per completed slice. Include exact commands, counts,
 durations where useful, negative-path results, commit pin, and dependent receipt
 impact. Do not paste an unstructured full test transcript.

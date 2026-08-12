@@ -720,7 +720,7 @@ new commands preserve role checks and no-double semantics.
 - [ ] Remove discovery/use of `toolbox_venvs`, `runtime_envs`, and
   `toolbox_environment_cache`.
 - [ ] Remove legacy receipt/reference readers and compatibility aliases.
-- [ ] Provide explicit local operator cleanup instructions; do not delete old
+- [x] Provide explicit local operator cleanup instructions; do not delete old
   data automatically as a side effect of daemon startup.
 
 Proof: a fixture containing only legacy directories cannot affect resolution,
@@ -855,7 +855,7 @@ terms.
   guidance.
 - [ ] Show logical refs as the normal configuration form and clearly separate
   configuration, secrets, audit, state, scratch, packages, and environments.
-- [ ] Document explicit cleanup/rebuild of legacy environments without adding
+- [x] Document explicit cleanup/rebuild of legacy environments without adding
   fallback code.
 - [ ] Verify permanent documents contain no links to or normative dependency on
   the three transient delivery records.

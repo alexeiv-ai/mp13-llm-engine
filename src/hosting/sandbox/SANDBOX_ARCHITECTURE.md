@@ -71,9 +71,8 @@ are implementation layers, not public sandbox kinds:
    not reuse Python venv machinery.
 6. [toolbox_runtime.py](toolbox_runtime.py): `HostedToolboxRuntimeBase`, an
    internal toolbox identity adapter. It keeps toolbox staging, tool routing,
-   callbacks, brokered I/O, and `toolbox_venvs` ownership in toolbox code while
-   adding shared `environment_key` / `environment_identity` registration
-   metadata.
+   callbacks, and brokered I/O while consuming the shared environment receipt
+   and reference selected by the host.
 
 Concrete workflow facades currently use these layers incrementally:
 
@@ -183,21 +182,17 @@ On Windows with `policy.enabled=True`, the launcher calls `launch_restricted_wor
 
 ### Runtime Environments
 
-Host-managed Python runtime environments now have a shared model even though toolbox APIs still expose toolbox-oriented wrapper names.
+Host-managed environments use `hosting.environment_request.v1`, immutable
+package locks, and content-addressed receipts. Reusable content lives only under
+the resolved `@environments` root; builds stage under `@hosting/scratch` and are
+published atomically. Each consumer holds a generic reference containing
+`consumer_kind`, `consumer_id`, and `revision`, so toolbox, Python-helper, and
+Node lifetimes remain independent while identical inputs reuse the same bytes.
 
-Current roots:
-
-1. `<hosting_root>/toolbox_venvs/<venv_key>` for existing toolbox executor environments
-2. `<hosting_root>/runtime_envs/<venv_key>` for new non-toolbox runtime environments
-
-Compatibility rule:
-
-1. existing `toolbox_venvs` entries remain readable
-2. toolbox executor environments continue to use `toolbox_venvs`
-3. new workflow helper environments use `runtime_envs`
-4. entries are not eagerly copied between roots
-
-Runtime environment metadata includes `environment_root_kind` and `environment_consumer_kind` so review, GC, and dependent projects do not need to infer semantics from directory names.
+Directories created by older releases are not read, migrated, or removed by
+daemon startup. An operator may archive those directories after stopping old
+hosts and confirming that no old process is using them. The new host will
+rebuild required content from package locks and active templates.
 
 Runtime Python selection uses a bootstrap/preverified interpreter only while a dependency-bearing environment is not verified. A no-package/no-op environment can activate its realized venv immediately. A dependency-bearing environment switches to its realized venv only after install execution and install receipt verification are both recorded as `ok`.
 
