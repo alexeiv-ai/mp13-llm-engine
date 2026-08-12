@@ -122,7 +122,7 @@ def test_contract_contains_only_supported_vocabulary() -> None:
     assert not {item for item in forbidden if item in text}
 
 
-def test_handoff_specifies_pending_corrective_migration() -> None:
+def test_handoff_specifies_corrective_migration_and_adoption_receipt() -> None:
     text = HANDOFF.read_text(encoding="utf-8")
     prose = " ".join(text.split())
     assert "[Hosted Toolbox Definition Contract](HOSTED_TOOLBOX_CONTRACT.md)" in text
@@ -143,7 +143,9 @@ def test_handoff_specifies_pending_corrective_migration() -> None:
         "shared_environment_incomplete",
     ]:
         assert required in text
-    assert "adoption is prohibited" in prose
+    assert "Current dependent receipt status: **supplied**" in text
+    assert "06fc0d3f7df..." in text
+    assert "Windows64 with CPython 3.12.7" in text
     assert "No pending client-breaking-change action remains" not in prose
 
 

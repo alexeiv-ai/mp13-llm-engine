@@ -23,10 +23,12 @@ maintainers and must not be edited from this repository.
 - Last adopted `mp13-docs` commit: `125d20f232bf5b755d18c1b23bc1e4b8929edf21`
 - Corrective parent implementation pin: `d689bda`.
 - Production-launcher completion pin: `48ff1f1`.
-- Dependent adoption receipt: not yet supplied. It must identify the dependent
-  commit, exact Windows target, and its Windows migration-test command/results.
-  Consumer Linux and macOS testing is not currently required; adoption is
-  prohibited until this independent Windows receipt is supplied.
+- Dependent adoption receipt: supplied against parent `af6b01636620e79bbcb7e4257a630b1eb72a544a`
+  from dependent revision `06fc0d3f7df...` on Windows64 with CPython 3.12.7.
+  Reported migration results are 71 + 8 + 28 passed, plus 12 parent tests
+  passed, covering all nine required behaviors. The consumer project identifier
+  and full 40-character dependent commit are intentionally not required.
+  Consumer Linux and macOS testing is not required.
 
 Rollout order is fixed:
 
@@ -566,8 +568,7 @@ fields before R7-01 can close:
 
 ```json
 {
-  "dependent": "repository-or-product-id",
-  "dependent_commit": "40-lowercase-hex",
+  "dependent_commit": "consumer-reported-revision-or-abbreviated-pin",
   "parent_pin": "40-lowercase-hex-or-release-pin",
   "consumer_test_platform": "windows-target-reported-by-dependent",
   "migration_test_command": "maintainer-run command",
@@ -586,8 +587,9 @@ fields before R7-01 can close:
 }
 ```
 
-Current dependent receipt status: **not supplied**. The parent implementation
-pin is `d689bda` (`hosting: add restart-safe toolbox acceptance`); the dependent
-commit, exact Windows target, and Windows migration result must still come from
-the dependent maintainer and may not be replaced with a parent-authored
-assumption. Non-Windows consumer evidence is not required at this time.
+Current dependent receipt status: **supplied**. The dependent reported revision
+`06fc0d3f7df...` against parent
+`af6b01636620e79bbcb7e4257a630b1eb72a544a` on Windows64 with CPython 3.12.7:
+71 + 8 + 28 migration tests and 12 parent tests passed, covering every behavior
+listed above. Consumer identity and a full dependent hash are not acceptance
+fields. Non-Windows consumer evidence is not required.

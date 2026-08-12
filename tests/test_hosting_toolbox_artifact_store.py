@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import io
 import json
 import threading
 import time
 import zipfile
+from functools import lru_cache
 from pathlib import Path
 
 import pytest
@@ -145,6 +147,7 @@ def _configuration() -> ToolboxHostProjectConfiguration:
     )
 
 
+@lru_cache(maxsize=None)
 def _wheel(
     name: str,
     version: str,
@@ -153,8 +156,6 @@ def _wheel(
     requires=(),
     packages: tuple[str, ...] | None = None,
 ) -> bytes:
-    import io
-
     output = io.BytesIO()
     distribution = name.replace("-", "_")
     dist_info = f"{distribution}-{version}.dist-info"
@@ -276,6 +277,18 @@ def _runtime_bundle(
     *,
     packages: tuple[str, ...] = ("hosting", "mp13_engine"),
 ) -> None:
+    payload = json.dumps(configuration.to_dict(), sort_keys=True, separators=(",", ":"))
+    path.write_bytes(_runtime_bundle_bytes(payload, private_key.private_bytes_raw(), packages))
+
+
+@lru_cache(maxsize=None)
+def _runtime_bundle_bytes(
+    configuration_payload: str,
+    private_key_raw: bytes,
+    packages: tuple[str, ...],
+) -> bytes:
+    configuration = ToolboxHostProjectConfiguration.from_dict(json.loads(configuration_payload))
+    private_key = Ed25519PrivateKey.from_private_bytes(private_key_raw)
     content = _wheel(
         "mp13-engine", "0.9.0", packages=packages
     )
@@ -309,10 +322,12 @@ def _runtime_bundle(
             "signature": _b64(private_key.sign(manifest_raw)),
         }
     )
-    with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         archive.writestr("manifest.json", manifest_raw)
         archive.writestr("signature.json", signature_raw)
         archive.writestr(f"wheels/{filename}", content)
+    return output.getvalue()
 
 
 def _policy() -> dict:

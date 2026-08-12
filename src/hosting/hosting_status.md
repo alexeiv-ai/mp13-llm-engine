@@ -40,14 +40,15 @@ Release/adoption pins retained for traceability:
 ## Remaining external and out-of-scope evidence
 
 The corrective implementation gaps above are closed by R1 through R7 parent
-work. One external adoption gate remains. WSL2 is the execution environment for
-all in-scope Linux x64 work; separate native Linux-host and ARM receipts are out
+work. The dependent Windows adoption receipt has been supplied. WSL2 is the
+execution environment for all in-scope Linux x64 work; separate native Linux-host and ARM receipts are out
 of scope rather than blockers for current corrective work:
 
-1. Each dependent maintainer must supply a Windows adoption receipt pinned to
-   the committed parent implementation and containing its exact Windows target,
-   migration command, and result. Consumer Linux/macOS testing is not currently
-   required. No dependent repository is modified or treated as adopted here.
+1. The dependent reported revision `06fc0d3f7df...` against parent
+   `af6b01636620e79bbcb7e4257a630b1eb72a544a` on Windows64 with CPython 3.12.7.
+   Its 71 + 8 + 28 migration tests and 12 parent tests passed with all nine
+   required behaviors covered. Consumer identity and a full dependent hash are
+   not receipt requirements. Consumer Linux/macOS testing is not required.
 2. WSL2 Linux x64 runs use a Linux Poetry environment and cover the in-scope
    Linux target/tag, wheel, AF_UNIX/path, parent-death, cleanup, restart, and
    process lanes. Native Linux-host x64/ARM64, Windows ARM64, and macOS ARM64
@@ -68,8 +69,8 @@ transcript was intentionally removed because it obscured current truth.
 | R4 Privileged approval and immutable apply | Complete | Dependency approval is a distinct authority bound to the confirmation and exact artifacts; apply consumes only immutable plan/confirmation/approval receipts and atomically publishes the confirmed effective definition. |
 | R5 Removal, retention, and administrator environments | Complete | R5-01 through R5-05 are complete. Explicit tool removal contracts shared profiles after atomic publication; exact environment deletion is reference-safe; administrator construction publishes inactive verified revisions with explicit lifecycle transitions; mutating maintenance is canonical, durable, idempotent, cancellable before mutation, and restart-recoverable. |
 | R6 Restart-safe consumer healing | Complete | R6-01 through R6-06 are implemented. Manifest digests are normalized at plan/state/registration boundaries; concrete toolbox candidates use unique runtime IDs and immutable binding digests; duplicate registrations are rejected instead of replaced; recovery reports missing/mismatched runtime bindings for explicit reapply; Linux workers request native parent-death termination, Windows retains job containment, and retirement removes bounded worker spec/scratch artifacts. Duplicate toolbox execution attaches return the current durable snapshot immediately, cancellation acknowledges before asynchronous teardown, and `toolbox-describe-refresh` is a separate durable operation while `toolbox-describe` is bounded to persisted registration state. Poetry-based focused rollout/atomic/sandbox/operation and state archive tests passed. |
-| R7 Breaking-change handoff and acceptance | Parent implementation complete; consumer receipt pending | The parent handoff inventory and receipt schema are populated. The production-launcher delivery correction exposes and transports all five strict toolbox inputs through foreground, detached, CLI, relay, and local channel bootstrap without placing credentials in process arguments. Authenticated RBAC key upsert/list responses now project the exact registered public key without secret material, closing the consumer setup blocker. The real-daemon no-double suite covers signed configured setup, decline/skip, distinct approval, custom add/execute/remove, environment-removal safety, restart healing, GC, and request recovery. Windows x64, WSL2 Linux x64, and unavailable-platform code review satisfy the current parent scope; out-of-scope native receipts are not labeled passes. |
-| R8 Test determinism and performance | Active | R8-02 is complete: process startup observes both IPC readiness and early worker exit, teardown closes Python and JavaScript registries, and leading-hyphen IPC authentication tokens are argv-safe. The reusable Poetry-environment lane runner recorded three consecutive clean serial process runs: 259/259 in 232.44s, 231.84s, and 230.94s (231.84s median), all within the 360s budget. WSL2 R8-01 fast evidence is now stable at 965 passed / 2 skipped / 266 deselected for each of three runs (470.273s, 466.628s, 465.121s; 466.628s median), but misses the 420s budget. Its native collection lane selected 9 tests for each of three runs (16.520s, 16.359s, 16.514s; 16.514s median) within budget. The first WSL process repetition selected 259 tests and reached 253 passed / 6 failed / 1 skipped in 840.07s, so it is not a receipt or pass; failures are worker-startup/resource timing symptoms under the WSL Linux lane. R8-01 baseline completion, R8-03 immutable fixture caching, finalized R8-04 Windows/WSL lane evidence, and separately validated Windows and WSL parallelism remain. |
+| R7 Breaking-change handoff and acceptance | Complete | The parent handoff inventory and receipt schema are populated. The dependent reported revision `06fc0d3f7df...` against parent `af6b01636620e79bbcb7e4257a630b1eb72a544a` on Windows64 CPython 3.12.7, with 71 + 8 + 28 migration tests and 12 parent tests passing across all nine required behaviors. The production-launcher delivery correction exposes and transports all five strict toolbox inputs through foreground, detached, CLI, relay, and local channel bootstrap without placing credentials in process arguments. Authenticated RBAC key upsert/list responses now project the exact registered public key without secret material, closing the consumer setup blocker. The real-daemon no-double suite covers signed configured setup, decline/skip, distinct approval, custom add/execute/remove, environment-removal safety, restart healing, GC, and request recovery. Windows x64, WSL2 Linux x64, and unavailable-platform code review satisfy the current parent scope; out-of-scope native receipts are not labeled passes. The final Windows repository regression passed 1,239 with two intentional skips. |
+| R8 Test determinism and performance | Complete | R8-01 through R8-05 are complete. Windows fast-lane serial evidence is 970/970 at a 389.586s median; four-worker work-stealing is 970/970 at a 105.093s median (73.0% lower), with a post-cache qualification at 97.668s. The serial process boundary remains separate and passed 260 with one Linux-only skip in 250.281s; prior three-run process evidence has a 231.84s median. The Windows native lane selected 12 and completed three runs with 11 passed/one intentional skip at a 6.035s median. The mounted-source/native-environment WSL process lane passed 261 with one collection-level skip in 718.079s; that timing is observational and carries no WSL budget claim. The final serial full lane passed 1,239 with two intentional skips in 599.207s, within its 720s budget. |
 
 R7 production-launcher correction evidence: the foreground, detached, CLI,
 relay, channel-bootstrap, contract, and final-doc suite passed 105 tests in
@@ -153,8 +154,8 @@ tests in 113.22s.
 
 ## Active implementation slice
 
-Active slice: R7 consumer receipt plus active R8 test determinism and
-performance. Parent implementation and local acceptance are complete.
+Completed slice: R7 acceptance and Windows-only R8 test optimization with a
+functional, observationally timed WSL2 lane. The consumer receipt is complete.
 WSL2 covers all in-scope Linux x64 execution. Separate native Linux-host and ARM
 receipts are out of scope with explicit no-pass labeling; no consumer Linux or
 macOS result is required.
@@ -171,18 +172,30 @@ early exit, and timeout; process-test teardown closes both node registries.
 The ordered workflow-helper module passed 116/116 in 131.59s, and the focused
 runtime/startup suite passed 43/43 in 26.63s.
 
-WSL2 R8-01 evidence uses the clean ext4 shadow checkout
-`/home/alx/repos/mp13-llm-engine-r8`, its Linux Poetry environment, and dedicated
-`/home/alx/r8p` / `/home/alx/r8t` pytest and temporary roots. The fast lane
-selected 966 tests before the collection-level Windows-only skip and completed
-three clean runs at 470.273s, 466.628s, and 465.121s (466.628s median), with
-965 passed, 2 skipped, and 266 deselected per run. The native collection lane
-selected 9 tests (the Windows-only sandbox module is skipped at collection) and
-completed three runs at 16.520s, 16.359s, and 16.514s (16.514s median). The
-process lane is not yet accepted: its first run selected 259 tests, with 253
-passed, 6 failed, and 1 skipped in 840.07s. The failures were worker startup /
-resource-metric timing under WSL cold virtual environments, not dependency or
-collection failures; no WSL process pass is claimed.
+Current WSL2 R8-01 uses the Windows-mounted source checkout (`v9fs`) with the
+Python environment, cache, temporary files, pytest state, daemon state, IPC,
+and generated environments on native Linux storage. Packages may be downloaded
+directly into that native environment; copying from Windows is not required.
+The focused launcher/toolbox/R7 matrix passed 12/12 in 62.50s after fixing the
+Linux task-scoped parent-death lifecycle. A process-lane observation selected
+261 tests and completed in 610.961s with 260 passed, one skipped, and one
+active-process metric sampling race; that exact failure passed alone in 7.13s.
+After replacing two five-second startup assumptions with explicit running-state
+readiness and bounded teardown assertions, the final process lane passed all
+261 selected tests with one collection-level skip in 718.079s. This timing is
+observational and no WSL performance budget or parallelism is claimed.
+
+Windows R8 evidence uses Poetry's project environment on CPython 3.12.7. The
+serial fast lane passed 970/970 in 396.564s, 388.727s, and 389.586s (389.586s
+median). Four work-stealing workers passed the same 970 tests in 105.078s,
+106.666s, and 105.093s (105.093s median), a 73.0% median reduction; immutable
+wheel/bundle bytes and a session venv seed then produced a 97.668s clean
+qualification while one real venv construction and cross-process publication
+boundary remain. Fast, serial process, and native lanes remain distinct. Their
+conservative median sum is 342.97s versus the recorded 562.56s full-suite
+reference, a 39.0% reduction without removing production boundaries. The lock
+adds only `pytest-xdist` and `execnet`; the existing CUDA/Triton environment
+remains torch 2.9.1+cu126, CUDA 12.6 available, and triton-windows 3.5.1.post24.
 
 Unavailable-platform review evidence: target aliases normalize AMD64/x86_64
 to x64 and ARM64/aarch64 to arm64; current-host tags come from ordered

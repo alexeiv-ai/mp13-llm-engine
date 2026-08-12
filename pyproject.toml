@@ -102,6 +102,7 @@ priority = "explicit"
 [tool.poetry.group.dev.dependencies]
 pytest = ">=6.2.5"
 pytest-asyncio = ">=0.21.0"
+pytest-xdist = "^3.8.0"
 pylint = "^3.3.4"
 
 [build-system]
@@ -118,6 +119,7 @@ markers = [
   "fast: deterministic unit, contract, and repository tests without worker processes",
   "process: tests that start or coordinate real worker processes and IPC",
   "native: target- or platform-bound tests intended for native CI lanes",
+  "real_venv_creation: preserve a real CPython venv creation boundary while other tests reuse an immutable seed",
 ]
 filterwarnings = [
   "ignore:Importing (from )?torchao\\.dtypes.* is deprecated.*:DeprecationWarning",

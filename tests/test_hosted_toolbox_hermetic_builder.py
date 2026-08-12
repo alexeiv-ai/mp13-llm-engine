@@ -4,12 +4,15 @@ import hashlib
 import json
 import multiprocessing
 import os
+import shutil
 import subprocess
 import sys
 import threading
+import venv
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
+from functools import lru_cache
 from pathlib import Path
 
 import pytest
@@ -48,6 +51,22 @@ def _digest(character: str) -> str:
 def _wheel(source: Path, distribution: str, version: str, import_root: str) -> ToolboxLockedArtifactSpec:
     filename = f"{distribution.replace('-', '_')}-{version}-py3-none-any.whl"
     target = source / filename
+    raw = _wheel_bytes(distribution, version, import_root)
+    target.write_bytes(raw)
+    return ToolboxLockedArtifactSpec(
+        distribution_name=distribution,
+        version=version,
+        source_id="approved",
+        filename=filename,
+        sha256=f"sha256:{hashlib.sha256(raw).hexdigest()}",
+        size_bytes=len(raw),
+    )
+
+
+@lru_cache(maxsize=None)
+def _wheel_bytes(distribution: str, version: str, import_root: str) -> bytes:
+    import io
+
     dist_info = f"{distribution.replace('-', '_')}-{version}.dist-info"
     members = {
         f"{import_root}/__init__.py": f"VALUE = {version!r}\n",
@@ -64,18 +83,33 @@ def _wheel(source: Path, distribution: str, version: str, import_root: str) -> T
         ),
     }
     members[f"{dist_info}/RECORD"] = "".join(f"{name},,\n" for name in members) + f"{dist_info}/RECORD,,\n"
-    with zipfile.ZipFile(target, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         for name, content in members.items():
             archive.writestr(name, content)
-    raw = target.read_bytes()
-    return ToolboxLockedArtifactSpec(
-        distribution_name=distribution,
-        version=version,
-        source_id="approved",
-        filename=filename,
-        sha256=f"sha256:{hashlib.sha256(raw).hexdigest()}",
-        size_bytes=len(raw),
-    )
+    return output.getvalue()
+
+
+@pytest.fixture(scope="session")
+def hermetic_venv_seed(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    seed = tmp_path_factory.mktemp("hermetic-venv-seed") / "environment"
+    venv.EnvBuilder(with_pip=True, system_site_packages=False, clear=True).create(str(seed))
+    return seed
+
+
+@pytest.fixture(autouse=True)
+def reuse_immutable_hermetic_venv_seed(
+    request: pytest.FixtureRequest,
+    monkeypatch: pytest.MonkeyPatch,
+    hermetic_venv_seed: Path,
+) -> None:
+    if request.node.get_closest_marker("real_venv_creation") is not None:
+        return
+
+    def _copy_seed(_builder: venv.EnvBuilder, target: str) -> None:
+        shutil.copytree(hermetic_venv_seed, target, dirs_exist_ok=True)
+
+    monkeypatch.setattr(venv.EnvBuilder, "create", _copy_seed)
 
 
 def _resolved(
@@ -146,6 +180,7 @@ def test_builder_rejects_cross_target_wheel_before_source_access(tmp_path: Path)
     assert captured.value.code == "environment_artifact_target_mismatch"
 
 
+@pytest.mark.real_venv_creation
 def test_offline_preseed_builds_non_inheriting_venv_and_publishes_verified_receipt(tmp_path: Path) -> None:
     source = tmp_path / "approved"
     source.mkdir()

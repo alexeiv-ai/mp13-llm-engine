@@ -1,7 +1,14 @@
 from __future__ import annotations
 import base64
+import os
 from pathlib import Path
+import sys
+import threading
+import time
 
+import pytest
+
+from hosting._process_utils import pid_alive, terminate_process_tree
 from hosting.service.host_service import EngineHostService
 from hosting.sandbox import (
     BrokeredFilesystem,
@@ -338,3 +345,52 @@ def test_plain_launcher_uses_close_fds_when_parent_handles_disabled(monkeypatch,
 
     assert int(out.pid) == 9876
     assert bool(captured["kwargs"]["close_fds"]) is True
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux parent-death signals are task scoped")
+def test_posix_worker_survives_the_short_lived_operation_thread(tmp_path: Path) -> None:
+    ready = tmp_path / "worker.ready"
+    source = (
+        "from ctypes import CDLL; from pathlib import Path; import sys, time; "
+        "assert CDLL(None, use_errno=True).prctl(1, 15, 0, 0, 0) == 0; "
+        "Path(sys.argv[1]).write_text('ready'); time.sleep(30)"
+    )
+    request = WorkerLaunchRequest(
+        engine_id="thread-parent-regression",
+        command=[sys.executable, "-c", source, str(ready)],
+        cwd=tmp_path,
+        env=dict(os.environ),
+        log_path=tmp_path / "worker.log",
+        sandbox_policy=WorkerSandboxPolicy.from_mapping({"sandbox": {"enabled": False}}),
+    )
+    launched: list[WorkerLaunchResult] = []
+    errors: list[BaseException] = []
+
+    def _launch() -> None:
+        try:
+            launched.append(launch_worker_process(request))
+        except BaseException as exc:  # pragma: no cover - surfaced by assertion
+            errors.append(exc)
+
+    operation_thread = threading.Thread(target=_launch)
+    operation_thread.start()
+    operation_thread.join(timeout=10)
+    assert not operation_thread.is_alive()
+    assert not errors
+    assert launched
+    pid = int(launched[0].pid)
+    try:
+        deadline = time.monotonic() + 10
+        while not ready.exists() and time.monotonic() < deadline:
+            if not pid_alive(pid):
+                break
+            time.sleep(0.02)
+        assert ready.exists(), (tmp_path / "worker.log").read_text(encoding="utf-8", errors="replace")
+
+        survival_deadline = time.monotonic() + 0.5
+        while time.monotonic() < survival_deadline:
+            assert pid_alive(pid)
+            time.sleep(0.02)
+        assert launched[0].runtime["parent_task"] == "persistent_worker_launcher"
+    finally:
+        terminate_process_tree(pid)

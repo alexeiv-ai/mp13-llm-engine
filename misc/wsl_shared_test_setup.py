@@ -47,11 +47,22 @@ def _is_wsl() -> bool:
     return "microsoft" in text or "wsl" in text
 
 
-def cmd_check(root: Path) -> int:
+def _filesystem_type(path: Path) -> str:
+    completed = subprocess.run(
+        ["stat", "-f", "-c", "%T", str(path)],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    return completed.stdout.strip().lower() if completed.returncode == 0 else "unknown"
+
+
+def cmd_check(root: Path, *, venv: Path | None = None) -> int:
     issues: list[str] = []
     print(f"root: {root}")
     print(f"platform: {sys.platform}")
     print(f"wsl: {'yes' if _is_wsl() else 'no'}")
+    print(f"source_filesystem: {_filesystem_type(root)}")
 
     for name in REQUIRED_ENTRIES:
         path = root / name
@@ -67,23 +78,40 @@ def cmd_check(root: Path) -> int:
             kind = "symlink" if path.is_symlink() else "local"
             print(f"{name}: present ({kind})")
 
-    poetry = _run(["poetry", "env", "info", "-p"], root=root)
-    if poetry.returncode != 0:
-        issues.append("poetry env info -p failed")
-        print("poetry_env: error")
-        if poetry.stderr.strip():
-            print(f"detail: {poetry.stderr.strip()}")
+    if venv is not None:
+        env_path = str(venv.expanduser().absolute())
+        python = Path(env_path) / "bin" / "python"
+        print(f"poetry_env: {env_path} (explicit)")
+        if not python.is_file():
+            issues.append(f"explicit WSL environment has no Python executable: {python}")
+        env_filesystem = _filesystem_type(Path(env_path))
+        print(f"poetry_env_filesystem: {env_filesystem}")
+        if _is_wsl() and env_filesystem in {"9p", "v9fs"}:
+            issues.append("WSL Poetry environment must use native Linux storage, not DrvFS/9P")
     else:
-        env_path = poetry.stdout.strip()
-        print(f"poetry_env: {env_path}")
-        if not env_path:
-            issues.append("poetry env path is empty")
+        poetry = _run(["poetry", "env", "info", "-p"], root=root)
+        if poetry.returncode != 0:
+            issues.append("poetry env info -p failed")
+            print("poetry_env: error")
+            if poetry.stderr.strip():
+                print(f"detail: {poetry.stderr.strip()}")
+            env_path = ""
+            python = Path("python")
+        else:
+            env_path = poetry.stdout.strip()
+            python = Path(env_path) / "bin" / "python"
+            print(f"poetry_env: {env_path}")
+            if not env_path:
+                issues.append("poetry env path is empty")
+            else:
+                env_filesystem = _filesystem_type(Path(env_path))
+                print(f"poetry_env_filesystem: {env_filesystem}")
+                if _is_wsl() and env_filesystem in {"9p", "v9fs"}:
+                    issues.append("WSL Poetry environment must use native Linux storage, not DrvFS/9P")
 
     imports = _run(
         [
-            "poetry",
-            "run",
-            "python",
+            str(python),
             "-c",
             (
                 "import sys; sys.path.insert(0, 'src'); "
@@ -113,36 +141,39 @@ def cmd_check(root: Path) -> int:
     return 0
 
 
-def cmd_commands(root: Path) -> int:
+def cmd_commands(root: Path, *, venv: Path | None = None) -> int:
     print(f"cd {root}")
-    print("# Use a WSL/Linux Poetry environment; do not reuse the Windows .venv or daemon state.")
-    print("export POETRY_VIRTUALENVS_IN_PROJECT=true")
-    print("# Keep pytest sockets and daemon state short and private to this WSL lane.")
+    print("# Sources may remain Windows-mounted; all generated/runtime state stays on native WSL storage.")
+    print(f"export WSL_VENV={venv or Path('/home/alx/mp13-wsl-venv')}")
+    print("export POETRY_CACHE_DIR=/home/alx/.cache/pypoetry/mp13-cache")
+    print("export PYTHONPYCACHEPREFIX=/home/alx/.cache/mp13-pycache")
     print("export PYTEST_DEBUG_TEMPROOT=/home/alx/r8p")
     print("export TMPDIR=/home/alx/r8t")
-    print("mkdir -p \"$PYTEST_DEBUG_TEMPROOT\" \"$TMPDIR\"")
-    print("poetry install --no-interaction")
     print(
-        "poetry run python misc/hosting_test_lanes.py "
-        "--lane fast --repeat 3 --durations 25 --json-output .tmp/wsl-fast-baseline.json"
+        "mkdir -p \"$WSL_VENV\" \"$POETRY_CACHE_DIR\" "
+        "\"$PYTHONPYCACHEPREFIX\" \"$PYTEST_DEBUG_TEMPROOT\" \"$TMPDIR\""
+    )
+    print("# For a fresh environment: python3 -m venv \"$WSL_VENV\"")
+    print("# Poetry downloads Linux packages directly into native storage; do not copy the Windows environment.")
+    print("# Then install without selecting the mounted checkout's Windows .venv:")
+    print("# VIRTUAL_ENV=\"$WSL_VENV\" PATH=\"$WSL_VENV/bin:$PATH\" POETRY_VIRTUALENVS_CREATE=false poetry install --no-interaction")
+    print(
+        "\"$WSL_VENV/bin/python\" misc/hosting_test_lanes.py "
+        "--lane process --repeat 1 --durations 20 --json-output /home/alx/r8-wsl-process.json"
     )
     print(
-        "poetry run python misc/hosting_test_lanes.py "
-        "--lane process --repeat 3 --durations 20 --json-output .tmp/wsl-process-baseline.json"
+        "\"$WSL_VENV/bin/python\" misc/hosting_test_lanes.py "
+        "--lane native --collect-only --json-output /home/alx/r8-wsl-native-collection.json"
     )
+    print("PYTHONPATH=src \"$WSL_VENV/bin/python\" -m pytest tests/test_hosting_daemon_pidfile.py -q")
     print(
-        "poetry run python misc/hosting_test_lanes.py "
-        "--lane native --collect-only --json-output .tmp/wsl-native-collection.json"
-    )
-    print("PYTHONPATH=src poetry run pytest tests/test_hosting_daemon_pidfile.py -q")
-    print(
-        "PYTHONPATH=src poetry run pytest "
+        "PYTHONPATH=src \"$WSL_VENV/bin/python\" -m pytest "
         "tests/test_hosting_toolbox_sandbox.py -q "
         "-k 'startup_spec or spec_path or spec_hosting or toolbox_executor_ipc_end_to_end'"
     )
-    print("PYTHONPATH=src poetry run pytest tests/test_engine_host_channel.py -q")
+    print("PYTHONPATH=src \"$WSL_VENV/bin/python\" -m pytest tests/test_engine_host_channel.py -q")
     print(
-        "PYTHONPATH=src poetry run pytest "
+        "PYTHONPATH=src \"$WSL_VENV/bin/python\" -m pytest "
         "tests/test_hosting_toolbox_sandbox.py "
         "tests/test_engine_host_channel.py "
         "tests/test_hosting_daemon_pidfile.py -q"
@@ -165,6 +196,7 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawTextHelpFormatter,
     )
     parser.add_argument("--root", type=str, help="Path to the shadow project root in WSL. Defaults to the current working directory.")
+    parser.add_argument("--venv", type=Path, help="Explicit native-WSL Poetry environment; avoids a mounted Windows .venv.")
     sub = parser.add_subparsers(dest="command", required=True, help="Command to execute")
     
     sub.add_parser("check", help="Validate the current WSL shadow setup (checks files, poetry env, and imports).")
@@ -177,9 +209,9 @@ def main() -> int:
     args = parser.parse_args()
     root = _project_root(args.root)
     if args.command == "check":
-        return cmd_check(root)
+        return cmd_check(root, venv=args.venv)
     if args.command == "commands":
-        return cmd_commands(root)
+        return cmd_commands(root, venv=args.venv)
     parser.error(f"unsupported command: {args.command}")
     return 2
 

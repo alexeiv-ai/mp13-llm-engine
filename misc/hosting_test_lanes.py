@@ -30,11 +30,16 @@ def build_pytest_command(
     *,
     lane: str,
     durations: int,
+    workers: int = 0,
     collect_only: bool = False,
     extra_args: Sequence[str] = (),
 ) -> list[str]:
     if lane not in LANE_SELECTORS:
         raise ValueError(f"unknown hosting test lane: {lane}")
+    if int(workers) < 0:
+        raise ValueError("workers must be zero or greater")
+    if int(workers) and lane != "fast":
+        raise ValueError("parallel workers are supported only for the fast lane")
     command = [
         sys.executable,
         "-m",
@@ -43,6 +48,8 @@ def build_pytest_command(
         f"--durations={max(0, int(durations))}",
         *LANE_SELECTORS[lane],
     ]
+    if int(workers):
+        command.extend(["-n", str(int(workers)), "--dist=worksteal"])
     if collect_only:
         command.append("--collect-only")
     command.extend(str(value) for value in extra_args)
@@ -72,6 +79,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--lane", choices=tuple(LANE_SELECTORS), required=True)
     parser.add_argument("--repeat", type=int, default=1)
     parser.add_argument("--durations", type=int, default=25)
+    parser.add_argument("--workers", type=int, default=0)
     parser.add_argument("--collect-only", action="store_true")
     parser.add_argument("--enforce-budget", action="store_true")
     parser.add_argument("--json-output", type=Path, default=None)
@@ -90,6 +98,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     command = build_pytest_command(
         lane=str(args.lane),
         durations=int(args.durations),
+        workers=int(args.workers),
         collect_only=bool(args.collect_only),
         extra_args=extra_args,
     )

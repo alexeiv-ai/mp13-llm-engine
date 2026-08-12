@@ -1888,6 +1888,58 @@ def test_toolbox_execute_records_shared_hosted_pool_lifecycle(monkeypatch: pytes
     assert status["source"] in {"active", "recent"}
 
 
+def test_routed_toolbox_execute_honors_bounded_caller_readiness_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = _scratch_dir("toolbox-routed-ready-timeout-")
+    svc = EngineHostService(
+        engines_state_file=root / "managed_engines.json",
+        control_state_file=root / "access_control.json",
+    )
+    registration = svc.register_spawned(
+        engine_id="toolbox-routed-ready-timeout",
+        pid=1234,
+        command=[sys.executable, "-m", "hosting.toolbox_executor_ipc"],
+        worker_ipc_family="AF_UNIX" if sys.platform != "win32" else "AF_PIPE",
+        worker_ipc_address=(
+            str(root / "worker.sock")
+            if sys.platform != "win32"
+            else r"\\.\pipe\mp13-routed-ready-timeout"
+        ),
+        executor_kind="toolbox_executor",
+        bundle={"toolbox_id": "toolbox-routed", "sandbox_profile_id": "default"},
+        environment={"environment_key": "toolbox-routed-env"},
+        tool_access={"allowed_tool_names": ["demo_tool"], "advertised_tool_names": ["demo_tool"]},
+    )
+    observed: list[float] = []
+    monkeypatch.setattr(svc, "toolbox_gate", lambda **_kwargs: {"outcome": "allowed"})
+    monkeypatch.setattr(svc, "_route_toolbox_registration", lambda **_kwargs: registration)
+    monkeypatch.setattr(
+        svc,
+        "_wait_for_toolbox_executor_ready",
+        lambda _engine_id, *, timeout_seconds: observed.append(float(timeout_seconds))
+        or {"status": "ok", "all_registered_tool_names": ["demo_tool"]},
+    )
+    monkeypatch.setattr(
+        svc,
+        "_ipc_call",
+        lambda **_kwargs: {"status": "ok", "tool_call": {"id": "call-1", "result": "ok"}},
+    )
+    try:
+        result = svc.toolbox_execute(
+            toolbox_id="toolbox-routed",
+            execution_request_id="routed-ready-timeout-1",
+            tool_call={"id": "call-1", "name": "demo_tool", "arguments": {}},
+            timeout_seconds=23.0,
+        )
+    finally:
+        svc.remove_registration("toolbox-routed-ready-timeout")
+        shutil.rmtree(root, ignore_errors=True)
+
+    assert result["status"] == "ok"
+    assert observed == [23.0]
+
+
 def test_toolbox_execute_returns_all_settled_error_diagnostics(monkeypatch: pytest.MonkeyPatch) -> None:
     root = _scratch_dir("toolbox-all-settled-error-")
     try:

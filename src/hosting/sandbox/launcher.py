@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import os
+import queue
 import subprocess
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -10,6 +12,9 @@ from .._process_utils import hidden_subprocess_kwargs
 from .policy import WorkerSandboxPolicy
 
 _NORMAL_JOB_HANDLES: Dict[int, int] = {}
+_POSIX_LAUNCH_LOCK = threading.Lock()
+_POSIX_LAUNCH_QUEUE: Optional[queue.Queue[tuple["WorkerLaunchRequest", queue.Queue[tuple[str, Any]]]]] = None
+_POSIX_LAUNCH_THREAD: Optional[threading.Thread] = None
 
 
 @dataclass
@@ -64,6 +69,55 @@ def _normal_launch(req: WorkerLaunchRequest) -> WorkerLaunchResult:
         persisted_env=dict(req.env),
         runtime=runtime,
     )
+
+
+def _persistent_posix_launch_loop(
+    request_queue: queue.Queue[tuple[WorkerLaunchRequest, queue.Queue[tuple[str, Any]]]],
+) -> None:
+    """Launch workers from a task that lives for the host process lifetime.
+
+    Linux PR_SET_PDEATHSIG is tied to the parent *thread* that called fork,
+    rather than merely to its process. Hosted operations run on short-lived
+    threads, so launching directly from them causes otherwise healthy workers
+    to receive SIGTERM as soon as the operation completes.
+    """
+    while True:
+        req, reply = request_queue.get()
+        try:
+            reply.put(("ok", _normal_launch(req)))
+        except Exception as exc:
+            reply.put(("error", exc))
+
+
+def _launch_from_persistent_posix_thread(req: WorkerLaunchRequest) -> WorkerLaunchResult:
+    global _POSIX_LAUNCH_QUEUE, _POSIX_LAUNCH_THREAD
+
+    with _POSIX_LAUNCH_LOCK:
+        if _POSIX_LAUNCH_THREAD is None or not _POSIX_LAUNCH_THREAD.is_alive():
+            # Recreate both objects after a fork: inherited Thread objects are
+            # not alive in the child and their old queue has no consumer.
+            request_queue: queue.Queue[tuple[WorkerLaunchRequest, queue.Queue[tuple[str, Any]]]] = queue.Queue()
+            launcher = threading.Thread(
+                target=_persistent_posix_launch_loop,
+                args=(request_queue,),
+                name="mp13-posix-worker-launcher",
+                daemon=True,
+            )
+            launcher.start()
+            _POSIX_LAUNCH_QUEUE = request_queue
+            _POSIX_LAUNCH_THREAD = launcher
+        request_queue = _POSIX_LAUNCH_QUEUE
+
+    if request_queue is None:  # pragma: no cover - guarded by initialization above
+        raise RuntimeError("POSIX worker launcher queue was not initialized")
+    reply: queue.Queue[tuple[str, Any]] = queue.Queue(maxsize=1)
+    request_queue.put((req, reply))
+    status, value = reply.get()
+    if status == "error":
+        raise value
+    result = value
+    result.runtime["parent_task"] = "persistent_worker_launcher"
+    return result
 
 
 def _attach_windows_kill_on_close_job(proc: subprocess.Popen[Any]) -> Dict[str, Any]:
@@ -123,4 +177,6 @@ def launch_worker_process(req: WorkerLaunchRequest) -> WorkerLaunchResult:
             persisted_env=dict(req.env),
             runtime=dict(launched.runtime),
         )
+    if os.name != "nt":
+        return _launch_from_persistent_posix_thread(req)
     return _normal_launch(req)

@@ -2058,7 +2058,10 @@ class ToolboxRuntimeMixin:
             try:
                 self._wait_for_toolbox_executor_ready(
                     eid,
-                    timeout_seconds=min(float(timeout_seconds or 30.0), 8.0),
+                    # Honor the caller's already-bounded execution deadline.
+                    # Cold CPython startup can exceed eight seconds on WSL and
+                    # other constrained hosts even though the executor is healthy.
+                    timeout_seconds=float(timeout_seconds or 30.0),
                 )
             except Exception as exc:
                 return _persist_terminal({

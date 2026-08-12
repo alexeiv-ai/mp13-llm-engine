@@ -521,7 +521,9 @@ def _execute(
     )
     assert duplicate["operation"] == started["operation"]
     terminal = _terminal(daemon, started)
-    assert terminal["lifecycle"] == "terminal_success", terminal
+    assert terminal["lifecycle"] == "terminal_success", json.dumps(
+        terminal, indent=2, sort_keys=True
+    )
     return terminal
 
 

@@ -1980,21 +1980,25 @@ def test_workflow_js_node_resources_report_terminal_metrics(tmp_path: Path) -> N
 
     thread = threading.Thread(target=run_cancel, daemon=True)
     thread.start()
-    deadline = time.time() + 5.0
-    while time.time() < deadline:
+    running_observed = False
+    deadline = time.monotonic() + 30.0
+    while time.monotonic() < deadline:
         status = svc._test_workflow_js_status(
             environment_key=environment_key,
             request_id="req-js-metrics-cancel",
         )
         if dict(status.get("request") or {}).get("status") == "running":
+            running_observed = True
             break
         time.sleep(0.05)
+    assert running_observed, status
     canceled = svc._cancel_workflow_js_runtime(
         profile="node",
         environment_key=environment_key,
         request_id="req-js-metrics-cancel",
     )
-    thread.join(timeout=5.0)
+    thread.join(timeout=30.0)
+    assert not thread.is_alive()
     resources = svc.workflow_js_resources(profile="node", environment_key=environment_key)
     metrics = resources["workflow_pool"]["metrics"]
     recent = {row["request_id"]: row["status"] for row in metrics["recent_requests"]}
@@ -5088,21 +5092,25 @@ def test_workflow_python_node_resources_report_terminal_metrics(tmp_path: Path) 
 
     thread = threading.Thread(target=run_cancel, daemon=True)
     thread.start()
-    deadline = time.time() + 5.0
-    while time.time() < deadline:
+    running_observed = False
+    deadline = time.monotonic() + 30.0
+    while time.monotonic() < deadline:
         status = svc._test_workflow_python_status(
             environment_key=environment_key,
             request_id="req-node-metrics-cancel",
         )
         if dict(status.get("request") or {}).get("status") == "running":
+            running_observed = True
             break
         time.sleep(0.05)
+    assert running_observed, status
     canceled = svc._cancel_workflow_python_runtime(
         profile="node",
         environment_key=environment_key,
         request_id="req-node-metrics-cancel",
     )
-    thread.join(timeout=5.0)
+    thread.join(timeout=30.0)
+    assert not thread.is_alive()
     resources = svc.workflow_python_resources(profile="node", environment_key=environment_key)
     metrics = resources["workflow_pool"]["metrics"]
     recent = {row["request_id"]: row["status"] for row in metrics["recent_requests"]}

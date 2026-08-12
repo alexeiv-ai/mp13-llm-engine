@@ -4,6 +4,8 @@ import importlib.util
 import sys
 from pathlib import Path
 
+import pytest
+
 
 SCRIPT = Path(__file__).resolve().parents[1] / "misc" / "hosting_test_lanes.py"
 SPEC = importlib.util.spec_from_file_location("hosting_test_lanes", SCRIPT)
@@ -20,6 +22,18 @@ def test_lane_commands_are_explicit_and_process_lane_is_serial() -> None:
     assert command[-2:] == ["-m", "process"]
     assert "--durations=17" in command
     assert "-n" not in command
+
+
+def test_fast_lane_supports_opt_in_work_stealing_workers() -> None:
+    command = LANES.build_pytest_command(lane="fast", durations=10, workers=4)
+
+    assert command[-3:] == ["-n", "4", "--dist=worksteal"]
+
+
+@pytest.mark.parametrize("lane", ["process", "native", "full"])
+def test_parallel_workers_are_rejected_outside_the_fast_lane(lane: str) -> None:
+    with pytest.raises(ValueError, match="only for the fast lane"):
+        LANES.build_pytest_command(lane=lane, durations=10, workers=2)
 
 
 def test_lane_summary_reports_median_budget_and_failures() -> None:

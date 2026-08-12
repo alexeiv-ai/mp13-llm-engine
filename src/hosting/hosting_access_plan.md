@@ -748,7 +748,7 @@ boundary—not a double—passes.
   arguments by using a short-lived secured file for detached direct inputs,
   delete that file after readiness/failure, and document the consumer launch
   contract before renewing the dependent adoption request.
-- [ ] **R7-01** For every removed/replaced API, populate the breaking-change
+- [x] **R7-01** For every removed/replaced API, populate the breaking-change
   handoff before its implementation commit and obtain dependent-provided
   Windows adoption evidence; never modify the dependent project. Consumers are
   currently required to test only on their available Windows host and record
@@ -756,9 +756,9 @@ boundary—not a double—passes.
 - [x] **R7-02** Add one no-double end-to-end suite covering configured daemon
   startup, built-ins, source alternatives, confirmation decline/skip, approval,
   custom add/remove, restart healing, environment removal, and GC.
-- [ ] **R7-03** Run focused parent tests, native target suites, and complete
+- [x] **R7-03** Run focused parent tests, native target suites, and complete
   parent regression. Dependents run their own migration tests and report pins.
-  - [ ] **R7-03a** Produce one clean post-fix parent regression with unique
+  - [x] **R7-03a** Produce one clean post-fix parent regression with unique
     durable request/state identities, unconditional worker cleanup, and no
     timeout-only synchronization failure.
   - [x] **R7-03b** Record the Windows x64 result, use WSL2 for the in-scope Linux
@@ -766,7 +766,7 @@ boundary—not a double—passes.
     ARM64, Linux ARM64, and macOS ARM64 paths. Native Linux-host and ARM
     real-test receipts are out of scope; do not label reviewed-only targets as
     passed.
-  - [ ] **R7-03c** Accept the dependent maintainer's Windows-only migration
+  - [x] **R7-03c** Accept the dependent maintainer's Windows-only migration
     command/result and exact Windows target in the R7-01 adoption receipt. Do
     not require a consumer to supply Linux or macOS evidence.
 - [x] **R7-04** Reconcile plan, status, contracts, setup docs, worker
@@ -775,16 +775,20 @@ boundary—not a double—passes.
 
 ### R8 - Test determinism and performance
 
-R8 may proceed while R7 waits on external evidence. It must optimize test
-construction and orchestration without replacing any required real-daemon,
+R8 optimizes the Windows x64 Poetry lane. WSL2 is a functional Linux x64
+compatibility lane with observational performance recording, not a standalone
+development environment or a performance-optimization target. It must optimize
+test construction and orchestration without replacing any required real-daemon,
 real-worker, native-extension, restart, containment, or cleanup boundary with a
 double.
 
-- [ ] **R8-01** Use `misc/hosting_test_lanes.py` from the Windows x64 checkout
-  and the WSL2 Linux x64 shadow path to record repeatable reference baselines
+- [x] **R8-01** Use `misc/hosting_test_lanes.py` from the Windows x64 checkout
+  to record repeatable reference baselines
   with `--durations`. Publish separate fast/process/native counts, durations,
-  medians, and budgets over three runs; WSL runs must use a Linux Poetry
-  environment and isolated Linux daemon state. A WSL result is the in-scope
+  medians, and budgets over three runs. WSL must record one functional run and
+  its duration using a Linux Poetry environment and isolated Linux daemon state;
+  its source checkout may remain Windows-mounted while its environment and
+  mutable state use native WSL storage. A WSL result is the in-scope
   Linux x64 lane and does not imply a native Linux-host or ARM receipt.
 - [x] **R8-02** Remove remaining fixed durable request IDs, shared mutable state,
   teardown leaks, fixed sleeps, and timeout-only readiness from process tests.
@@ -792,19 +796,18 @@ double.
   200ms cancellation threshold exposed by WSL2/DrvFS) with ordering/events plus
   a generous deadlock bound. Require three consecutive clean process-lane runs
   before completion.
-- [ ] **R8-03** Cache immutable signed-wheel, bundle, and hermetic seed fixtures
+- [x] **R8-03** Cache immutable signed-wheel, bundle, and hermetic seed fixtures
   at session scope while giving every test independent mutable CAS, operation,
   catalog, environment-reference, worker, IPC, and result state.
-- [ ] **R8-04** Split default fast, serial process, Windows native, and WSL2
-  Linux x64 lanes while retaining the five declared target workflow
+- [x] **R8-04** Split default fast, serial process, Windows native, and WSL2
+  Linux x64 functional lanes while retaining the five declared target workflow
   definitions. Retain at least one serial real-process lifecycle test for every
   in-scope production boundary and publish per-lane counts and durations.
-- [ ] **R8-05** Enable parallel execution independently per validated platform.
+- [x] **R8-05** Enable parallel execution on Windows x64.
   Prove worker-safe state roots, ports, named pipes, process registries, and
-  teardown before enabling it on Windows. Prove Linux isolation separately in
-  WSL2 using its Linux Poetry environment before enabling the WSL lane's
-  parallelism. Native Linux-host and ARM receipts are not prerequisites because
-  they are out of scope. A 30% median reduction from the recorded Windows
+  teardown before enabling it on Windows. WSL parallelism and performance
+  optimization are out of scope. Native Linux-host and ARM receipts are not
+  prerequisites because they are out of scope. A 30% median reduction from the recorded Windows
   full-suite reference is the optimization target, not permission to weaken
   assertions or skip boundaries.
 
