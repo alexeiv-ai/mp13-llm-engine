@@ -132,6 +132,24 @@ EXAMPLES_BY_COMMAND = {
     "toolbox-apply-definition": [
         "Get-Content toolbox-apply.json | python -m hosting.engine_host_cli --payload-stdin toolbox-apply-definition",
     ],
+    "toolbox-prepare-definition-candidate": [
+        "Get-Content toolbox-candidate-prepare.json | python -m hosting.engine_host_cli --payload-stdin toolbox-prepare-definition-candidate",
+    ],
+    "toolbox-get-definition-candidate": [
+        "'{\"candidate_ref\":\"candidate-ref\"}' | python -m hosting.engine_host_cli --payload-stdin toolbox-get-definition-candidate",
+    ],
+    "toolbox-renew-definition-candidate": [
+        "Get-Content toolbox-candidate-renew.json | python -m hosting.engine_host_cli --payload-stdin toolbox-renew-definition-candidate",
+    ],
+    "toolbox-execute-definition-candidate": [
+        "Get-Content toolbox-candidate-execute.json | python -m hosting.engine_host_cli --payload-stdin toolbox-execute-definition-candidate",
+    ],
+    "toolbox-publish-definition-candidate": [
+        "'{\"candidate_ref\":\"candidate-ref\",\"request_id\":\"publish-1\"}' | python -m hosting.engine_host_cli --payload-stdin toolbox-publish-definition-candidate",
+    ],
+    "toolbox-discard-definition-candidate": [
+        "'{\"candidate_ref\":\"candidate-ref\",\"request_id\":\"discard-1\"}' | python -m hosting.engine_host_cli --payload-stdin toolbox-discard-definition-candidate",
+    ],
     "environment-template-list": [
         "python -m hosting.engine_host_cli environment-template-list",
     ],

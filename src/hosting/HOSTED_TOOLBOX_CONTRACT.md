@@ -380,6 +380,16 @@ and publication fail stale when the active definition, configuration, catalog,
 host policy, source set, target, candidate registration, generic environment
 reference, environment identity, or exact environment lock no longer matches.
 
+The typed Python consumer facade exposes atomic changes through
+`HostedToolBoxRef.plan_tool_changes`, candidate preparation through
+`HostedToolBoxRef.prepare_definition_candidate`, and reconnectable candidate
+use through `HostedToolBoxRef.candidate_session(candidate_ref=...)`. The
+returned `HostedToolBoxCandidateSession` owns no runtime identity: `get`,
+`renew`, `execute`, `publish`, and `discard` forward only the opaque candidate
+reference and the frozen request fields. Candidate `execute` serializes the
+ordinary `ToolsView`, callback binding, timeout, and host-API approval and does
+not imply side-effect-free execution.
+
 The resulting plan is stored in the process-safe atomic definition-plan
 repository. Its ID binds toolbox ID, definition revision, expected active
 revision, catalog revision, package-policy revision, resolved profiles, and

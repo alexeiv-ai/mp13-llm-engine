@@ -11,6 +11,7 @@ from hosting.daemon.local_ipc import EngineHostDaemon
 from hosting.engine_host_channel import EngineHostControlChannel
 from hosting import engine_host_cli
 from hosting.service.host_service import EngineHostService
+from hosting import HostedToolBoxCandidateSession
 from hosting.toolbox.hosted_ref import HostedToolBoxRef
 from tests.hosting_v3_fixtures import write_hosting_configuration
 
@@ -193,6 +194,24 @@ def test_hosted_reference_exposes_only_definition_and_template_consumer_helpers(
         request_id="request-1",
         dependency_approval_ref="approval-1",
     )
+    ref.prepare_definition_candidate(
+        plan_id="plan-1",
+        confirmation_ref="confirmation-1",
+        request_id="prepare-1",
+        requested_lifetime_ms=300000,
+    )
+    candidate = ref.candidate_session(candidate_ref="candidate-1")
+    assert isinstance(candidate, HostedToolBoxCandidateSession)
+    candidate.get()
+    candidate.renew(requested_lifetime_ms=600000, request_id="renew-1")
+    candidate.execute(
+        tool_name="Alpha",
+        arguments={"value": 1},
+        execution_request_id="execute-1",
+        tool_call_id="call-1",
+    )
+    candidate.publish(request_id="publish-1")
+    candidate.discard(request_id="discard-1")
     ref.list_environment_templates()
     ref.describe_environment_template(template_id="core", template_digest="digest-1")
 
@@ -203,10 +222,24 @@ def test_hosted_reference_exposes_only_definition_and_template_consumer_helpers(
         "toolbox_revise_definition_plan",
         "toolbox_confirm_definition_plan",
         "toolbox_apply_definition",
+        "toolbox_prepare_definition_candidate",
+        "toolbox_get_definition_candidate",
+        "toolbox_renew_definition_candidate",
+        "toolbox_execute_definition_candidate",
+        "toolbox_publish_definition_candidate",
+        "toolbox_discard_definition_candidate",
         "toolbox_template_list",
         "toolbox_template_describe",
     ]
     assert host.calls[5][1]["request_id"] == "request-1"
+    assert host.calls[9][1] == {
+        "candidate_ref": "candidate-1",
+        "tool_call": {"id": "call-1", "name": "Alpha", "arguments": {"value": 1}},
+        "execution_request_id": "execute-1",
+        "timeout_seconds": 30.0,
+        "tools_view": None,
+        "callback_binding": None,
+    }
     assert not hasattr(type(ref), "publish_template")
 
 
@@ -230,6 +263,29 @@ def test_definition_role_separation() -> None:
     assert approval_command not in worker
     assert approval_command not in EngineHostService._commands_allowed_for_role("config_editor")  # noqa: SLF001
     assert approval_command in EngineHostService._commands_allowed_for_role("dependency_approver")  # noqa: SLF001
+
+
+def test_tool_change_and_candidate_capabilities_are_advertised() -> None:
+    capabilities = EngineHostService.daemon_capabilities()
+
+    assert capabilities["toolbox_tool_changes_v1"] is True
+    assert capabilities["toolbox_definition_candidates_v1"] is True
+
+
+def test_candidate_session_rejects_missing_identity_and_cross_toolbox_projection() -> None:
+    with pytest.raises(ValueError, match="candidate_ref_required"):
+        HostedToolBoxCandidateSession(toolbox_id="tb", candidate_ref="", host=object())
+
+    class Host:
+        @staticmethod
+        def toolbox_get_definition_candidate(**_payload: Any) -> Dict[str, Any]:
+            return {"candidate_ref": "candidate-1", "toolbox_id": "other"}
+
+    session = HostedToolBoxCandidateSession(
+        toolbox_id="tb", candidate_ref="candidate-1", host=Host()
+    )
+    with pytest.raises(ValueError, match="candidate_toolbox_mismatch"):
+        session.get()
 
 
 def test_daemon_dispatch_preserves_actor_and_opaque_approval(

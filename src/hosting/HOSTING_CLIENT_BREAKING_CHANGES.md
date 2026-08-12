@@ -776,6 +776,13 @@ holds an in-flight lease and is governed by its execution timeout rather than
 candidate retention. This reuses the normal toolbox worker protocol and does
 not add a generic code execution surface.
 
+Python consumers use `HostedToolBoxRef.plan_tool_changes` and
+`prepare_definition_candidate`; after resolving the prepare operation, they
+reconnect with `candidate_session(candidate_ref=...)` and call its typed
+`get`, `renew`, `execute`, `publish`, or `discard` methods. The session retains
+only the opaque ref and toolbox identity and does not expose worker,
+environment, or package identities.
+
 Plans and operations pin the active hosting configuration revision. A restart
 under changed static policy makes incompatible pending work stale; clients
 must re-plan rather than silently continuing under new policy.

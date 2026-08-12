@@ -22,6 +22,103 @@ from .tools_view import (
 )
 
 
+class HostedToolBoxCandidateSession:
+    """Typed consumer facade for one opaque, actor-scoped candidate reference."""
+
+    def __init__(self, *, toolbox_id: str, candidate_ref: str, host: Any) -> None:
+        self.toolbox_id = str(toolbox_id or "").strip()
+        self.candidate_ref = str(candidate_ref or "").strip()
+        if not self.toolbox_id:
+            raise ValueError("toolbox_id_required")
+        if not self.candidate_ref:
+            raise ValueError("candidate_ref_required")
+        self.host = host
+
+    def _checked_candidate(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        result = dict(payload or {})
+        toolbox_id = str(result.get("toolbox_id") or "").strip()
+        if toolbox_id and toolbox_id != self.toolbox_id:
+            raise ValueError("candidate_toolbox_mismatch")
+        return result
+
+    def get(self) -> Dict[str, Any]:
+        return self._checked_candidate(
+            self.host.toolbox_get_definition_candidate(candidate_ref=self.candidate_ref)
+        )
+
+    def renew(self, *, requested_lifetime_ms: int, request_id: str) -> Dict[str, Any]:
+        return self._checked_candidate(self.host.toolbox_renew_definition_candidate(
+            candidate_ref=self.candidate_ref,
+            requested_lifetime_ms=int(requested_lifetime_ms),
+            request_id=str(request_id or "").strip(),
+        ))
+
+    def execute(
+        self,
+        *,
+        tool_name: str,
+        arguments: Optional[Dict[str, Any]] = None,
+        execution_request_id: str,
+        timeout_seconds: float = 30.0,
+        tools_view: Optional[ToolsView] = None,
+        callback_processor: Optional[Callable[..., Any]] = None,
+        callback_context: Any = None,
+        tool_call_id: str = "",
+        host_api_approval: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        name = str(tool_name or "").strip()
+        if not name:
+            raise ValueError("tool_name_required")
+        request_id = str(execution_request_id or "").strip()
+        if not request_id:
+            raise ValueError("execution_request_id is required for durable hosted execution")
+        call_id = str(tool_call_id or "").strip() or secrets.token_hex(12)
+        callback_binding = None
+        relay = None
+        if callable(callback_processor):
+            relay = _HostedToolCallbackRelay()
+            callback_binding = relay.bind_session(
+                processor=callback_processor,
+                toolbox_id=self.toolbox_id,
+                tool_name=name,
+                tool_call_id=call_id,
+                tool_arguments=dict(arguments or {}),
+                callback_signature=None,
+                user_context=callback_context,
+            )
+        try:
+            payload: Dict[str, Any] = {
+                "candidate_ref": self.candidate_ref,
+                "tool_call": {
+                    "id": call_id,
+                    "name": name,
+                    "arguments": dict(arguments or {}),
+                },
+                "execution_request_id": request_id,
+                "timeout_seconds": float(timeout_seconds or 30.0),
+                "tools_view": serialize_tools_view(tools_view),
+                "callback_binding": dict(callback_binding or {}) or None,
+            }
+            if isinstance(host_api_approval, dict):
+                payload["host_api_approval"] = dict(host_api_approval)
+            return dict(self.host.toolbox_execute_definition_candidate(**payload) or {})
+        finally:
+            if relay is not None and callback_binding:
+                relay.release_session(str(callback_binding.get("session_token") or ""))
+
+    def publish(self, *, request_id: str) -> Dict[str, Any]:
+        return dict(self.host.toolbox_publish_definition_candidate(
+            candidate_ref=self.candidate_ref,
+            request_id=str(request_id or "").strip(),
+        ) or {})
+
+    def discard(self, *, request_id: str) -> Dict[str, Any]:
+        return dict(self.host.toolbox_discard_definition_candidate(
+            candidate_ref=self.candidate_ref,
+            request_id=str(request_id or "").strip(),
+        ) or {})
+
+
 class HostedToolBoxRef:
     def __init__(self, *, toolbox_id: str, host: Any) -> None:
         self.toolbox_id = str(toolbox_id or "").strip()
@@ -161,6 +258,30 @@ class HostedToolBoxRef:
             request_id=str(request_id or "").strip(),
             dependency_approval_ref=dependency_approval_ref,
         ) or {})
+
+    def prepare_definition_candidate(
+        self,
+        *,
+        plan_id: str,
+        confirmation_ref: str,
+        request_id: str,
+        dependency_approval_ref: Optional[str] = None,
+        requested_lifetime_ms: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        return dict(self.host.toolbox_prepare_definition_candidate(
+            plan_id=str(plan_id or "").strip(),
+            confirmation_ref=str(confirmation_ref or "").strip(),
+            request_id=str(request_id or "").strip(),
+            dependency_approval_ref=dependency_approval_ref,
+            requested_lifetime_ms=requested_lifetime_ms,
+        ) or {})
+
+    def candidate_session(self, *, candidate_ref: str) -> HostedToolBoxCandidateSession:
+        return HostedToolBoxCandidateSession(
+            toolbox_id=self.toolbox_id,
+            candidate_ref=candidate_ref,
+            host=self.host,
+        )
 
     def list_environment_templates(self) -> Dict[str, Any]:
         return dict(self.host.toolbox_template_list() or {})

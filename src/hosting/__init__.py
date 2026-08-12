@@ -106,6 +106,7 @@ from .toolbox_harness import (
     ToolboxSandboxOrchestrator,
     ToolboxHarnessConfig,
     ToolboxExecutionHarness,
+    HostedToolBoxCandidateSession,
     HostedToolBoxRef,
     SandboxedToolboxFacade,
 )
@@ -237,6 +238,7 @@ __all__ = [
     "ToolboxHarnessConfig",
     "ToolboxExecutionHarness",
     "HostedToolBoxRef",
+    "HostedToolBoxCandidateSession",
     "SandboxedToolboxFacade",
     "HostedToolboxAdmin",
     "is_engine_available",

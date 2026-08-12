@@ -45,6 +45,8 @@ class CoreMixin:
             "environment_management_v1": True,
             "environment_references_v1": True,
             "environment_execution_leases_v1": True,
+            "toolbox_tool_changes_v1": True,
+            "toolbox_definition_candidates_v1": True,
         }
 
     @staticmethod

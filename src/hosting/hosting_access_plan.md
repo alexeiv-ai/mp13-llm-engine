@@ -213,7 +213,7 @@ side-effect-free.
 
 ### R9 — public acceptance and handoff
 
-- [ ] **R9.1 Public surfaces:** align channel, API, CLI, help, capabilities,
+- [x] **R9.1 Public surfaces:** align channel, API, CLI, help, capabilities,
   request/result/error shapes, and add typed high-level tool-change and
   candidate-session methods while retaining advanced full-definition planning.
 - [ ] **R9.3 Lifecycle/no-double:** cover upload, resolution, build/reuse,

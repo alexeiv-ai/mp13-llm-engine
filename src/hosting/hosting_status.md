@@ -2,7 +2,7 @@
 
 Last updated: 2026-08-12
 
-Status: R7 toolbox adoption complete; R9.1 public acceptance active
+Status: R9.1 public surfaces complete; R9.3 lifecycle acceptance active
 
 This is the current execution ledger for
 [`hosting_access_plan.md`](hosting_access_plan.md). Detailed completed-slice
@@ -12,7 +12,7 @@ compact evidence index, and external completion gates.
 
 ## 1. Current gate and resume order
 
-**R7 toolbox adoption is complete; R9.1 public acceptance is active.** R7.2 candidate lifecycle is complete. R7.1 planning and selective revision is complete:
+**R9.1 public surfaces are complete; R9.3 lifecycle acceptance is active.** R7.2 candidate lifecycle is complete. R7.1 planning and selective revision is complete:
 generic locks/requests, CAS changes, evidence, child replanning, exact public
 projections, and stale/retry/restart/concurrency safety proofs are committed.
 The strict v3 candidate retention/quota policy, durable candidate repository,
@@ -27,10 +27,10 @@ lifecycle state and never moves generic package/environment state.
 
 Resume in this order:
 
-1. Complete R9.1 public surfaces and typed high-level client methods.
-2. Complete R9.3 lifecycle/no-double coverage, then R9.4 removals.
-3. Update permanent docs and the consumer handoff to shipped behavior.
-4. Obtain dependent adoption evidence, run final matrices, and close R9.8.
+1. Complete R9.3 lifecycle/no-double coverage.
+2. Perform R9.4 removals and R9.5 permanent documentation alignment.
+3. Obtain dependent adoption evidence and run final matrices.
+4. Reconcile all remaining evidence and close R9.8.
 
 Do not run the repository-wide aggregate at resume. Its last diagnostic run
 stopped after 509 passes and 100 expected legacy-fixture failures; rerun it only
@@ -76,12 +76,12 @@ are authoritative for unfinished item-level work.
 
 The pre-R7 P0 clean-cut items are complete.
 
-### R9.1 public acceptance
+### R9.3 lifecycle/no-double acceptance
 
-- Align public channel, API, CLI, help, capabilities, and exact result/error
-  shapes with the shipped tool-change and candidate lifecycle.
-- Add typed high-level tool-change and candidate-session methods while
-  retaining advanced complete-definition planning.
+- Cover the frequent-edit candidate matrix, package/environment lifecycle,
+  second-worker concurrency, retry/restart, and at-most-once durable effects.
+- Preserve ordinary effect approvals and cancellation semantics for candidate
+  execution while proving retention cannot interrupt an in-flight call.
 - Keep the 24 removed-constructor/missing-v3-config toolbox sandbox fixtures as
   explicit R9.4 test-removal debt; the mixed diagnostic currently reaches 119
   passes before those known failures.
@@ -127,6 +127,7 @@ The pre-R7 P0 clean-cut items are complete.
 | CODE/TEST-R7.3A | Generic environment authority exposes a versioned protection snapshot; toolbox references/consistency/repair/GC consume durable candidate truth and explicit candidate→engine/reference plus generic reference/execution cross-links; focused maintenance lane passed 34 tests. |
 | TEST-R7.3B | Generic GC and explicit removal preserve toolbox/other-worker references, active executions, and live candidate leases; environment/maintenance lane passed 31 tests. |
 | CODE/TEST-R7.3C | Gate and consistency fail closed for released declared generic references; review exposes generic protection counts; offline v1 archive refuses newer lifecycle repositories and excludes shared state; R7.3 authority lane passed 54 tests. |
+| CODE/TEST-R9.1 | Channel/daemon/CLI candidate commands retain frozen payloads; capabilities advertise tool-change and candidate support; `HostedToolBoxRef` exposes typed atomic changes, candidate preparation, and reconnectable candidate sessions; public/auth/CLI lane passed 117 tests. |
 | CODE-R8A–C | Versioned neutral state, Python/JS shared manager adoption, GC/repair controls passed focused coverage. |
 | CODE/TEST-R9 partial | Structured auth, role/hash authority, redaction, startup modes, generic lifecycle, and retry/restart identity passed focused coverage. |
 | TEST-R8.2C checkpoint | Workflow operation suite passed; full helper suite passed 116 tests on resume. |
