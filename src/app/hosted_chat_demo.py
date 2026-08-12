@@ -502,7 +502,6 @@ def setup_hosted_chat_demo(
         }
     )
     service = EngineHostService(
-        engines_state_file=root / "state" / "managed_engines.json",
         hosting_configuration=load_hosting_configuration(mp13_config_file),
     )
     toolbox_ref = HostedToolBoxRef(toolbox_id=plan.toolbox_id, host=service)

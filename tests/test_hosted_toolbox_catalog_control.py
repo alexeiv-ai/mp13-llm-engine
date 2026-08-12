@@ -192,7 +192,6 @@ def test_corrupt_or_digest_mismatched_state_fails_closed(tmp_path: Path) -> None
 
 def test_consumer_projection_is_bounded_and_audit_is_redacted(tmp_path: Path) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     published = svc._toolbox_template_catalog.publish_inactive(  # noqa: SLF001
@@ -232,7 +231,6 @@ def test_consumer_projection_is_bounded_and_audit_is_redacted(tmp_path: Path) ->
 
 def test_service_describe_requires_active_or_exact_revision(tmp_path: Path) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     published = svc._toolbox_template_catalog.publish_inactive(  # noqa: SLF001
@@ -353,7 +351,6 @@ def test_role_separation_allows_consumer_reads_and_admin_mutation() -> None:
 
 def test_authenticated_command_policy_enforces_catalog_role_separation(tmp_path: Path) -> None:
     svc = EngineHostService(
-        engines_state_file=tmp_path / "engines.json",
         hosting_configuration=hosting_configuration(tmp_path, require_auth=True),
     )
     svc.auth_upsert_key(
@@ -389,7 +386,6 @@ def test_daemon_dispatch_and_remote_cli_route_catalog_commands(
 ) -> None:
     daemon = EngineHostDaemon(
         pid_file=tmp_path / "daemon.pid",
-        engines_state_file=tmp_path / "engines.json",
         mp13_config_file=write_hosting_configuration(tmp_path),
     )
     response = asyncio.run(
@@ -432,7 +428,6 @@ def test_daemon_op_start_routes_template_construction_to_canonical_service(
 ) -> None:
     daemon = EngineHostDaemon(
         pid_file=tmp_path / "daemon.pid",
-        engines_state_file=tmp_path / "engines.json",
         mp13_config_file=write_hosting_configuration(tmp_path),
     )
     calls: list[dict[str, Any]] = []

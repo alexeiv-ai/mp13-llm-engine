@@ -23,7 +23,6 @@ def _make_daemon(
     return EngineHostDaemon(
         port=0,
         pid_file=tmp_path / "daemon.pid",
-        engines_state_file=tmp_path / "managed_engines.json",
         mp13_config_file=write_hosting_configuration(
             tmp_path,
             require_auth=require_auth,

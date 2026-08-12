@@ -26,7 +26,6 @@ def _svc(
 ) -> EngineHostService:
     root = Path(tmpdir)
     return EngineHostService(
-        engines_state_file=root / "engines.json",
         hosting_configuration=hosting_configuration(
             root,
             require_auth=require_auth,
@@ -293,7 +292,6 @@ def test_auth_status_reports_local_private_key_custody_metadata_only() -> None:
     with _workspace_tmpdir() as td:
         root = Path(td)
         svc = EngineHostService(
-            engines_state_file=root / "engines.json",
             hosting_configuration=hosting_configuration(
                 root, require_auth=True, connectivity_mode="ssh_tunnel_only"
             ),
@@ -528,7 +526,6 @@ def test_daemon_runtime_endpoint_override_applies_to_claims() -> None:
         root = Path(td)
         daemon = EngineHostDaemon(
             port=0,
-            engines_state_file=root / "engines.json",
             mp13_config_file=write_hosting_configuration(
                 root, require_auth=True, endpoint_mode="shared"
             ),
@@ -581,7 +578,6 @@ def test_authenticated_daemon_auth_responses_project_replacement_public_key() ->
         root = Path(td)
         daemon = EngineHostDaemon(
             port=0,
-            engines_state_file=root / "engines.json",
             mp13_config_file=write_hosting_configuration(root, require_auth=True),
         )
         daemon.svc.auth_upsert_key(

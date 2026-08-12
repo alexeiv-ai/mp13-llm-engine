@@ -156,7 +156,6 @@ def _service_with_verified_closure(
     source = tmp_path / "source"
     source.mkdir(parents=True, exist_ok=True)
     service = EngineHostService(
-        engines_state_file=tmp_path / "engines.json",
         hosting_configuration=hosting_configuration(
             tmp_path,
             require_auth=require_auth,
@@ -730,7 +729,6 @@ def test_authenticated_daemon_recovers_one_multi_tool_plan_and_confirmation(
     )["token"]
     daemon = EngineHostDaemon(
         pid_file=tmp_path / "daemon.pid",
-        engines_state_file=tmp_path / "unused-engines.json",
         mp13_config_file=write_hosting_configuration(tmp_path, require_auth=True),
     )
     daemon.svc = service

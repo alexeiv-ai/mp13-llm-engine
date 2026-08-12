@@ -20,7 +20,6 @@ def _make_service(
     engine_traffic_policies: dict | None = None,
 ) -> EngineHostService:
     return EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(
             tmp_path,
             require_auth=require_auth,

@@ -50,7 +50,6 @@ class ReceiptMaterializer:
 
 def _ready_service(tmp_path: Path) -> EngineHostService:
     service = EngineHostService(
-        engines_state_file=tmp_path / "engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
         toolbox_template_materializer=ReceiptMaterializer(),
     )
@@ -153,7 +152,6 @@ def test_intrinsic_resolution_uses_py_compute_and_is_read_only(tmp_path: Path) -
 
 def test_unverified_templates_are_not_resolvable(tmp_path: Path) -> None:
     service = EngineHostService(
-        engines_state_file=tmp_path / "engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     with pytest.raises(ValueError, match="verified_template_target_unavailable"):
@@ -259,7 +257,6 @@ def test_phase1_exit_same_inputs_are_deterministic_across_restart_without_worker
     before_operations = operation_state.read_bytes()
     first_result = first.resolve_hosted_template_environment(**request)
     restarted = EngineHostService(
-        engines_state_file=tmp_path / "engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     second_result = restarted.resolve_hosted_template_environment(**request)

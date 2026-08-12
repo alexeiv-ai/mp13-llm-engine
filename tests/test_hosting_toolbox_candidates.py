@@ -191,7 +191,6 @@ def test_publish_and_discard_are_terminal_idempotent_transitions(tmp_path: Path)
 
 def test_service_discard_retires_candidate_worker_and_reference(tmp_path: Path) -> None:
     service = EngineHostService(
-        engines_state_file=tmp_path / "engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     engine_id = "candidate-discard"
@@ -264,7 +263,6 @@ def test_rollout_recovery_preserves_complete_candidate_and_cleans_stale_restart(
     tmp_path: Path,
 ) -> None:
     service = EngineHostService(
-        engines_state_file=tmp_path / "engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     engine_id = "candidate-recover"

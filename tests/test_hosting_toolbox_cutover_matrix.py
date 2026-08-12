@@ -94,7 +94,6 @@ def test_only_explicit_release_archival_can_reference_version_one_state() -> Non
 
 def test_unconfigured_toolbox_readiness_uses_generic_hosting_code(tmp_path: Path) -> None:
     service = EngineHostService(
-        engines_state_file=tmp_path / "engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     target = detect_current_toolbox_target()

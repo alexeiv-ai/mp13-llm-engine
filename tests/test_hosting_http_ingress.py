@@ -76,7 +76,6 @@ def test_http_ingress_proxy_with_traffic_auth(tmp_path: Path, monkeypatch) -> No
 
     _install_ipc_http_stub(monkeypatch)
     svc = EngineHostService(
-        engines_state_file=engines_state,
         hosting_configuration=hosting_configuration(tmp_path, require_auth=True),
     )
     svc.register_spawned(
@@ -103,7 +102,6 @@ def test_http_ingress_proxy_with_traffic_auth(tmp_path: Path, monkeypatch) -> No
     daemon = EngineHostHttpIngressDaemon(
         port=ingress_port,
         pid_file=pid_file,
-        engines_state_file=engines_state,
         service=svc,
     )
     t = threading.Thread(target=daemon.run, daemon=True)
@@ -168,7 +166,6 @@ def test_http_ingress_per_engine_traffic_policy_override(tmp_path: Path, monkeyp
 
     _install_ipc_http_stub(monkeypatch)
     svc = EngineHostService(
-        engines_state_file=engines_state,
         hosting_configuration=hosting_configuration(
             tmp_path,
             require_auth=True,
@@ -213,7 +210,6 @@ def test_http_ingress_per_engine_traffic_policy_override(tmp_path: Path, monkeyp
     daemon = EngineHostHttpIngressDaemon(
         port=ingress_port,
         pid_file=pid_file,
-        engines_state_file=engines_state,
         service=svc,
     )
     t = threading.Thread(target=daemon.run, daemon=True)
@@ -268,7 +264,6 @@ def test_daemon_version_contract_semver_and_path_consistency(tmp_path: Path) -> 
     daemon_rpc = EngineHostDaemon(
         port=0,
         pid_file=tmp_path / "daemon.pid",
-        engines_state_file=engines_state,
         mp13_config_file=mp13_config,
     )
     req = json.dumps({"seq": 1, "cmd": "auth-status", "payload": {}})
@@ -283,7 +278,6 @@ def test_daemon_version_contract_semver_and_path_consistency(tmp_path: Path) -> 
     daemon_http = EngineHostHttpIngressDaemon(
         port=ingress_port,
         pid_file=pid_file,
-        engines_state_file=engines_state,
         mp13_config_file=mp13_config,
     )
     t = threading.Thread(target=daemon_http.run, daemon=True)

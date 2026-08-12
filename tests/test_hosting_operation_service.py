@@ -16,7 +16,6 @@ from tests.hosting_v3_fixtures import hosting_configuration, write_hosting_confi
 
 def _service(tmp_path: Path) -> EngineHostService:
     return EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
 
@@ -239,7 +238,6 @@ def test_daemon_restart_smoke_reads_terminal_operation_without_starting_worker(t
 
     first_daemon = EngineHostDaemon(
         pid_file=pid_file,
-        engines_state_file=engine_file,
         mp13_config_file=config_file,
     )
     first_daemon._execute_startup_worker_recovery = lambda: {"status": "ok"}  # type: ignore[method-assign]
@@ -308,7 +306,6 @@ def test_daemon_restart_smoke_reads_terminal_operation_without_starting_worker(t
     EngineHostService._operation_repositories.pop(repository_key, None)
     second_daemon = EngineHostDaemon(
         pid_file=pid_file,
-        engines_state_file=engine_file,
         mp13_config_file=config_file,
     )
     second_daemon._execute_startup_worker_recovery = lambda: {"status": "ok"}  # type: ignore[method-assign]

@@ -101,7 +101,6 @@ def _draft(tool_name: str | None, character: str, expected_revision: str | None)
 
 def _service(tmp_path: Path) -> EngineHostService:
     service = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     service._require_toolbox_executor_registration = (  # type: ignore[method-assign]

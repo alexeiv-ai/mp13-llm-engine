@@ -294,7 +294,6 @@ def test_daemon_dispatch_preserves_actor_and_opaque_approval(
     config_file = write_hosting_configuration(tmp_path)
     daemon = EngineHostDaemon(
         pid_file=tmp_path / "daemon.pid",
-        engines_state_file=tmp_path / "engines.json",
         mp13_config_file=config_file,
     )
     calls: list[Dict[str, Any]] = []

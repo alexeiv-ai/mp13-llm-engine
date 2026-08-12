@@ -102,7 +102,6 @@ class FailingMaterializer:
 
 def _service(tmp_path: Path, materializer) -> EngineHostService:
     service = EngineHostService(
-        engines_state_file=tmp_path / "engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
         toolbox_template_materializer=materializer,
     )
@@ -151,7 +150,6 @@ def test_prewarm_returns_durable_ref_and_advertises_only_verified_receipt(tmp_pa
     assert service.toolbox_template_describe(template_id="core")["materialization"] == "ready"
 
     restarted = EngineHostService(
-        engines_state_file=tmp_path / "engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     assert restarted.toolbox_template_describe(template_id="core")["user_projection"]["state"] == "ready"
@@ -240,7 +238,6 @@ def test_role_separation_and_channel_payload() -> None:
 def test_daemon_dispatch_runs_target_host_service_method(tmp_path: Path) -> None:
     daemon = EngineHostDaemon(
         pid_file=tmp_path / "daemon.pid",
-        engines_state_file=tmp_path / "engines.json",
         mp13_config_file=write_hosting_configuration(tmp_path),
     )
     request = {"contract": "hosting.environment_request.v1", "request_id": "daemon-prewarm-1"}

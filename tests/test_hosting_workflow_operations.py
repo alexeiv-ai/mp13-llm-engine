@@ -11,7 +11,6 @@ from tests.hosting_v3_fixtures import hosting_configuration
 
 def _service(tmp_path: Path) -> EngineHostService:
     return EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
 

@@ -463,7 +463,6 @@ def test_daemon_shutdown_progress_updates_pidfile_and_crash_report(tmp_path: Pat
     daemon = EngineHostDaemon(
         port=0,
         pid_file=tmp_path / "daemon.pid",
-        engines_state_file=tmp_path / "engines.json",
         mp13_config_file=write_hosting_configuration(tmp_path),
     )
     daemon.pid_file.write(pid=1234, port=19876, shutdown_token=daemon.shutdown_token)
@@ -774,7 +773,6 @@ def test_apply_foreground_terminal_disconnect_policy_ignores_sighup_when_configu
     daemon = EngineHostDaemon(
         port=0,
         pid_file=tmp_path / "daemon.pid",
-        engines_state_file=tmp_path / "engines.json",
         mp13_config_file=write_hosting_configuration(
             tmp_path,
             lifecycle={"profile": "foreground_terminal_bound", "on_terminal_disconnect": "keep_daemon_running"},
@@ -798,7 +796,6 @@ def test_apply_foreground_terminal_disconnect_policy_noop_for_detached(monkeypat
     daemon = EngineHostDaemon(
         port=0,
         pid_file=tmp_path / "daemon.pid",
-        engines_state_file=tmp_path / "engines.json",
         mp13_config_file=write_hosting_configuration(
             tmp_path, lifecycle={"profile": "detached_user_process"}
         ),
@@ -820,7 +817,6 @@ def test_execute_shutdown_checkpoints_orders_managed_shutdowns(tmp_path: Path) -
     daemon = EngineHostDaemon(
         port=0,
         pid_file=tmp_path / "daemon.pid",
-        engines_state_file=tmp_path / "engines.json",
         mp13_config_file=write_hosting_configuration(tmp_path),
         runtime_profile="detached_user_process",
     )
@@ -849,7 +845,6 @@ def test_execute_shutdown_checkpoints_handles_discovery_failure(tmp_path: Path) 
     daemon = EngineHostDaemon(
         port=0,
         pid_file=tmp_path / "daemon.pid",
-        engines_state_file=tmp_path / "engines.json",
         mp13_config_file=write_hosting_configuration(tmp_path),
     )
 
@@ -866,7 +861,6 @@ def test_drain_inflight_operations_completes_pending_tasks(tmp_path: Path) -> No
     daemon = EngineHostDaemon(
         port=0,
         pid_file=tmp_path / "daemon.pid",
-        engines_state_file=tmp_path / "engines.json",
         mp13_config_file=write_hosting_configuration(tmp_path),
     )
 

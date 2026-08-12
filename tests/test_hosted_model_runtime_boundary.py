@@ -52,7 +52,6 @@ def _identity(*, verified: bool = True) -> ModelRuntimeIdentity:
 
 def _service(tmp_path: Path, *, verified: bool = True) -> EngineHostService:
     return EngineHostService(
-        engines_state_file=tmp_path / "engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
         model_runtime_identity=_identity(verified=verified),
     )
@@ -85,7 +84,6 @@ def test_model_runtime_status_is_exact_bounded_and_read_only(tmp_path: Path) -> 
 
 def test_unconfigured_and_unverified_statuses_remain_bounded(tmp_path: Path) -> None:
     unconfigured = EngineHostService(
-        engines_state_file=tmp_path / "a" / "engines.json",
         hosting_configuration=hosting_configuration(tmp_path / "a"),
     ).model_runtime_status()
     assert set(unconfigured) == MODEL_RUNTIME_STATUS_FIELDS
@@ -201,7 +199,6 @@ def test_status_command_roles_channel_and_daemon_projection(tmp_path: Path) -> N
 
     daemon = EngineHostDaemon(
         pid_file=tmp_path / "daemon.pid",
-        engines_state_file=tmp_path / "daemon-engines.json",
         mp13_config_file=write_hosting_configuration(tmp_path),
     )
     daemon.svc._model_runtime_identity = _identity()  # noqa: SLF001

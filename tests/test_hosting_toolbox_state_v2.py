@@ -192,7 +192,6 @@ def test_publish_is_process_safe_cas_and_interrupted_replace_preserves_old_state
 
 def test_rollout_recovery_resolves_pre_and_post_publication_crash_points(tmp_path: Path) -> None:
     service = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     service._require_toolbox_executor_registration = lambda engine_id, *, command_label: service.get_registration(engine_id)  # type: ignore[method-assign]
@@ -309,7 +308,6 @@ def test_rollout_recovery_phase_matrix_uses_active_routes_as_truth(
     tmp_path: Path, phase: str, committed: bool
 ) -> None:
     service = EngineHostService(
-        engines_state_file=tmp_path / phase / "managed.json",
         hosting_configuration=hosting_configuration(tmp_path / phase),
     )
     service._require_toolbox_executor_registration = (  # type: ignore[method-assign]

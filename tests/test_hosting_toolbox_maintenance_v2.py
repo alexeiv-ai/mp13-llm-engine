@@ -124,7 +124,6 @@ def _install_active(service: EngineHostService, *, include_registration: bool = 
 
 def _service(tmp_path: Path) -> EngineHostService:
     return EngineHostService(
-        engines_state_file=tmp_path / "managed.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
 
@@ -221,7 +220,6 @@ class _RemovalManager:
 
 def _configured_service(tmp_path: Path, *, protected: tuple[str, ...] = ()) -> EngineHostService:
     service = EngineHostService(
-        engines_state_file=tmp_path / "managed.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
     service._toolbox_host_project_config = ToolboxHostProjectConfiguration.from_dict(  # noqa: SLF001
@@ -633,7 +631,6 @@ def test_channel_and_daemon_require_op_start_for_mutating_maintenance(tmp_path: 
 
     daemon = EngineHostDaemon(
         pid_file=tmp_path / "daemon.pid",
-        engines_state_file=tmp_path / "daemon-engines.json",
         mp13_config_file=write_hosting_configuration(tmp_path),
     )
     raw = asyncio.run(

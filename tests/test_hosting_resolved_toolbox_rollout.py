@@ -54,7 +54,6 @@ def _bundle(toolbox_id: str, profile: ResolvedToolboxProfileSpec, tool_name: str
 
 def _service(tmp_path: Path) -> EngineHostService:
     return EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
         hosting_configuration=hosting_configuration(tmp_path),
     )
 

@@ -61,7 +61,6 @@ def test_daemon_reports_hosting_owned_secure_state_status(tmp_path: Path) -> Non
     daemon = EngineHostDaemon(
         port=0,
         pid_file=tmp_path / "daemon.pid",
-        engines_state_file=tmp_path / "managed_engines.json",
         mp13_config_file=write_hosting_configuration(tmp_path),
     )
     result = daemon.svc.hosting_setup_summary()

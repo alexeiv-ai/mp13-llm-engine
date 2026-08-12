@@ -12424,12 +12424,6 @@ async def main_logic():
         help="Attach chat tool execution to an existing hosted toolbox id instead of only using the built-in hosted demo.",
     )
     parser.add_argument(
-        "--hosted-engines-state-file",
-        type=str,
-        default=None,
-        help="Engines-state file for an existing hosted toolbox deployment.",
-    )
-    parser.add_argument(
         "--hosted-mp13-config-file",
         type=str,
         default=None,
@@ -12492,11 +12486,8 @@ async def main_logic():
     if args.hosted_demo and args.hosted_toolbox_id:
         print("Error: --hosted-demo and --hosted-toolbox-id cannot be used together.")
         sys.exit(1)
-    if bool(args.hosted_engines_state_file) != bool(args.hosted_mp13_config_file):
-        print("Error: --hosted-engines-state-file and --hosted-mp13-config-file must be provided together.")
-        sys.exit(1)
-    if args.hosted_toolbox_id and not args.hosted_engines_state_file:
-        print("Error: attaching to an existing hosted toolbox requires both --hosted-engines-state-file and --hosted-mp13-config-file.")
+    if args.hosted_toolbox_id and not args.hosted_mp13_config_file:
+        print("Error: attaching to an existing hosted toolbox requires --hosted-mp13-config-file.")
         sys.exit(1)
     DUMP_INIT_ENABLED = args.dump_init # Set the global flag
 
@@ -12704,7 +12695,6 @@ async def main_logic():
     elif args.hosted_toolbox_id:
         attached = attach_existing_hosted_toolbox(
             toolbox_id=str(args.hosted_toolbox_id or "").strip(),
-            engines_state_file=Path(str(args.hosted_engines_state_file)).expanduser().resolve(),
             mp13_config_file=Path(str(args.hosted_mp13_config_file)).expanduser().resolve(),
             timeout_seconds=float(args.hosted_timeout_seconds or 15.0),
             auto_bootstrap=not bool(args.hosted_no_auto_bootstrap),
@@ -12721,10 +12711,6 @@ async def main_logic():
         ]
         print(f"{Colors.SYSTEM}Hosted toolbox attached.{Colors.RESET}")
         print(f"{Colors.SYSTEM}  toolbox_id: {str(args.hosted_toolbox_id or '').strip()}{Colors.RESET}")
-        print(
-            f"{Colors.SYSTEM}  engines_state_file: "
-            f"{Path(str(args.hosted_engines_state_file)).expanduser().resolve()}{Colors.RESET}"
-        )
         print(
             f"{Colors.SYSTEM}  mp13_config_file: "
             f"{Path(str(args.hosted_mp13_config_file)).expanduser().resolve()}{Colors.RESET}"
