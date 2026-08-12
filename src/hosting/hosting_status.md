@@ -27,7 +27,7 @@ HTTP/relay/channel startup now accepts the top-level MP13 configuration and
 loads immutable v3 policy before listener construction; static and dynamic
 records are separated; legacy launcher inputs and module are removed from
 production. New focused tests pass. The aggregate lane currently reports 100
-failures before its configured stop after 340 passes, predominantly deliberate
+failures before its configured stop after 336 passes, predominantly deliberate
 legacy fixture/signature expectations. R3.2/R4 remain open until those fixtures
 and remaining permanent documents are migrated and the named proofs pass.
 
@@ -421,6 +421,9 @@ the slice.
 - Follow-up proof: hosted operation enum values, namespaces, validation codes,
   and worker names now use generic environment kinds; 17 focused package,
   environment, and daemon-startup tests passed after the cut
+- Aggregate migration check collected successfully after updating the operation
+  contract fixture, then reached 336 passes and the 100-failure stop; failures
+  remain concentrated in legacy configuration/startup/toolbox fixtures
 - Remaining in R6: remove the toolbox manager/builder aliases and legacy readers,
   then generalize the remaining toolbox-owned audit/receipt implementation
 

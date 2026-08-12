@@ -249,10 +249,10 @@ def test_environment_remove_has_exact_digest_selector_and_fixed_progress_phases(
     ref = HostedOperationRef(
         operation_id="op_environment_remove",
         request_id="remove-one",
-        execution_kind=HostedExecutionKind.TOOLBOX_ENVIRONMENT_REMOVE,
+        execution_kind=HostedExecutionKind.ENVIRONMENT_REMOVE,
         selector=HostedOperationSelector(kind="environment_digest", id=digest),
         fingerprint=hosted_execution_fingerprint({"environment_digest": digest}),
-        receipt_namespace=f"toolbox_environment_remove:{digest}",
+        receipt_namespace=f"environment_remove:{digest}",
     )
     status = HostedOperationStatus(
         operation=ref,
@@ -273,12 +273,12 @@ def test_environment_remove_has_exact_digest_selector_and_fixed_progress_phases(
     assert HostedOperationStatus.from_dict(status.to_dict()) == status
     payload = status.to_dict()
     payload["progress"]["phase"] = "arbitrary"
-    with pytest.raises(ValueError, match="toolbox_environment_remove_progress_phase_invalid"):
+    with pytest.raises(ValueError, match="environment_remove_progress_phase_invalid"):
         HostedOperationStatus.from_dict(payload)
     payload = status.to_dict()
     payload["progress"]["phase"] = "removal"
     payload["progress"]["cancellable"] = True
-    with pytest.raises(ValueError, match="toolbox_environment_remove_committed_progress_cancellable"):
+    with pytest.raises(ValueError, match="environment_remove_committed_progress_cancellable"):
         HostedOperationStatus.from_dict(payload)
 
 
@@ -286,9 +286,9 @@ def test_environment_remove_has_exact_digest_selector_and_fixed_progress_phases(
     ("kind", "selector", "namespace", "phase", "invalid_phase", "committed_phase"),
     [
         (
-            HostedExecutionKind.TOOLBOX_TEMPLATE_CONSTRUCT,
+            HostedExecutionKind.ENVIRONMENT_TEMPLATE_CONSTRUCT,
             HostedOperationSelector(kind="template_id", id="team-core"),
-            "toolbox_template_construct:team-core",
+            "environment_template_construct:team-core",
             "resolution",
             "repair",
             "publication",
