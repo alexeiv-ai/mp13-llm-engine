@@ -664,6 +664,21 @@ the slice.
   optional `lifecycle` and `claims` objects; static changes still require an
   explicit daemon restart
 
+### TEST-R4.2C — CLI startup fixture clean cut
+
+- Date: 2026-08-12
+- Plan IDs: R4.1/R4.2 and R9.4 (partial); P0/P2; high expertise
+- Outcome: daemon and relay CLI tests now pass only the top-level MP13
+  configuration, local workflow facade tests load the canonical v3 authority,
+  and the removed control-state/toolbox-launcher flags fail with
+  `hosting_startup_option_removed` instead of being silently ignored
+- Proof: `python -m pytest tests/test_engine_host_cli_remote_args.py -q
+  --maxfail=20` passed 13 tests, including exact production/background
+  forwarding, absence of launcher kwargs, removed-flag rejection, and Python/JS
+  local facade payload preservation
+- Remaining: R4.2 stays open until removal searches clear the other fixtures,
+  help text, and documentation matches
+
 Append one concise entry per completed slice. Include exact commands, counts,
 durations where useful, negative-path results, commit pin, and dependent receipt
 impact. Do not paste an unstructured full test transcript.

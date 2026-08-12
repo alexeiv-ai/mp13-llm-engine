@@ -333,6 +333,15 @@ class RelayStartupError(RuntimeError):
         self.code = str(code or "relay_startup_failed").strip()
         self.details = dict(details or {})
 
+
+class HostingCliOptionError(RuntimeError):
+    """Structured failure for a removed or invalid hosting CLI option."""
+
+    def __init__(self, message: str, *, code: str, details: Optional[Dict[str, Any]] = None) -> None:
+        super().__init__(str(message or code or "hosting_cli_option_invalid"))
+        self.code = str(code or "hosting_cli_option_invalid").strip()
+        self.details = dict(details or {})
+
     def to_error_payload(self) -> Dict[str, Any]:
         return {
             "error": str(self),
@@ -979,6 +988,17 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:  # noqa: C901
     argv = list(argv) if argv is not None else list(sys.argv[1:])
+    removed_startup_flags = {"--control-state-file", "--toolbox-config-file"}
+    rejected_startup_flags = sorted(removed_startup_flags.intersection(argv))
+    if rejected_startup_flags:
+        _print_error(
+            HostingCliOptionError(
+                "removed hosting startup option; use --mp13-config-file",
+                code="hosting_startup_option_removed",
+                details={"options": rejected_startup_flags},
+            )
+        )
+        return 2
 
     # ------------------------------------------------------------------
     # Mode 1: --daemon  →  start long-lived daemon server

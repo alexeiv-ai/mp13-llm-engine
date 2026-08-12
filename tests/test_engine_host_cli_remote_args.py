@@ -9,14 +9,14 @@ from typing import Any, Dict, Optional
 import pytest
 
 from hosting import engine_host_cli
+from tests.hosting_v3_fixtures import write_hosting_configuration
 
 
-def test_daemon_cli_forwards_toolbox_configuration_file_to_production_launcher(
+def test_daemon_cli_forwards_mp13_configuration_to_production_launcher(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    config_file = tmp_path / "toolbox-launch.json"
-    config_file.write_text("{}", encoding="utf-8")
+    config_file = write_hosting_configuration(tmp_path)
     captured: Dict[str, Any] = {}
 
     monkeypatch.setattr(
@@ -25,7 +25,7 @@ def test_daemon_cli_forwards_toolbox_configuration_file_to_production_launcher(
     )
     monkeypatch.setattr(engine_host_cli, "_setup_file_logging", lambda _path: None)
     monkeypatch.setattr(
-        "hosting.daemon.diagnostics.daemon_report_path_for_control_state",
+        "hosting.daemon.diagnostics.daemon_report_path_for_config",
         lambda _path: tmp_path / "crash.json",
     )
     monkeypatch.setattr(
@@ -33,17 +33,31 @@ def test_daemon_cli_forwards_toolbox_configuration_file_to_production_launcher(
         lambda path: path,
     )
 
-    rc = engine_host_cli.main(["--daemon", "--toolbox-config-file", str(config_file)])
+    rc = engine_host_cli.main(["--daemon", "--mp13-config-file", str(config_file)])
 
     assert rc == 0
-    assert captured["toolbox_config_file"] == config_file
+    assert captured["mp13_config_file"] == config_file
+    assert "toolbox_config_file" not in captured
 
 
-def test_relay_autostart_forwards_toolbox_configuration_file(
+@pytest.mark.parametrize("removed", ["--control-state-file", "--toolbox-config-file"])
+def test_daemon_cli_rejects_removed_configuration_flags(
+    removed: str,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    rc = engine_host_cli.main(["--daemon", removed, "legacy.json"])
+
+    assert rc == 2
+    output = capsys.readouterr().out
+    assert "hosting_startup_option_removed" in output
+    assert "--mp13-config-file" in output
+
+
+def test_relay_autostart_forwards_mp13_configuration_file(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    config_file = tmp_path / "remote-toolbox-launch.json"
+    config_file = write_hosting_configuration(tmp_path)
     captured: Dict[str, Any] = {}
 
     monkeypatch.setattr(engine_host_cli, "_relay_port", lambda _pid, port: port)
@@ -61,11 +75,11 @@ def test_relay_autostart_forwards_toolbox_configuration_file(
     result = engine_host_cli._ensure_relay_daemon_ready(  # noqa: SLF001
         pid_file=tmp_path / "daemon.pid",
         port=19876,
-        control_state_file=tmp_path / "control.json",
-        toolbox_config_file=config_file,
+        mp13_config_file=config_file,
     )
 
-    assert captured["toolbox_config_file"] == config_file
+    assert captured["mp13_config_file"] == config_file
+    assert "toolbox_config_file" not in captured
     assert result["status"] == "started"
 
 
@@ -188,6 +202,7 @@ def test_cli_rejects_remote_force_stop_daemon(capsys: pytest.CaptureFixture[str]
 def test_cli_local_workflow_python_resources_uses_facade_payload(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
 ) -> None:
     seen: Dict[str, Any] = {}
 
@@ -207,6 +222,8 @@ def test_cli_local_workflow_python_resources_uses_facade_payload(
 
     rc = engine_host_cli.main(
         [
+            "--mp13-config-file",
+            str(write_hosting_configuration(tmp_path)),
             "--payload-json",
             json.dumps(
                 {
@@ -236,6 +253,7 @@ def test_cli_local_workflow_python_resources_uses_facade_payload(
 def test_cli_local_workflow_python_capacity_uses_facade(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
 ) -> None:
     calls: list[tuple[str, Dict[str, Any]]] = []
 
@@ -255,6 +273,8 @@ def test_cli_local_workflow_python_capacity_uses_facade(
 
     resize_rc = engine_host_cli.main(
         [
+            "--mp13-config-file",
+            str(write_hosting_configuration(tmp_path)),
             "--payload-json",
             json.dumps({"environment_key": "env-demo", "engine_id": "wf-py", "capacity": 7}),
             "workflow-python-set-capacity",
@@ -269,6 +289,7 @@ def test_cli_local_workflow_python_capacity_uses_facade(
 def test_cli_local_workflow_js_facade_commands(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
 ) -> None:
     calls: list[tuple[str, Dict[str, Any]]] = []
 
@@ -317,44 +338,45 @@ def test_cli_local_workflow_js_facade_commands(
 
     monkeypatch.setattr(engine_host_cli, "_try_daemon_invoke", lambda *_args, **_kwargs: False)
     monkeypatch.setattr(engine_host_cli, "EngineHostService", FakeService)
+    config_args = ["--mp13-config-file", str(write_hosting_configuration(tmp_path))]
 
     environment_rc = engine_host_cli.main(
-        [
+        config_args + [
             "--payload-json",
             json.dumps({"javascript": {"host_api": {"enabled": True}}}),
             "workflow-js-environment-spec",
         ]
     )
     ensure_rc = engine_host_cli.main(
-        [
+        config_args + [
             "--payload-json",
             json.dumps({"environment_key": "env-js", "engine_id": "wf-js", "javascript": {"host_api": {"enabled": True}}}),
             "workflow-js-ensure",
         ]
     )
     resources_rc = engine_host_cli.main(
-        [
+        config_args + [
             "--payload-json",
             json.dumps({"environment_key": "env-js", "engine_id": "wf-js", "node": {"runtime_hash": "quickjs-demo"}, "javascript": {"host_api": {"enabled": True}}}),
             "workflow-js-resources",
         ]
     )
     execute_rc = engine_host_cli.main(
-        [
+        config_args + [
             "--payload-json",
             json.dumps({"environment_key": "env-js", "engine_id": "wf-js", "request": {"request_id": "req-js"}, "javascript": {"host_api": {"enabled": True}}}),
             "workflow-js-execute",
         ]
     )
     resize_rc = engine_host_cli.main(
-        [
+        config_args + [
             "--payload-json",
             json.dumps({"environment_key": "env-js", "engine_id": "wf-js", "capacity": 7}),
             "workflow-js-set-capacity",
         ]
     )
     stream_open_rc = engine_host_cli.main(
-        [
+        config_args + [
             "--payload-json",
             json.dumps(
                 {
@@ -370,21 +392,21 @@ def test_cli_local_workflow_js_facade_commands(
         ]
     )
     event_subscribe_rc = engine_host_cli.main(
-        [
+        config_args + [
             "--payload-json",
             json.dumps({"stream_id": "js-stream-1", "max_items": 2}),
             "workflow-js-event-subscribe",
         ]
     )
     stream_send_rc = engine_host_cli.main(
-        [
+        config_args + [
             "--payload-json",
             json.dumps({"stream_id": "js-stream-1", "message": {"action": "cancel"}}),
             "workflow-js-stream-send",
         ]
     )
     stream_close_rc = engine_host_cli.main(
-        [
+        config_args + [
             "--payload-json",
             json.dumps({"stream_id": "js-stream-1"}),
             "workflow-js-stream-close",
