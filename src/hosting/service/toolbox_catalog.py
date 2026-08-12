@@ -746,29 +746,24 @@ class ToolboxTemplateCatalogMixin:
         self, *, python_abi: str, platform: str
     ) -> dict[str, Any]:
         target = materialization_target(python_abi=python_abi, platform=platform)
-        configured = getattr(self, "_toolbox_host_project_config", None)
-        if not isinstance(configured, ToolboxHostProjectConfiguration):
+        state = self._toolbox_template_catalog.read()
+        required_ids = tuple(sorted(state["active"]))
+        if not required_ids:
             return {
                 "status": "unavailable",
-                "code": "hosting_configuration_missing",
-                "config_revision": None,
-                "catalog_revision": self._toolbox_template_catalog.read()["catalog_revision"],
+                "code": "environment_template_unavailable",
+                "config_revision": self.hosting_configuration_revision,
+                "catalog_revision": state["catalog_revision"],
                 "target": target,
                 "templates": [],
                 "diagnostics": [
                     {
-                        "code": "hosting_configuration_missing",
-                        "summary": "Hosting configuration is not available.",
+                        "code": "environment_template_unavailable",
+                        "summary": "No active environment template is available.",
                     }
                 ],
             }
-        required_ids = tuple(item.template_id for item in configured.builtins if item.required)
-        config_revision = (
-            configured.config_revision
-            if isinstance(configured, ToolboxHostProjectConfiguration)
-            else None
-        )
-        state = self._toolbox_template_catalog.read()
+        config_revision = self.hosting_configuration_revision
         diagnostics: list[dict[str, str]] = []
         templates: list[dict[str, Any]] = []
         for template_id in required_ids:

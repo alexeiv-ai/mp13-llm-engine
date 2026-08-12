@@ -11,7 +11,6 @@ from hosting import engine_host_cli
 from hosting.daemon import EngineHostDaemon
 from hosting.engine_host_channel import EngineHostControlChannel
 from hosting.service.host_service import EngineHostService
-from hosting.toolbox.host_project_config import ToolboxHostProjectConfiguration
 from tests.hosting_v3_fixtures import hosting_configuration, write_hosting_configuration
 from hosting.toolbox.bundle_models import (
     ResolvedToolboxProfileSpec,
@@ -134,45 +133,6 @@ def _wait_maintenance(service: EngineHostService, started: dict) -> dict:
     )
 
 
-def _configuration(*, protected: tuple[str, ...] = ()) -> dict:
-    return {
-        "builtins": [{
-            "template_id": "core",
-            "imports": ["packaging"],
-            "package_requirements": [],
-            "sandbox_policy": "compute-only",
-            "required": True,
-            "prewarm": False,
-            "provenance": "maintenance-test",
-        }],
-        "sources": [{
-            "source_id": "release",
-            "kind": "airgap_store",
-            "origin": "airgap://release",
-            "credential_ref": None,
-            "allowed_package_namespaces": ["*"],
-            "priority": 1,
-            "trust_key_ids": ["release-key"],
-            "maximum_download_bytes": 1024 * 1024,
-        }],
-        "resolution": {
-            "mode": "air_gapped",
-            "timeout_seconds": 60,
-            "maximum_bytes": 1024 * 1024,
-            "maximum_artifacts": 16,
-            "allowed_redirect_origins": [],
-            "wheel_only": True,
-        },
-        "retention": {
-            "artifact_cache_grace_seconds": 60,
-            "maximum_cache_bytes": 1024 * 1024,
-            "maximum_cache_artifacts": 16,
-            "protected_digests": list(protected),
-            "remove_unreferenced_custom_revisions_on_apply": False,
-        },
-    }
-
-
 class _RemovalManager:
     def __init__(
         self, *, references: dict[str, dict[str, int]] | None = None,
@@ -218,14 +178,8 @@ class _RemovalManager:
         return {"removed_environment_ids": [], "removed_count": 0}
 
 
-def _configured_service(tmp_path: Path, *, protected: tuple[str, ...] = ()) -> EngineHostService:
-    service = EngineHostService(
-        hosting_configuration=hosting_configuration(tmp_path),
-    )
-    service._toolbox_host_project_config = ToolboxHostProjectConfiguration.from_dict(  # noqa: SLF001
-        _configuration(protected=protected)
-    )
-    return service
+def _configured_service(tmp_path: Path) -> EngineHostService:
+    return _service(tmp_path)
 
 
 def _wait_remove(service: EngineHostService, started: dict) -> dict:
@@ -283,17 +237,10 @@ def test_environment_remove_blocks_active_candidate_and_builder_references(tmp_p
     assert builder.removed == []
 
 
-def test_environment_remove_blocks_protected_digest_and_reports_already_absent(tmp_path: Path) -> None:
-    protected = _digest("b")
-    service = _configured_service(tmp_path, protected=(protected,))
+def test_environment_remove_reports_already_absent(tmp_path: Path) -> None:
+    service = _configured_service(tmp_path)
     service._environment_manager_instance = _RemovalManager(result="already_absent")  # type: ignore[attr-defined]
 
-    blocked = _wait_remove(
-        service,
-        service.environment_remove(
-            environment_id=protected, request_id="remove-protected", owner_actor_id="admin:a"
-        ),
-    )
     absent_digest = _digest("c")
     absent = _wait_remove(
         service,
@@ -302,8 +249,6 @@ def test_environment_remove_blocks_protected_digest_and_reports_already_absent(t
         ),
     )
 
-    assert blocked["result"]["status"] == "blocked"
-    assert blocked["result"]["blocking_reference_kinds"] == ["protected"]
     assert absent["result"]["status"] == "already_absent"
 
 

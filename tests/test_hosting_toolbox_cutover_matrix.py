@@ -103,5 +103,5 @@ def test_unconfigured_toolbox_readiness_uses_generic_hosting_code(tmp_path: Path
         platform=target.platform,
     )
 
-    assert readiness["code"] == "hosting_configuration_missing"
-    assert readiness["diagnostics"][0]["code"] == "hosting_configuration_missing"
+    assert readiness["code"] == "environment_template_unavailable"
+    assert readiness["diagnostics"][0]["code"] == "environment_template_unavailable"

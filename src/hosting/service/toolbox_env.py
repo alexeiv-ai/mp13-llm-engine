@@ -53,10 +53,6 @@ class ToolboxMaintenanceMixin:
     ) -> list[str]:
         key = require_digest(environment_digest, label="environment_digest")
         blockers: set[str] = set()
-        configuration = getattr(self, "_toolbox_host_project_config", None)
-        if configuration is not None and key in set(configuration.retention.protected_digests):
-            blockers.add("protected")
-
         for snapshot in self._toolbox_v2_snapshots().values():
             for raw in dict(snapshot.get("profiles") or {}).values():
                 if str(dict(dict(raw or {}).get("profile") or {}).get("environment_key") or "") == key:
@@ -654,7 +650,6 @@ class ToolboxMaintenanceMixin:
                 shutil.rmtree(path)
                 removed_bundles.append(str(path))
         removed_environments: List[str] = []
-        configuration = getattr(self, "_toolbox_host_project_config", None)
         removed_environments = list(
             self._environment_manager.gc().get("removed_environment_ids") or []
         )
@@ -670,14 +665,8 @@ class ToolboxMaintenanceMixin:
                 "removed_bundle_count": len(removed_bundles),
                 "removed_environment_count": len(removed_environments),
             },
-            "retention": (
-                {
-                    "config_revision": configuration.config_revision,
-                    "source_set_revision": configuration.source_set_revision,
-                    **configuration.retention.to_dict(),
-                }
-                if configuration is not None
-                else None
+            "retention": dict(
+                self.hosting_configuration.environment_management.get("retention") or {}
             ),
         }
 
@@ -734,7 +723,6 @@ class ToolboxMaintenanceMixin:
                 if str(item or "").strip()
             }
         )
-        configuration = getattr(self, "_toolbox_host_project_config", None)
         host_scope_id = "hosting" if maintenance_action == "gc" else "toolbox-host"
         execution_kind = (
             HostedExecutionKind.HOSTING_GC
@@ -749,12 +737,6 @@ class ToolboxMaintenanceMixin:
                 "toolbox_ids": selected,
                 "only_inconsistent": bool(only_inconsistent),
                 "details": bool(details),
-                "config_revision": (
-                    configuration.config_revision if configuration is not None else None
-                ),
-                "source_set_revision": (
-                    configuration.source_set_revision if configuration is not None else None
-                ),
             }
         )
         owner = self._operation_owner(owner_actor_id)
