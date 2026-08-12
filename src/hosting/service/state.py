@@ -382,7 +382,7 @@ class StateMixin:
             layout["host_capability_audit"],
             {"version": 1, "updated_at": 0.0, "events": []},
         )
-        payload = {
+        payload: Dict[str, Any] = {
             "version": 1,
             "updated_at": max(
                 float(runtime_payload.get("updated_at") or 0.0),

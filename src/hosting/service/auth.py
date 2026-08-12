@@ -1415,19 +1415,19 @@ class AuthMixin:
                 else:
                     allowed_configs = ["*"]
             else:
-                rows: List[str] = []
+                config_rows: List[str] = []
                 for r in requested:
                     rs = str(r or "").strip()
                     if not rs:
                         continue
                     if rs == "*":
-                        rows.append("*")
+                        config_rows.append("*")
                     else:
-                        rows.append(self._normalize_config_selector(rs))
+                        config_rows.append(self._normalize_config_selector(rs))
                 if "*" in key_allowed:
-                    allowed_configs = sorted(list(set(rows or ["*"])))
+                    allowed_configs = sorted(list(set(config_rows or ["*"])))
                 else:
-                    clipped = [x for x in rows if x in key_allowed]
+                    clipped = [x for x in config_rows if x in key_allowed]
                     if not clipped:
                         raise PermissionError("no_allowed_config_overlap")
                     allowed_configs = sorted(list(set(clipped)))
@@ -1439,19 +1439,19 @@ class AuthMixin:
                 else:
                     allowed_engines = ["*"]
             else:
-                rows: List[str] = []
+                engine_rows: List[str] = []
                 for row in requested_engines:
                     rs = str(row or "").strip()
                     if not rs:
                         continue
                     if rs == "*":
-                        rows.append("*")
+                        engine_rows.append("*")
                     else:
-                        rows.append(self._safe_config_name(rs))
+                        engine_rows.append(self._safe_config_name(rs))
                 if "*" in key_allowed_engines:
-                    allowed_engines = sorted(list(set(rows or ["*"])))
+                    allowed_engines = sorted(list(set(engine_rows or ["*"])))
                 else:
-                    clipped = [x for x in rows if x in key_allowed_engines]
+                    clipped = [x for x in engine_rows if x in key_allowed_engines]
                     if not clipped:
                         raise PermissionError("no_allowed_engine_overlap")
                     allowed_engines = sorted(list(set(clipped)))

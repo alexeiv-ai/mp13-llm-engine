@@ -448,13 +448,13 @@ class PersistedCompleteToolboxDefinitionPlan:
         ):
             raise ValueError("toolbox_complete_plan_planned_environments_invalid")
         offers = {item.environment_id: item for item in mutations}
-        for item in planned:
-            offer = offers[item.environment_id]
+        for planned_item in planned:
+            offer = offers[planned_item.environment_id]
             alternative = next(
                 value for value in offer.alternatives
-                if value.alternative_id == item.alternative_id
+                if value.alternative_id == planned_item.alternative_id
             )
-            request = item.environment_request
+            request = planned_item.environment_request
             if (
                 request.consumer_kind != "toolbox"
                 or request.consumer_id != self.proposed_definition.toolbox_id
@@ -468,7 +468,7 @@ class PersistedCompleteToolboxDefinitionPlan:
             }
             actual_dependencies = {
                 (value["name"], value["version"], value["artifact_id"])
-                for value in item.package_lock.dependencies
+                for value in planned_item.package_lock.dependencies
             }
             expected_artifacts = {
                 (artifact.artifact_digest, artifact.source_id)
@@ -476,7 +476,7 @@ class PersistedCompleteToolboxDefinitionPlan:
             }
             actual_artifacts = {
                 (value["artifact_id"], value["source_id"])
-                for value in item.package_lock.artifacts
+                for value in planned_item.package_lock.artifacts
             }
             if actual_dependencies != expected_dependencies or actual_artifacts != expected_artifacts:
                 raise ValueError("toolbox_complete_plan_package_lock_mismatch")
@@ -528,12 +528,12 @@ class PersistedCompleteToolboxDefinitionPlan:
             or {item.change_id for item in tool_analysis} != {item.change_id for item in changes}
         ):
             raise ValueError("toolbox_complete_plan_tool_analysis_invalid")
-        for item in tool_analysis:
-            change = next(value for value in changes if value.change_id == item.change_id)
+        for analysis_item in tool_analysis:
+            change = next(value for value in changes if value.change_id == analysis_item.change_id)
             if (
-                item.change != change.kind
-                or item.tool_key != change.tool_key
-                or item.prior_tool_key != change.prior_tool_key
+                analysis_item.change != change.kind
+                or analysis_item.tool_key != change.tool_key
+                or analysis_item.prior_tool_key != change.prior_tool_key
             ):
                 raise ValueError("toolbox_complete_plan_tool_analysis_mismatch")
         parent_plan_id = (
@@ -588,10 +588,10 @@ class PersistedCompleteToolboxDefinitionPlan:
         ):
             raise ValueError("toolbox_complete_plan_draft_profiles_invalid")
         profile_changes = tuple(dict(item) for item in self.profile_changes)
-        for item in profile_changes:
-            if set(item) != {
+        for profile_change in profile_changes:
+            if set(profile_change) != {
                 "classification", "active_profile_id", "proposed_profile_id", "changed_fields"
-            } or item["classification"] not in {"reused", "added", "replaced", "removed"}:
+            } or profile_change["classification"] not in {"reused", "added", "replaced", "removed"}:
                 raise ValueError("toolbox_complete_plan_profile_change_invalid")
         if (
             isinstance(self.created_at_ms, bool)

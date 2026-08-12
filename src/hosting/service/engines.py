@@ -1848,7 +1848,7 @@ class EnginesMixin:
 
         if bool(shutdown_all):
             reg = self._require_ipc_registration(worker_id or eid, command_label="unload-model")
-            worker_out = self._ipc_call(
+            shutdown_worker_out = self._ipc_call(
                 reg=reg,
                 payload={
                     "kind": "rpc_call",
@@ -1858,16 +1858,16 @@ class EnginesMixin:
                 },
                 timeout_seconds=timeout_seconds,
             )
-            if str(worker_out.get("status") or "").strip().lower() == "error":
-                raise RuntimeError(str(worker_out.get("message") or "model_unload_failed"))
+            if str(shutdown_worker_out.get("status") or "").strip().lower() == "error":
+                raise RuntimeError(str(shutdown_worker_out.get("message") or "model_unload_failed"))
             remaining_worker_models = [mid for mid in _worker_model_ids(reg) if mid]
             if remaining_worker_models:
                 raise RuntimeError(f"worker still reports loaded models after shutdown_all: {', '.join(remaining_worker_models)}")
-            updated: List[Dict[str, Any]] = []
+            shutdown_updated: List[Dict[str, Any]] = []
             for row in self._read_engines():
                 reg_row = dict(row or {})
                 if str(reg_row.get("worker_id") or reg_row.get("engine_id") or "") != worker_id:
-                    updated.append(reg_row)
+                    shutdown_updated.append(reg_row)
                     continue
                 reg_row["loaded_models"] = []
                 reg_row["config_bindings"] = []
@@ -1875,8 +1875,8 @@ class EnginesMixin:
                 reg_row.pop("canonical_model_path", None)
                 reg_row.pop("config_path", None)
                 reg_row.pop("canonical_config_path", None)
-                updated.append(reg_row)
-            self._write_engines(updated)
+                shutdown_updated.append(reg_row)
+            self._write_engines(shutdown_updated)
             return {
                 "status": "unloaded",
                 "engine_id": eid,
@@ -1884,7 +1884,7 @@ class EnginesMixin:
                 "shutdown_all": True,
                 "worker_still_running": True,
                 "remaining_model_count": 0,
-                "worker": dict(worker_out or {}),
+                "worker": dict(shutdown_worker_out or {}),
             }
 
         bindings_for_model = [
