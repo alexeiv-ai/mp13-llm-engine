@@ -2,7 +2,7 @@
 
 Last updated: 2026-08-12
 
-Status: active on R7.1 stale/retry/concurrency proofs
+Status: R7.1 complete; ready for R7.2 candidate lifecycle
 
 This is the current execution ledger for
 [`hosting_access_plan.md`](hosting_access_plan.md). Detailed completed-slice
@@ -12,10 +12,10 @@ compact evidence index, and external completion gates.
 
 ## 1. Current gate and resume order
 
-Active slice: **R7.1 stale/retry/concurrency proofs**. Planning, CAS changes,
-per-tool evidence, child replanning, and exact public v2/v1 projections are
-complete. The remaining R7.1 boundary is proving stale approval/source and
-retry/restart/concurrent revision cannot execute unapproved bytes or leak refs.
+No slice is active. **R7.1 planning and selective revision is complete**:
+generic locks/requests, CAS changes, evidence, child replanning, exact public
+projections, and stale/retry/restart/concurrency safety proofs are committed.
+Open R7.2 at the durable candidate lifecycle boundary.
 
 Resume in this order:
 
@@ -41,7 +41,7 @@ after R9.4 removals make R9.7 evidence meaningful.
 | R4 Single startup path | Complete | Final aggregate/platform proof at R9.7. |
 | R5 Generic packages | Complete | Final aggregate/platform proof at R9.7. |
 | R6 Generic environments | Active | Remove final legacy receipt/reference readers; add candidate lifecycle policy fields in R7.2. |
-| R7 Toolbox adoption | R7.1 generic planning complete | Tool-change/selective revision, then R7.2 candidate/materialization work. |
+| R7 Toolbox adoption | R7.1 complete | R7.2 durable candidate/materialization lifecycle. |
 | R8 Worker-neutral state | Complete | One focused workflow-helper checkpoint rerun remains as noted above. |
 | R9 Acceptance/handoff | Partial | Public signature alignment, lifecycle matrices, removals, docs, dependent receipt, and full/platform lanes. |
 
@@ -69,11 +69,6 @@ are authoritative for unfinished item-level work.
 ### P0 before R7
 
 The pre-R7 P0 clean-cut items are complete.
-
-### R7.1 planning and selective revision
-
-- Prove stale approval/source mutation and retry/restart/concurrent revision
-  cannot execute unapproved bytes or leak references.
 
 ### R7.2 candidate lifecycle
 
@@ -115,6 +110,7 @@ The pre-R7 P0 clean-cut items are complete.
 | CODE/TEST-R7.1D | Immutable plans persist bounded per-change import evidence, mapped distributions, environment grouping, preferred exact package mutations, and approval flags; combined focused lane passed 110 tests. |
 | CODE/TEST-R7.1E | Authorized selective revision validates complete decisions/evidenced denials, preserves active exclusions, cascades dependents, and fully replans parent-bound immutable children (including empty results); expanded lane passed 143 tests. |
 | CODE/TEST-R7.1F | Public plans enforce the frozen exact v2 projection with nested change IDs; confirmation emits the exact v1 projection or revision-required failure without a receipt; expanded lane passed 153 tests. |
+| CODE/TEST-R7.1G | Planned artifacts are rehashed at confirmation; stale approvals do not consume, same-request restart retry is idempotent, changed requests fail, and materialization failure acquires no reference/spawns no worker; expanded lane passed 156 tests. |
 | CODE-R8A–C | Versioned neutral state, Python/JS shared manager adoption, GC/repair controls passed focused coverage. |
 | CODE/TEST-R9 partial | Structured auth, role/hash authority, redaction, startup modes, generic lifecycle, and retry/restart identity passed focused coverage. |
 | TEST-R8.2C checkpoint | Workflow operation suite passed; full helper suite passed 116 tests on resume. |

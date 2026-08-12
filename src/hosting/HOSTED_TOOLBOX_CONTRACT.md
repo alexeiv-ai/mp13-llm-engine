@@ -348,6 +348,13 @@ public fields. Declining an offered addition or transition creates no receipt;
 it returns `tool_change_revision_required` with the bounded affected change IDs
 so the caller must create and review a selective child plan.
 
+Confirmation rehashes every selected planned artifact and checks its planned
+size before creating a receipt. Approval validation is exact-resolution,
+plan-pin, actor, authority, and request bound; an invalid attempt does not mark
+the approval consumed, while a restart retry with the same request is
+idempotent. Materialization completes before generic reference adoption or
+worker spawn, so changed bytes cannot leak a reference or executable candidate.
+
 The resulting plan is stored in the process-safe atomic definition-plan
 repository. Its ID binds toolbox ID, definition revision, expected active
 revision, catalog revision, package-policy revision, resolved profiles, and

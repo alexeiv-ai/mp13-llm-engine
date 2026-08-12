@@ -175,7 +175,7 @@ R7 plan/confirmation field assertions are provisional and must be replaced.
   complete closure and locks and reporting preserved/skipped/cascade outcomes.
 - [x] Replace provisional plan/confirmation field-level assertions while
   retaining the frozen v2/v1 identifiers and exact handoff schemas.
-- [ ] Prove stale approval, source mutation, retry, restart, and concurrent
+- [x] Prove stale approval, source mutation, retry, restart, and concurrent
   revision cannot execute unapproved bytes or leak references.
 
 ### R7.2 — materialize, try, and publish exact candidates

@@ -176,6 +176,31 @@ def test_resolved_rollout_skips_reused_and_spawns_added_as_candidate(tmp_path: P
     assert service.spawned[0]["bundle"]["resolved_profile_id"] == added.profile_id
     assert service.spawned[0]["environment"]["environment_key"] == added.environment_key
 
+    failed_assignment = orchestrator.build_resolved_assignments(
+        toolbox_id="demo",
+        profiles=(added,),
+        bundles=(_bundle("demo", added, "Beta"),),
+        profile_changes=({
+            "classification": "added",
+            "active_profile_id": None,
+            "proposed_profile_id": added.profile_id,
+            "changed_fields": [],
+        },),
+    )
+    service.materialize_toolbox_environment_for_bundle = (  # type: ignore[method-assign]
+        lambda **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("planned_artifact_changed")
+        )
+    )
+    with pytest.raises(RuntimeError, match="planned_artifact_changed"):
+        orchestrator.spawn_resolved_assignments(
+            toolbox_id="demo",
+            definition_revision=_digest("e"),
+            assignments=failed_assignment,
+            planned_environment_records={added.profile_id: generic_record.to_dict()},
+        )
+    assert len(service.adopted) == len(service.spawned) == 1
+
 
 def test_candidate_registration_is_never_selected_by_scan_routing(tmp_path: Path) -> None:
     service = _service(tmp_path)

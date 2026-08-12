@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import shutil
 import sys
 import threading
@@ -876,6 +877,20 @@ class ToolboxRuntimeMixin:
                 item for item in offer.alternatives
                 if item.alternative_id == selected.get(offer.environment_id)
             )
+            planned_record = next(
+                (
+                    item for item in plan.planned_environments
+                    if item.environment_id == offer.environment_id
+                    and item.alternative_id == alternative.alternative_id
+                ),
+                None,
+            )
+            if planned_record is None:
+                raise ValueError("toolbox_confirmation_planned_environment_missing")
+            planned_artifacts = {
+                item["artifact_id"]: item
+                for item in planned_record.package_lock.artifacts
+            }
             entry = next(
                 dict(item) for item in list(catalog.get("entries") or [])
                 if item.get("template_digest") == offer.base_template_revision
@@ -888,6 +903,14 @@ class ToolboxRuntimeMixin:
                 path = self._toolbox_artifact_store.object_path(artifact.artifact_digest)
                 if not path.is_file():
                     raise ValueError("toolbox_confirmation_artifact_missing")
+                planned_artifact = planned_artifacts.get(artifact.artifact_digest)
+                if planned_artifact is None:
+                    raise ValueError("toolbox_confirmation_artifact_changed")
+                self._verify_toolbox_planned_artifact(
+                    path=path,
+                    expected_digest=artifact.artifact_digest,
+                    expected_size=planned_artifact["size_bytes"],
+                )
                 locked_artifacts.append(ToolboxLockedArtifactSpec(
                     distribution_name=artifact.distribution,
                     version=artifact.version,
@@ -940,6 +963,20 @@ class ToolboxRuntimeMixin:
             ),
         )
         return pinned, resolved_environments
+
+    @staticmethod
+    def _verify_toolbox_planned_artifact(
+        *, path: Path, expected_digest: str, expected_size: int
+    ) -> None:
+        source = Path(path)
+        if not source.is_file() or source.stat().st_size != int(expected_size):
+            raise ValueError("toolbox_confirmation_artifact_changed")
+        hasher = hashlib.sha256()
+        with source.open("rb") as handle:
+            while block := handle.read(1024 * 1024):
+                hasher.update(block)
+        if "sha256:" + hasher.hexdigest() != str(expected_digest):
+            raise ValueError("toolbox_confirmation_artifact_changed")
 
     def _run_toolbox_definition_confirmation(
         self,
