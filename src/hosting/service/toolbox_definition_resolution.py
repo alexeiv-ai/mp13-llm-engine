@@ -7,7 +7,7 @@ from typing import Any, Mapping, Sequence
 from packaging.utils import InvalidWheelFilename, parse_wheel_filename
 
 from ..packages.manager import PackageArtifactManager
-from ..packages.wheel_resolver import GenericPackageWheelResolver
+from ..packages.wheel_resolver import GenericPackageWheelResolver, ResolvedPackageWheelClosure
 from ..toolbox.bundle_models import ToolboxExactArtifactSpec
 from ..toolbox.catalog import PHASE0_REVIEWED_IMPORT_CATALOG, ToolboxEnvironmentTemplateSpec, normalize_distribution_name
 from ..toolbox.definition_planner import (
@@ -237,6 +237,7 @@ class ConfiguredToolboxPlanResolver:
                 target=self.target,
             )
             seen: set[tuple[str, tuple[str, ...]]] = set()
+            closures: tuple[ResolvedPackageWheelClosure, ...]
             try:
                 closures = (resolver.resolve_requirements(
                     template_id=profile.template_id,
@@ -295,7 +296,7 @@ class ConfiguredToolboxPlanResolver:
                 template_entry = self._entry(str(profile.get("template_id") or ""))
                 template = ToolboxEnvironmentTemplateSpec.from_dict(template_entry["template"])
                 template_names = {item.name for item in template.locked_distributions}
-                artifacts = []
+                custom_artifacts: list[ToolboxExactArtifactSpec] = []
                 for item in resolved.locked_artifacts:
                     _name, _version, _build, tags = parse_wheel_filename(item.filename)
                     distribution = normalize_distribution_name(item.distribution_name)
@@ -303,7 +304,7 @@ class ConfiguredToolboxPlanResolver:
                     roots = tuple(
                         sorted(set(rule.import_roots) & set(resolved.resolved_import_roots))
                     ) if rule is not None else ()
-                    artifacts.append(ToolboxExactArtifactSpec(
+                    custom_artifacts.append(ToolboxExactArtifactSpec(
                         import_roots=roots,
                         distribution=distribution,
                         dependency_reason=(
@@ -325,14 +326,14 @@ class ConfiguredToolboxPlanResolver:
                     source_ids=source_ids,
                     source_origins=tuple(sorted(self._source(item)["origin"] for item in source_ids)),
                     lock_digest=resolved.custom_resolved_lock_digest or resolved.complete_lock_digest,
-                    artifacts=tuple(sorted(artifacts, key=lambda item: item.distribution)),
+                    artifacts=tuple(sorted(custom_artifacts, key=lambda item: item.distribution)),
                 ))
                 continue
             template_id = str(profile.get("template_id") or "")
             entry = self._entry(template_id)
             template = ToolboxEnvironmentTemplateSpec.from_dict(entry["template"])
-            artifacts = self._template_artifacts(template, entry)
-            source_ids = tuple(sorted({item.source_id for item in artifacts}))
+            template_artifacts = self._template_artifacts(template, entry)
+            source_ids = tuple(sorted({item.source_id for item in template_artifacts}))
             environments.append(
                 ActiveToolboxEnvironmentResolution(
                     environment_id=profile_id,
@@ -344,7 +345,7 @@ class ConfiguredToolboxPlanResolver:
                         sorted(self._source(item)["origin"] for item in source_ids)
                     ),
                     lock_digest=str(profile.get("template_lock_digest") or ""),
-                    artifacts=artifacts,
+                    artifacts=template_artifacts,
                 )
             )
         return tuple(environments)

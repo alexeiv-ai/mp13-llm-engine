@@ -54,7 +54,8 @@ class ToolboxExecutionHarness:
         def _int_value(*keys: str) -> int:
             for key in keys:
                 try:
-                    value = int(row.get(key) if key in row else metrics.get(key) or 0)
+                    raw_value = row.get(key) if key in row else metrics.get(key)
+                    value = int(str(raw_value or 0))
                 except Exception:
                     value = 0
                 if value:
@@ -64,7 +65,8 @@ class ToolboxExecutionHarness:
         def _float_value(*keys: str) -> float:
             for key in keys:
                 try:
-                    value = float(row.get(key) if key in row else metrics.get(key) or 0.0)
+                    raw_value = row.get(key) if key in row else metrics.get(key)
+                    value = float(str(raw_value or 0.0))
                 except Exception:
                     value = 0.0
                 if value:
@@ -108,11 +110,14 @@ class ToolboxExecutionHarness:
                 ),
             }
         engine_id = await self._select_engine_id()
+        channel = self.control_channel
+        if channel is None:
+            raise RuntimeError("control_channel_not_configured")
         toolbox_id = str(self.config.sandbox_toolbox_id or "").strip()
         if toolbox_id:
-            result = await asyncio.to_thread(self.control_channel.toolbox_describe, toolbox_id=toolbox_id)
+            result = await asyncio.to_thread(channel.toolbox_describe, toolbox_id=toolbox_id)
         else:
-            result = await asyncio.to_thread(self.control_channel.toolbox_describe, engine_id=engine_id)
+            result = await asyncio.to_thread(channel.toolbox_describe, engine_id=engine_id)
         out = dict(result or {})
         out.setdefault("mode", "sandbox")
         out["parallel_execution"] = self._normalize_parallel_execution(
@@ -444,15 +449,18 @@ class ToolboxExecutionHarness:
             }
             return call
         engine_id = await self._select_engine_id()
+        channel = self.control_channel
+        if channel is None:
+            raise RuntimeError("control_channel_not_configured")
         toolbox_id = str(self.config.sandbox_toolbox_id or "").strip()
         requested_tools_view = native_execute_kwargs.get("tools_view")
         tools_view_payload = serialize_tools_view(requested_tools_view)
         gate_payload: Dict[str, Any] = {}
-        if hasattr(self.control_channel, "toolbox_gate"):
+        if hasattr(channel, "toolbox_gate"):
             if toolbox_id:
                 gate_payload = dict(
                     await asyncio.to_thread(
-                        self.control_channel.toolbox_gate,
+                        channel.toolbox_gate,
                         toolbox_id=toolbox_id,
                         tool_name=str(call.name or "").strip(),
                         tools_view=tools_view_payload,
@@ -461,7 +469,7 @@ class ToolboxExecutionHarness:
             else:
                 gate_payload = dict(
                     await asyncio.to_thread(
-                        self.control_channel.toolbox_gate,
+                        channel.toolbox_gate,
                         engine_id=engine_id,
                         tool_name=str(call.name or "").strip(),
                         tools_view=tools_view_payload,
@@ -620,7 +628,7 @@ class ToolboxExecutionHarness:
                 "tools_view": tools_view_payload,
                 "callback_binding": dict(callback_binding or {}) or None,
             }
-            execute_method = self.control_channel.toolbox_execute
+            execute_method = channel.toolbox_execute
             if self._supports_keyword(execute_method, "execution_request_id"):
                 execute_kwargs["execution_request_id"] = execution_request_id
             if isinstance(host_api_approval, dict):
