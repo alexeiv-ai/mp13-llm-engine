@@ -109,12 +109,13 @@ pylint = "^3.3.4"
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
 
-[tool.pytest]
+[tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
 addopts = ["-v", "--tb=short"]
+asyncio_default_fixture_loop_scope = "function"
 markers = [
   "fast: deterministic unit, contract, and repository tests without worker processes",
   "process: tests that start or coordinate real worker processes and IPC",
