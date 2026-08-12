@@ -8,12 +8,13 @@ import pytest
 
 from hosting.operation_contract import hosted_execution_fingerprint
 from hosting.service.host_service import EngineHostService
+from tests.hosting_v3_fixtures import hosting_configuration
 
 
 def _service(tmp_path: Path) -> EngineHostService:
     return EngineHostService(
         engines_state_file=tmp_path / "managed_engines.json",
-        control_state_file=tmp_path / "access_control.json",
+        hosting_configuration=hosting_configuration(tmp_path),
     )
 
 

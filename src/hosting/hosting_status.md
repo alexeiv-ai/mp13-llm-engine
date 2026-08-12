@@ -628,6 +628,16 @@ the slice.
 - Remaining: remove the retained toolbox resolver/artifact repository and make
   planning originate the generic lock/request directly before closing R7.1/R7.2
 
+### TEST-R7B — rollout transaction regression proof
+
+- Date: 2026-08-11
+- Scope: resolved candidate registration plus definition apply recovery,
+  cancellation, publication checkpoint, and cleanup
+- Proof: seven rollout/apply tests passed after migration to the canonical v3
+  hosting fixture; candidate routing remains non-public, duplicate request
+  identity is stable, cancellation cleans generic references before publication,
+  and the publication checkpoint remains atomic
+
 Append one concise entry per completed slice. Include exact commands, counts,
 durations where useful, negative-path results, commit pin, and dependent receipt
 impact. Do not paste an unstructured full test transcript.

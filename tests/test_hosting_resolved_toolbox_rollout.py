@@ -8,6 +8,7 @@ import pytest
 
 from hosting.service.errors import ToolboxRolloutError
 from hosting.service.host_service import EngineHostService
+from tests.hosting_v3_fixtures import hosting_configuration
 from hosting.toolbox.bundle_models import (
     ResolvedToolboxProfileSpec,
     ToolboxBundleAutoTool,
@@ -52,7 +53,7 @@ def _bundle(toolbox_id: str, profile: ResolvedToolboxProfileSpec, tool_name: str
 def _service(tmp_path: Path) -> EngineHostService:
     return EngineHostService(
         engines_state_file=tmp_path / "managed_engines.json",
-        control_state_file=tmp_path / "access_control.json",
+        hosting_configuration=hosting_configuration(tmp_path),
     )
 
 
@@ -81,6 +82,9 @@ def test_resolved_rollout_skips_reused_and_spawns_added_as_candidate(tmp_path: P
         def __init__(self) -> None:
             self.materialized: list[dict] = []
             self.spawned: list[dict] = []
+            self._package_manager = SimpleNamespace(create_lock=lambda **_kwargs: {"lock_digest": added.effective_lock_digest})
+            self._environment_manager = SimpleNamespace(adopt_published=lambda **_kwargs: {"reference": {"reference_id": "ref-generic"}})
+            self._toolbox_artifact_store = SimpleNamespace(object_path=lambda _digest: receipt_root / "unused")
 
         def materialize_toolbox_environment_for_bundle(self, **kwargs):
             self.materialized.append(kwargs)
@@ -91,6 +95,7 @@ def test_resolved_rollout_skips_reused_and_spawns_added_as_candidate(tmp_path: P
                 resolved=SimpleNamespace(
                     complete_lock_digest=added.effective_lock_digest,
                     runtime_artifact_digest=_digest("c"),
+                    locked_artifacts=(),
                 ),
             )
 
