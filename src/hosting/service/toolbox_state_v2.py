@@ -55,14 +55,17 @@ class AtomicJsonToolboxStateV2Repository:
         if set(row) != fields or row.get("toolbox_id") != toolbox_id:
             raise ValueError("toolbox_state_v2_snapshot_fields_invalid")
         revision = require_digest(row.get("active_revision"), label="toolbox_active_revision")
-        definition = ToolboxDefinitionSpec.from_dict(row.get("definition"))
+        definition_raw = row.get("definition")
+        if not isinstance(definition_raw, Mapping):
+            raise ValueError("toolbox_state_v2_definition_invalid")
+        definition = ToolboxDefinitionSpec.from_dict(definition_raw)
         if definition.toolbox_id != toolbox_id or definition.revision != revision:
             raise ValueError("toolbox_state_v2_definition_mismatch")
         if not isinstance(row.get("profiles"), dict) or not isinstance(row.get("tool_routes"), dict):
             raise ValueError("toolbox_state_v2_routes_invalid")
         profiles: dict[str, dict[str, Any]] = {}
         for profile_id, value in row["profiles"].items():
-            profile_row = dict(value or {})
+            profile_row: dict[str, Any] = dict(value or {})
             allowed_profile_fields = {
                 "profile", "manifest_hash", "engine_id", "tool_names", "environment_reference",
                 "resolved_environment", "runtime_binding_digest",
@@ -120,8 +123,8 @@ class AtomicJsonToolboxStateV2Repository:
                 raise ValueError("toolbox_state_v2_route_fields_invalid")
             profile_id = str(route["profile_id"] or "").strip()
             engine_id = str(route["engine_id"] or "").strip()
-            profile_row = profiles.get(profile_id)
-            if profile_row is None or engine_id != profile_row["engine_id"] or name not in profile_row["tool_names"]:
+            target_profile = profiles.get(profile_id)
+            if target_profile is None or engine_id != target_profile["engine_id"] or name not in target_profile["tool_names"]:
                 raise ValueError("toolbox_state_v2_route_target_invalid")
             if not isinstance(route["non_restartable"], bool):
                 raise ValueError("toolbox_state_v2_route_policy_invalid")

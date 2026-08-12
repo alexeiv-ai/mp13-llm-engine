@@ -125,8 +125,8 @@ class ToolboxLockedDistributionSpec:
         row = dict(payload or {})
         _strict_fields(row, {"name", "version", "extras"}, label="locked_distribution")
         return cls(
-            name=row.get("name"),
-            version=row.get("version"),
+            name=str(row.get("name") or ""),
+            version=str(row.get("version") or ""),
             extras=tuple(
                 _sequence(row.get("extras", []), label="locked_distribution_extras", maximum=32)
             ),
@@ -154,7 +154,7 @@ class ToolboxTemplateProvenance:
         verifier = str(self.verifier_id or "").strip() or None
         object.__setattr__(self, "verifier_id", verifier)
 
-    def to_dict(self) -> dict[str, str]:
+    def to_dict(self) -> dict[str, str | None]:
         return {
             "source": self.source,
             "revision": self.revision,
@@ -171,9 +171,9 @@ class ToolboxTemplateProvenance:
             label="template_provenance",
         )
         return cls(
-            source=row.get("source"),
-            revision=row.get("revision"),
-            evidence_digest=row.get("evidence_digest"),
+            source=str(row.get("source") or ""),
+            revision=str(row.get("revision") or ""),
+            evidence_digest=str(row.get("evidence_digest") or ""),
             verifier_id=row.get("verifier_id"),
         )
 

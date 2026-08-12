@@ -54,8 +54,13 @@ class EnvironmentApiMixin:
         )
 
     def environment_template_construct(self, **payload: Any) -> Dict[str, Any]:
-        raw = payload.get("template") if isinstance(payload.get("template"), Mapping) else payload
-        return self._environment_manager.put_template(EnvironmentTemplate.from_dict(raw))
+        template_value = payload.get("template")
+        raw: Mapping[str, Any] = (
+            template_value if isinstance(template_value, Mapping) else payload
+        )
+        return self._environment_manager.put_template(
+            EnvironmentTemplate.from_dict(dict(raw))
+        )
 
     def environment_template_activate(self, **payload: Any) -> Dict[str, Any]:
         return self._set_environment_template_state(payload, "active")
@@ -80,8 +85,11 @@ class EnvironmentApiMixin:
         )
 
     def environment_ensure(self, **payload: Any) -> Dict[str, Any]:
-        raw = payload.get("request") if isinstance(payload.get("request"), Mapping) else payload
-        return self._environment_manager.ensure(EnvironmentRequest.from_dict(raw))
+        request_value = payload.get("request")
+        raw: Mapping[str, Any] = (
+            request_value if isinstance(request_value, Mapping) else payload
+        )
+        return self._environment_manager.ensure(EnvironmentRequest.from_dict(dict(raw)))
 
     def environment_template_prewarm(self, **payload: Any) -> Dict[str, Any]:
         return self.environment_ensure(**payload)

@@ -6,7 +6,7 @@ import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Sequence
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Mapping, Optional, Sequence, overload
 from urllib.parse import urlsplit, urlunsplit
 
 from packaging.requirements import InvalidRequirement, Requirement
@@ -15,6 +15,9 @@ from packaging.utils import InvalidWheelFilename, parse_wheel_filename
 from .common import _sha256_text, _stable_json
 from .catalog import normalize_distribution_name, normalize_import_root
 from .identity import canonical_json_bytes, definition_revision, require_digest, resolved_profile_identity
+
+if TYPE_CHECKING:
+    from .staging import StagedToolboxBundle
 
 
 TOOLBOX_DEFINITION_CONTRACT = "hosting.toolbox.definition"
@@ -31,7 +34,21 @@ def _strict_model_fields(row: Mapping[str, Any], fields: set[str], *, label: str
         raise ValueError(f"{label}_missing_fields:{','.join(missing)}")
 
 
-def _canonical_mapping(value: Any, *, label: str, nullable: bool = False) -> dict[str, Any] | None:
+@overload
+def _canonical_mapping(
+    value: Any, *, label: str, nullable: Literal[False] = False
+) -> dict[str, Any]: ...
+
+
+@overload
+def _canonical_mapping(
+    value: Any, *, label: str, nullable: Literal[True]
+) -> dict[str, Any] | None: ...
+
+
+def _canonical_mapping(
+    value: Any, *, label: str, nullable: bool = False
+) -> dict[str, Any] | None:
     if value is None and nullable:
         return None
     if not isinstance(value, Mapping):
@@ -627,7 +644,7 @@ class ToolboxToolMutationSpec:
         object.__setattr__(self, "change", change)
         object.__setattr__(self, "change_id", change_id)
 
-    def to_dict(self) -> dict[str, str]:
+    def to_dict(self) -> dict[str, str | None]:
         return {
             "tool_key": self.tool_key,
             "change": self.change,
@@ -908,7 +925,7 @@ class ResolvedToolboxProfileSpec:
             raise ValueError("resolved_profile_import_roots_duplicate")
         expected_profile_id = resolved_profile_identity(
             environment_identity=environment_key,
-            sandbox_policy=sandbox,
+            sandbox_policy=sandbox or {},
         )
         if self.profile_id and self.profile_id != expected_profile_id:
             raise ValueError("resolved_profile_id_mismatch")
@@ -1259,7 +1276,7 @@ class ToolboxEnvironmentSpec:
             venv_path=str(row.get("venv_path") or "").strip(),
             python_executable=str(row.get("python_executable") or "").strip(),
             environment_name=str(row.get("environment_name") or "base").strip() or "base",
-            environment_description_hash=str(row.get("environment_description_hash") or "").strip() or None,
+            environment_description_hash=str(row.get("environment_description_hash") or "").strip(),
             venv_lock_hash=str(row.get("venv_lock_hash") or "").strip() or None,
             toolbox_runtime_hash=str(row.get("toolbox_runtime_hash") or "toolbox-executor-v1").strip() or "toolbox-executor-v1",
             intrinsics_profile_id=str(row.get("intrinsics_profile_id") or "none").strip() or "none",

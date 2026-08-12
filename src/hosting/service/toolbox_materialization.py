@@ -181,7 +181,12 @@ class HermeticToolboxTemplateMaterializer:
         catalog_entry: Mapping[str, Any], *, python_abi: str, platform: str
     ) -> ResolvedToolboxEnvironmentInput:
         entry = dict(catalog_entry or {})
-        template = ToolboxEnvironmentTemplateSpec.from_dict(entry.get("template"))
+        template_raw = entry.get("template")
+        if not isinstance(template_raw, Mapping):
+            raise ToolboxTemplateMaterializationError(
+                "template_invalid", "The catalog entry has no valid template."
+            )
+        template = ToolboxEnvironmentTemplateSpec.from_dict(template_raw)
         template_digest = require_digest(entry.get("template_digest"), label="template_digest")
         artifact_rows = list(entry.get("artifacts") or [])
         artifacts_by_distribution: dict[tuple[str, str], dict[str, Any]] = {}
@@ -202,8 +207,10 @@ class HermeticToolboxTemplateMaterializer:
             artifacts_by_distribution[key] = row
         locked_artifacts: list[ToolboxLockedArtifactSpec] = []
         for distribution in template.locked_distributions:
-            row = artifacts_by_distribution.get((distribution.name, distribution.version))
-            if row is None:
+            artifact_row = artifacts_by_distribution.get(
+                (distribution.name, distribution.version)
+            )
+            if artifact_row is None:
                 raise ToolboxTemplateMaterializationError(
                     "template_artifact_lock_incomplete",
                     "The template artifact set does not cover its complete distribution lock.",
@@ -212,10 +219,10 @@ class HermeticToolboxTemplateMaterializer:
                 ToolboxLockedArtifactSpec(
                     distribution_name=distribution.name,
                     version=distribution.version,
-                    source_id=row.get("source_id"),
-                    filename=row.get("filename"),
-                    sha256=row.get("sha256"),
-                    size_bytes=row.get("size_bytes"),
+                    source_id=str(artifact_row.get("source_id") or ""),
+                    filename=str(artifact_row.get("filename") or ""),
+                    sha256=str(artifact_row.get("sha256") or ""),
+                    size_bytes=int(artifact_row.get("size_bytes") or 0),
                 )
             )
         if len(locked_artifacts) != len(artifact_rows):

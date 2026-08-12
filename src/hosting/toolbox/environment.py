@@ -7,7 +7,7 @@ import subprocess
 import time
 import venv
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence
 
 from mp13_engine.mp13_intrinsics_metadata import (
     intrinsic_dependency_metadata,
@@ -17,6 +17,9 @@ from mp13_engine.mp13_intrinsics_metadata import (
 from .._process_utils import hidden_subprocess_kwargs
 from .common import _sha256_text, _stable_json
 from .bundle_models import SandboxProfileSpec, ToolboxEnvironmentSpec
+
+if TYPE_CHECKING:
+    from .staging import StagedToolboxBundle
 
 
 class EnvironmentRuntimeAdapter:
@@ -472,7 +475,7 @@ class EnvironmentRuntimeAdapter:
     ) -> Dict[str, Any]:
         ensured = self.ensure_environment(spec)
         effective_desc_input = dict(environment_description or {})
-        effective_desc = {
+        effective_desc: Dict[str, Any] = {
             "name": str(effective_desc_input.get("name") or ensured.environment_name or "base").strip() or "base",
             "base_env_name": effective_desc_input.get("base_env_name"),
             "effective_extra_packages": self._unique_names(
@@ -1016,7 +1019,7 @@ class EnvironmentRuntimeAdapter:
                     for line in freeze_output.splitlines()
                     if str(line or "").strip()
                 ]
-                receipt_payload = {
+                receipt_payload: Dict[str, Any] = {
                     "status": "ok" if int(freeze_result.returncode or 0) == 0 else "failed",
                     "captured_at": time.time(),
                     "returncode": int(freeze_result.returncode or 0),
