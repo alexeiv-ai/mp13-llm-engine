@@ -3477,14 +3477,11 @@ class EngineHostControlChannel:
             payload={"request_id": str(request_id or "").strip()},
         )
 
-    def environment_remove(
-        self, *, environment_digest: str, request_id: str
-    ) -> Dict[str, Any]:
+    def environment_remove(self, *, environment_id: str) -> Dict[str, Any]:
         res = self._invoke(
             "environment-remove",
             {
-                "environment_digest": str(environment_digest or "").strip(),
-                "request_id": str(request_id or "").strip(),
+                "environment_id": str(environment_id or "").strip(),
             },
         )
         return dict(res or {})
@@ -3564,21 +3561,21 @@ class EngineHostControlChannel:
         res = self._invoke("model-runtime-status", {})
         return dict(res or {})
 
-    def environment_template_list(self) -> Dict[str, Any]:
-        res = self._invoke("environment-template-list", {})
+    def environment_template_list(self, *, include_revoked: bool = False) -> Dict[str, Any]:
+        res = self._invoke("environment-template-list", {"include_revoked": bool(include_revoked)})
         return dict(res or {})
 
     def environment_template_describe(
         self,
         *,
         template_id: str,
-        template_digest: Optional[str] = None,
+        revision: Optional[int] = None,
     ) -> Dict[str, Any]:
         res = self._invoke(
             "environment-template-describe",
             {
                 "template_id": str(template_id or "").strip(),
-                "template_digest": str(template_digest or "").strip() or None,
+                "revision": revision,
             },
         )
         return dict(res or {})
@@ -3586,33 +3583,19 @@ class EngineHostControlChannel:
     def environment_template_construct(
         self,
         *,
-        template_id: str,
-        base_template_digest: str,
-        imports: list[str],
-        package_requirements: list[str],
-        request_id: str,
+        template: Dict[str, Any],
     ) -> Dict[str, Any]:
-        return self.start_host_operation(
-            command="environment-template-construct",
-            payload={
-                "template_id": str(template_id or "").strip(),
-                "base_template_digest": str(base_template_digest or "").strip(),
-                "imports": [str(item or "").strip() for item in imports],
-                "package_requirements": [
-                    str(item or "").strip() for item in package_requirements
-                ],
-                "request_id": str(request_id or "").strip(),
-            },
-        )
+        res = self._invoke("environment-template-construct", {"template": dict(template or {})})
+        return dict(res or {})
 
     def environment_template_activate(
-        self, *, template_id: str, template_digest: str
+        self, *, template_id: str, revision: int
     ) -> Dict[str, Any]:
         res = self._invoke(
             "environment-template-activate",
             {
                 "template_id": str(template_id or "").strip(),
-                "template_digest": str(template_digest or "").strip(),
+                "revision": int(revision),
             },
         )
         return dict(res or {})
@@ -3620,40 +3603,34 @@ class EngineHostControlChannel:
     def environment_template_replace(
         self,
         *,
-        template_id: str,
-        expected_active_digest: str,
-        replacement_digest: str,
+        template: Dict[str, Any],
     ) -> Dict[str, Any]:
         res = self._invoke(
             "environment-template-replace",
-            {
-                "template_id": str(template_id or "").strip(),
-                "expected_active_digest": str(expected_active_digest or "").strip(),
-                "replacement_digest": str(replacement_digest or "").strip(),
-            },
+            {"template": dict(template or {})},
         )
         return dict(res or {})
 
     def environment_template_deprecate(
-        self, *, template_id: str, template_digest: str
+        self, *, template_id: str, revision: int
     ) -> Dict[str, Any]:
         res = self._invoke(
             "environment-template-deprecate",
             {
                 "template_id": str(template_id or "").strip(),
-                "template_digest": str(template_digest or "").strip(),
+                "revision": int(revision),
             },
         )
         return dict(res or {})
 
     def environment_template_revoke(
-        self, *, template_id: str, template_digest: str
+        self, *, template_id: str, revision: int
     ) -> Dict[str, Any]:
         res = self._invoke(
             "environment-template-revoke",
             {
                 "template_id": str(template_id or "").strip(),
-                "template_digest": str(template_digest or "").strip(),
+                "revision": int(revision),
             },
         )
         return dict(res or {})
@@ -3661,21 +3638,11 @@ class EngineHostControlChannel:
     def environment_template_prewarm(
         self,
         *,
-        template_id: str,
-        python_abi: str,
-        platform: str,
-        request_id: str,
-        template_digest: Optional[str] = None,
+        request: Dict[str, Any],
     ) -> Dict[str, Any]:
         res = self._invoke(
             "environment-template-prewarm",
-            {
-                "template_id": str(template_id or "").strip(),
-                "template_digest": str(template_digest or "").strip() or None,
-                "python_abi": str(python_abi or "").strip(),
-                "platform": str(platform or "").strip(),
-                "request_id": str(request_id or "").strip(),
-            },
+            {"request": dict(request or {})},
         )
         return dict(res or {})
 

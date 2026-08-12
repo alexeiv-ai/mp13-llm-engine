@@ -489,6 +489,17 @@ the slice.
 - Proof: prohibited type-name search returned zero; 26 hermetic/neutral tests
   and three focused toolbox runtime-adapter tests passed
 
+### CODE-R6D — exact generic environment public payloads
+
+- Date: 2026-08-11
+- Plan IDs: R6.4; P0; high expertise
+- Outcome: daemon dispatch, channel methods, and CLI routing accept exact generic
+  template records, integer revisions, environment requests, and environment
+  IDs; no toolbox-era template/environment digest field remains on those public
+  surfaces
+- Proof: production public-surface search returned zero for the retired fields;
+  18 focused environment/package/startup tests passed
+
 Append one concise entry per completed slice. Include exact commands, counts,
 durations where useful, negative-path results, commit pin, and dependent receipt
 impact. Do not paste an unstructured full test transcript.

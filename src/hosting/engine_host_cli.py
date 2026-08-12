@@ -2011,12 +2011,7 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
             _print_ok(svc.toolbox_gc(request_id=str(payload.get("request_id") or "")))
             return 0
         if cmd == "environment-remove":
-            _print_ok(
-                svc.environment_remove(
-                    environment_digest=str(payload.get("environment_digest") or ""),
-                    request_id=str(payload.get("request_id") or ""),
-                )
-            )
+            _print_ok(svc.environment_remove(environment_id=str(payload.get("environment_id") or "")))
             return 0
         if cmd == "toolbox-get-definition":
             _print_ok(
@@ -2065,38 +2060,37 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
             )
             return 0
         if cmd == "environment-template-list":
-            _print_ok(svc.environment_template_list())
+            _print_ok(svc.environment_template_list(include_revoked=bool(payload.get("include_revoked", False))))
             return 0
         if cmd == "environment-template-describe":
             _print_ok(
                 svc.environment_template_describe(
                     template_id=str(payload.get("template_id") or ""),
-                    template_digest=str(payload.get("template_digest") or "").strip() or None,
+                    revision=payload.get("revision"),
                 )
             )
+            return 0
+        if cmd == "environment-template-construct":
+            _print_ok(svc.environment_template_construct(template=dict(payload.get("template") or {})))
             return 0
         if cmd == "environment-template-activate":
             _print_ok(
                 svc.environment_template_activate(
                     template_id=str(payload.get("template_id") or ""),
-                    template_digest=str(payload.get("template_digest") or ""),
+                    revision=int(payload.get("revision") or 0),
                 )
             )
             return 0
         if cmd == "environment-template-replace":
             _print_ok(
-                svc.environment_template_replace(
-                    template_id=str(payload.get("template_id") or ""),
-                    expected_active_digest=str(payload.get("expected_active_digest") or ""),
-                    replacement_digest=str(payload.get("replacement_digest") or ""),
-                )
+                svc.environment_template_replace(template=dict(payload.get("template") or {}))
             )
             return 0
         if cmd == "environment-template-deprecate":
             _print_ok(
                 svc.environment_template_deprecate(
                     template_id=str(payload.get("template_id") or ""),
-                    template_digest=str(payload.get("template_digest") or ""),
+                    revision=int(payload.get("revision") or 0),
                 )
             )
             return 0
@@ -2104,19 +2098,13 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
             _print_ok(
                 svc.environment_template_revoke(
                     template_id=str(payload.get("template_id") or ""),
-                    template_digest=str(payload.get("template_digest") or ""),
+                    revision=int(payload.get("revision") or 0),
                 )
             )
             return 0
         if cmd == "environment-template-prewarm":
             _print_ok(
-                svc.environment_template_prewarm(
-                    template_id=str(payload.get("template_id") or ""),
-                    template_digest=str(payload.get("template_digest") or "").strip() or None,
-                    python_abi=str(payload.get("python_abi") or ""),
-                    platform=str(payload.get("platform") or ""),
-                    request_id=str(payload.get("request_id") or ""),
-                )
+                svc.environment_template_prewarm(request=dict(payload.get("request") or {}))
             )
             return 0
         if cmd == "toolbox-references":

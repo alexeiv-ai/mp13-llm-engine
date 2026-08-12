@@ -709,7 +709,7 @@ reference acquisition/release, active execution, removal denial, and restart.
 
 - [x] Replace `toolbox-template-*` with `environment-template-*`.
 - [x] Replace `toolbox-environment-remove` with `environment-remove`.
-- [ ] Generalize operation kinds, audit events, receipts, dispatch, channel,
+- [x] Generalize operation kinds, audit events, receipts, dispatch, channel,
   CLI, status, and capability declarations.
 
 Proof: old commands and serialized toolbox environment kinds are rejected and
