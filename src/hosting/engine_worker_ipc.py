@@ -541,7 +541,7 @@ async def _handle_stream_recv(payload: Dict[str, Any]) -> Dict[str, Any]:
     sess = _stream_get(stream_id)
     if sess is None:
         return {"status": "error", "message": "stream_not_found", "stream_id": stream_id}
-    items = []
+    items: list[Dict[str, Any]] = []
     first_wait = timeout_seconds
     while len(items) < max_items:
         try:
@@ -556,7 +556,7 @@ async def _handle_stream_recv(payload: Dict[str, Any]) -> Dict[str, Any]:
     done = bool(sess.done and sess.events.empty())
     if done:
         _stream_pop(stream_id)
-    out = {
+    out: Dict[str, Any] = {
         "status": "ok",
         "stream_id": stream_id,
         "engine_id": sess.engine_id,
@@ -572,7 +572,8 @@ async def _handle_stream_recv(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 async def _handle_stream_send(payload: Dict[str, Any]) -> Dict[str, Any]:
     stream_id = str(payload.get("stream_id") or "").strip()
-    message = payload.get("message") if isinstance(payload.get("message"), dict) else {}
+    raw_message = payload.get("message")
+    message: Dict[str, Any] = dict(raw_message) if isinstance(raw_message, dict) else {}
     sess = _stream_get(stream_id)
     if sess is None:
         return {"status": "error", "message": "stream_not_found", "stream_id": stream_id}

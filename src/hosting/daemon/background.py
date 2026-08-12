@@ -162,24 +162,24 @@ def start_daemon_background(
                 continue
             from ..engine_host_connection import LocalSocketConnection
 
-            conn_kwargs: Dict[str, Any] = {
+            ready_conn_kwargs: Dict[str, Any] = {
                 "port": actual_port,
                 "timeout": 1.0,
                 "max_reconnect_attempts": 1,
             }
             pid_path = getattr(pid_info, "path", None)
             if pid_path is not None:
-                conn_kwargs["pid_file"] = pid_path
-            conn = LocalSocketConnection(**conn_kwargs)
+                ready_conn_kwargs["pid_file"] = pid_path
+            conn = LocalSocketConnection(**ready_conn_kwargs)
             pong = conn.invoke("__ping__", {})
             conn.close()
             if str(pong) != "pong":
                 continue
             info = pid_info.read() or {}
-            out: Dict[str, Any] = {"pid": int(info.get("pid") or spawned_pid), "port": actual_port}
+            ready_out: Dict[str, Any] = {"pid": int(info.get("pid") or spawned_pid), "port": actual_port}
             if log_file:
-                out["log_file"] = str(log_file)
-            return out
+                ready_out["log_file"] = str(log_file)
+            return ready_out
         except Exception:
             continue
 

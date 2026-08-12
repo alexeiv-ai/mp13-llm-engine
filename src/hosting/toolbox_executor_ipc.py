@@ -618,8 +618,8 @@ async def _rpc_call(method: str, params: Dict[str, Any]) -> Dict[str, Any]:
         raw_call = dict(params.get("tool_call") or {})
         call = ToolCall.from_dict(raw_call)
         callback_binding = dict(params.get("callback_binding") or {})
-        tool_names = set(_manifest_tool_names(manifest))
-        if call.name not in tool_names:
+        staged_tool_names = set(_manifest_tool_names(manifest))
+        if call.name not in staged_tool_names:
             call.error = f"Error: Tool '{call.name}' is not staged in this executor."
             return {"status": "ok", "tool_call": call.to_dict()}
         tool_def = toolbox.get_tool(call.name) or {}

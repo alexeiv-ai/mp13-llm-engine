@@ -71,7 +71,7 @@ class EngineHostHttpIngressDaemon:
         return 403
 
     @staticmethod
-    def _extract_token(headers: http.client.HTTPMessage, query: Dict[str, List[str]], payload: Dict[str, Any]) -> str:  # type: ignore[name-defined]
+    def _extract_token(headers: Any, query: Dict[str, List[str]], payload: Dict[str, Any]) -> str:
         authz = str(headers.get("Authorization") or "").strip()
         if authz.lower().startswith("bearer "):
             token = authz[7:].strip()

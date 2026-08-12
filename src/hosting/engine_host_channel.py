@@ -1064,7 +1064,7 @@ class EngineHostControlChannel:
         pid_path = _resolved_pid_path(pid_info, pid_file_path)
         info = pid_info.read() or {}
         try:
-            started_at = float(info.get("started_at")) if info.get("started_at") is not None else None
+            started_at = float(str(info.get("started_at"))) if info.get("started_at") is not None else None
         except (TypeError, ValueError):
             started_at = None
         pid_alive = self._pidfile_process_alive(pid_info)
