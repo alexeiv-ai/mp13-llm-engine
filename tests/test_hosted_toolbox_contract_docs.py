@@ -26,7 +26,7 @@ def test_contract_has_frozen_public_sections_and_limits() -> None:
         "## ToolboxDependencyRequest",
         "## Environment template descriptor",
         "## Deployment administration policy",
-        "## Initial environment catalog",
+        "## Environment template catalog",
         "## Cross-worker use of core",
         "## Model runtime boundary",
         "## Planning",
@@ -116,7 +116,6 @@ def test_contract_contains_only_supported_vocabulary() -> None:
         "version-1",
         "migration",
         "deprecated behavior",
-        "compatibility",
     ]
     assert not {item for item in forbidden if item in text}
 
@@ -185,21 +184,20 @@ def test_contract_freezes_deployment_administration_policy() -> None:
         assert required in text
 
 
-def test_contract_freezes_initial_environment_catalog_and_config() -> None:
+def test_contract_freezes_generic_environment_catalog_and_config() -> None:
     text = _contract_text()
     prose = " ".join(text.split())
     for required in [
-        "exactly two stable logical built-in intent IDs: `core` and `py-compute`",
-        "Logical IDs have no version suffix.",
-        "It contains no resolved distribution lock, wheel filename, artifact digest",
-        "ships no realized built-in catalog or lock JSON",
-        "one complete exact wheel closure",
-        "parent worker artifact digest, and isolation policy version",
-        "exact versions of NumPy, SymPy, NumExpr",
-        "independently materialized lock",
-        "built-in `sandbox_policy` reference is `compute-only`",
-            "`hosting.configuration.v3`",
-            "`environment_template_unavailable`",
+        "ships no realized template catalog or lock JSON",
+        "ingest package bytes through the generic package manager",
+        "exact generic package lock",
+        "daemon-indexed wheel set",
+        "no indexes, no installed-state reuse, wheels only",
+        "daemon-computed SHA-256 identity",
+        "There is no toolbox-specific host setup operation",
+        "default template `sandbox_policy` reference is `compute-only`",
+        "`hosting.configuration.v3`",
+        "`environment_template_unavailable`",
         "`package_source_unavailable`",
         "`environment_build_failed`",
         "`package_policy_rejected`",
@@ -208,19 +206,10 @@ def test_contract_freezes_initial_environment_catalog_and_config() -> None:
     ]:
         assert required in prose
     for key in [
-        "`builtins`",
-        "`sources`",
-        "`resolution`",
-        "`retention`",
-        "`package_requirements`",
-        "`credential_ref`",
-        "`source_set_revision`",
-        "`hosting.package_source.v1`",
         "`hosting.package_lock.v1`",
         "`hosting.configuration.v3`",
         "`package_source_unavailable`",
-        "`artifact_cache_grace_seconds`",
-        "`remove_unreferenced_custom_revisions_on_apply`",
+        "`EnvironmentRequest`",
     ]:
         assert key in text
     policy_block = next(

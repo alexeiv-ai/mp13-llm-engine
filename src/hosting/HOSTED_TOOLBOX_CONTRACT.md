@@ -613,53 +613,26 @@ starts. An identical retry after a lost response or daemon restart attaches to
 and safely resumes the same idempotent operation. Read-only reference,
 consistency, and review commands remain bounded synchronous calls.
 
-## Initial environment catalog
+## Environment template catalog
 
-The release-owned configuration declares exactly two stable logical built-in
-intent IDs: `core` and `py-compute`. Logical IDs have no version suffix. Intent
-contains imports, package requirements, a sandbox-policy reference, readiness
-flags, and provenance only. It contains no resolved distribution lock, wheel
-filename, artifact digest, or target-selected manifest.
+The package ships no realized template catalog or lock JSON. Administrators
+ingest package bytes through the generic package manager, create immutable
+package locks and environment templates, then explicitly activate catalog
+revisions. An inactive, deprecated, or revoked revision is never selected
+implicitly.
 
-The package ships no realized built-in catalog or lock JSON. Normal host setup
-must resolve each intent from the configured source mode for the one detected
-current-host target. Until every required intent has one complete exact wheel
-closure, no entry from that configuration revision is published and toolbox
-readiness remains false with a stable bounded diagnostic.
+Template entries bind the logical template ID, exact generic package lock,
+runtime/builder identity, supported current-host target, exposed import roots,
+isolation policy, artifact identities, and optional verifier evidence. Changing
+any member creates a new immutable revision. Plans pin that exact revision and
+never resolve an unqualified logical ID during confirmation or apply.
 
-Read-only air-gap resolution invokes the bundled installer only as a bounded
-offline dependency solver: dry-run report, no indexes, no installed-state
-reuse, and wheels only. The host then independently verifies every reported
-artifact is a direct child of a configured source root, allowed by that
-source's package namespaces, compatible with the detected target, consistent
-with its wheel name/version metadata, and within per-source and aggregate
-artifact bounds. It hashes each artifact itself and derives the lock identity
-from the exact distributions, artifact identities, and target. A timeout,
-missing transitive wheel, or incompatible wheel produces
-`required_template_wheel_missing`; malformed or escaped report data produces
-`required_template_resolution_invalid`. No filesystem path or installer output
-appears in either diagnostic.
-
-After resolution and verification, each complete closure becomes a signed
-immutable template revision. Its identity includes the logical template ID,
-template manifest digest, complete lock digest, catalog revision, Python ABI,
-platform tag, parent worker artifact digest, and isolation policy version.
-Changing any member creates a different revision. Plans pin the selected
-revision and never resolve an unqualified logical ID again during apply.
-
-`core` contains the installed hosting/worker artifact and only its complete
-protocol, serialization, validation, and sandbox-harness dependency closure.
-It contains no optional mathematics, data, document, network-client, or model
-packages. Standard-library modules need no distribution entry.
-
-`py-compute` resolves to its own complete independently materialized lock. It
-includes the same hosting/worker closure plus exact versions of NumPy, SymPy,
-NumExpr, and every third-party distribution imported by a release-owned parent
-compute intrinsic.
-`py-compute` is not constructed by copying, layering, or inheriting the
-`core` site-packages directory. Sharing digest-addressed artifact bytes is
-allowed; sharing a mutable installation is not.
-
+Custom toolbox requirements are solved offline over the generic manager's
+daemon-indexed wheel set. Resolution uses a dry-run installer report with no
+indexes, no installed-state reuse, wheels only, and bounded time/artifact size.
+The host revalidates wheel metadata, target compatibility, source policy,
+daemon-computed SHA-256 identity, and generic-CAS availability before creating
+an offer. Missing or mutated bytes fail closed and never enter a package lock.
 ### Hermetic environment input and identity
 
 Toolbox environment construction consumes one strict
@@ -752,182 +725,34 @@ interpreter branch on that path. The setup summary continues to report the
 required `core` and `py-compute` target receipts; absence or mismatch is a
 degraded setup state and prevents resolved acquisition.
 
-No distribution version is hard-coded in package resources or runtime code.
-Release-owned intent supplies package constraints; configured source metadata
-and the detected target produce the exact immutable closure. Consumers cannot
-select or override those versions.
+Package sources, credentials, dependency policy, artifact/lock roots, and
+environment retention come only from `hosting.configuration.v3`. Foreground,
+background, service, local-channel bootstrap, and relay-equivalent startup
+accept only `mp13_config_file`; no package mapping, credential, policy payload,
+or temporary launcher configuration is accepted.
 
-Toolbox built-in intent is retained as toolbox-owned policy, while sources and
-resolution authority come from `hosting.configuration.v3` package management:
+Generic package upload is bounded, ordered, resumable, and content-addressed.
+The daemon hashes complete received bytes, optionally invokes the configured
+verifier, and atomically promotes only a valid complete artifact. Exact package
+locks bind artifact IDs, sizes, sources, dependency pins, package-policy
+revision, and lock digest. Hash mismatch, source mutation, cancellation,
+expiry, or incomplete input never becomes resolvable.
 
-| Key | Required value and meaning |
-| --- | --- |
-| `builtins` | Non-empty ordered built-in intents. Each has exactly `template_id`, `imports`, `package_requirements`, `sandbox_policy`, `required`, `prewarm`, and `provenance`. A prewarmed intent must be required. Requirements cannot contain direct URLs. |
-| `sources` | Priority-ordered `hosting.package_source.v1` records with logical source ID, kind, sanitized locator, optional daemon-owned credential reference, enabled state, and priority. |
-| `resolution` | Exact `mode`, `timeout_seconds`, `maximum_bytes`, `maximum_artifacts`, `allowed_redirect_origins`, and required `wheel_only: true`. Modes are `online`, `prefer_airgap`, or `air_gapped`. |
-| `retention` | Exact `artifact_cache_grace_seconds`, `maximum_cache_bytes`, `maximum_cache_artifacts`, `protected_digests`, and `remove_unreferenced_custom_revisions_on_apply`. |
-
-The daemon derives the target; configuration contains no target selector. An
-`airgap_store` origin is the logical `airgap://<source_id>`, never a filesystem
-path. HTTPS origins reject embedded credentials, query strings, and fragments.
-`air_gapped` mode rejects HTTPS sources; online mode requires an HTTPS source;
-air-gap modes require an air-gap store. Source order is descending priority.
-
-Canonical JSON of the complete configuration produces an immutable
-`config_revision`. Canonical sources plus resolution policy produce a distinct
-`source_set_revision`. Normal readiness projections include those revisions,
-the detected target, built-in intent, sanitized origins, and bounds, but omit
-every `credential_ref` and daemon path.
-An enabled source set that cannot satisfy resolution reports
-`package_source_unavailable` without preventing authenticated control diagnosis.
-
-HTTPS acquisition accepts PEP 503 HTML or PEP 691 JSON only from the configured source origin
-or an exact origin in `allowed_redirect_origins`, follows at most five explicit
-redirects, and never forwards credentials to an unapproved origin. A source
-with `credential_ref` requires one exact daemon-owned Authorization binding;
-bindings are not status, progress, receipt, or error data. The baseline trusts
-only daemon-computed SHA-256 identities. Optional source verifiers may impose
-additional policy without changing the generic package contract.
-
-Only current-target wheel entries with a source-provided SHA-256 and exact byte
-size are eligible; signed PEP 503 anchors carry these as the `sha256` URL
-fragment and exact `data-size`. Metadata and artifact responses are streamed with configured
-timeouts, redirect limits, per-source and aggregate byte bounds. The downloaded
-filename, size, digest, wheel tags, distribution/version metadata, and allowed
-namespace are verified before one atomic shared-CAS index replacement. The CAS
-contract is `hosting.toolbox.artifact_store.v2`; its `https_manifests` evidence
-is separate from signed air-gap `bundles`, while both reference the same
-immutable `objects` collection. Failure changes neither evidence nor the object
-index.
-
-For each configured built-in root, online/prefer-air-gap setup discovers a
-bounded transitive candidate wheelhouse by reading verified wheel metadata and
-following applicable `Requires-Dist` entries. Candidate count and total bytes
-never exceed resolution bounds. The exact resolver then runs offline against
-verified CAS object paths only; it does not give pip an index URL, credential,
-or network path. `prefer_airgap` first accepts a complete exact air-gap closure
-and contacts HTTPS only when that closure is unavailable.
-
-The host deterministically binds the selected artifact identities and source
-metadata into one immutable package lock. Online and offline sources containing
-identical bytes produce identical artifact identities; source and policy IDs
-remain explicit in the lock.
-
-The host records every applied configuration revision in one process-locked,
-atomically replaced state file and marks exactly one revision current. Applying
-the same revision is idempotent. A transition to a different revision
-invalidates unconsumed definition plans and materialization receipts not tied
-to an active catalog revision. It does not mutate the active catalog map,
-published toolbox definition state, or generic environment references. An
-otherwise unconfigured restart does not resurrect the last persisted revision;
-explicit daemon configuration remains required.
-
-Normal daemon construction loads `hosting.configuration.v3` from the top-level
-MP13 configuration and passes that one immutable object to `EngineHostService`.
-Package sources, credential references, dependency policy, and environment
-roots come from that authority. Credential values are resolved locally and are
-never launcher parameters.
-
-Foreground, background, service, local-channel bootstrap, and relay-equivalent
-startup accept only `mp13_config_file`. The configuration is validated before
-the listener is bound. No package mapping, credential, policy payload, or
-temporary launcher configuration is accepted.
-
-Detached startup never places a credential, configuration payload, policy
-payload, or artifact-source map in process arguments. Launcher diagnostics,
-results, and logs do not project configuration contents or credential values.
-
-Normal daemon construction starts or attaches to the canonical system setup
-operation without waiting for source I/O, resolution, installation, or probes.
-That worker scans only direct `*.zip` children of each bound read-only air-gap
-root, imports them through the verified artifact store, and passes only rehashed
-CAS object paths to resolution. Raw wheel files beside a bundle are never
-eligible. Invalid bundle ingestion produces a bounded degraded
-toolbox-readiness diagnostic while the general control plane remains available;
-no physical source path or public-key value is projected.
-
-Administrator bundle upload begins in a process-locked untrusted staging
-repository, never in the verified artifact store. Begin binds the authenticated
-owner and idempotency request ID to exactly one air-gap source ID, current
-config/source-set revisions, detected target, declared archive byte size, and
-SHA-256. Identical begin retries return the same `upload_id`; a changed binding
-is `artifact_upload_conflict`. At most 64 uploads are retained, an archive is
-bounded by both its source and resolution byte limits, and an open upload
-expires after 15 minutes.
-
-Chunks are unpadded base64url, at most 1 MiB decoded, and carry exact zero-based
-index and byte offset. Only the next contiguous chunk is accepted. Retrying an
-identical committed chunk is idempotent; changed content/order is rejected.
-Stage-file append is fsynced before one atomic metadata replacement, and restart
-continues from the last committed offset. Expiry or synchronous cancel removes
-only the untrusted stage file and retains bounded terminal metadata. Status and
-errors expose no stage path or chunk content. Begin/chunk/cancel alone cannot
-create a CAS object, evidence record, catalog entry, or materialization receipt.
-
-Only an authenticated administrator may call
-`package-artifact-upload-begin`, `package-artifact-upload-chunk`,
-`package-artifact-upload-status`, `package-artifact-upload-cancel`, or
-`package-artifact-upload-commit`. Commit requires a complete stage and binds
-one commit request ID to one content-addressed package receipt. Repeating the
-identical commit returns the same receipt; a changed binding is
-`package_upload_conflict`.
-
-Artifact-import progress is non-cancellable and uses only `validation`,
-`artifact_verification`, `publication`, and `cleanup`. The worker rehashes the
-complete staged archive against its declared byte size and SHA-256, verifies
-the complete staged bytes against size, digest, source, target, and dependency
-policy, and only then atomically indexes the artifact in the shared CAS. Terminal success
-is `artifact_upload_committed`; terminal cleanup removes the untrusted stage
-file. A verification failure publishes no new CAS entry and returns a stable
-bounded terminal code rather than exception or path text.
-
-After restart, an import interrupted before dispatch is redispatched on its
-existing operation ID. An import interrupted after dispatch is reconciled as
-success only from the durable committed upload result; otherwise that same
-operation becomes terminal failure with
-`artifact_upload_interrupted_after_dispatch`. Recovery never creates a
-parallel operation record.
-
-For a release-owned built-in, candidate construction requires one exact package
-lock whose artifact set covers the entire resolved closure. The immutable
-template provenance retains that lock and its secret-free source metadata. The
-host binds those inputs to the configured intent, exact closure, and detected
-target. The `mp13-engine` wheel
-digest in the closure is the parent-worker artifact digest. Absence of that
-runtime artifact fails before build.
-
-The hermetic builder receives an exact `(source_id, filename) -> verified CAS
-path` map. Once this map is configured it cannot fall back to a raw source
-root. Candidate preparation computes the final template digest, constructs the
-same strict resolved input used by catalog prewarm, installs the exact lock, and
-runs every declared import probe. This pre-publication boundary returns strict
-candidate receipts but writes neither the catalog nor the public receipt store.
-Any candidate failure releases all references created by that batch.
-
-Publication accepts only a prepared batch whose config/source revisions and
-target still match and whose template IDs exactly cover configured built-ins.
-It validates all candidate identities before mutation, writes the complete
-receipt set with one atomic receipt-store replacement, then publishes and
-activates the complete template set with one atomic catalog replacement.
-Ordinary catalog failure removes only receipts inserted by that attempt and
-releases candidate references. Retrying the identical prepared batch is
-idempotent and creates no duplicate revision.
-
-Physical environment identity deliberately permits templates with the same
-runtime artifact, complete lock, custom lock and isolation policy to share one
-immutable environment. Its physical verification receipt therefore compares
-only those physical fields, not logical template ID/digest. Every reuse still
-reruns the requesting template's complete import-root probes before a
-template-specific public receipt can be committed.
+The generic source filename index is daemon-owned resolution metadata over the
+same immutable CAS bytes; it is not a second artifact authority. Toolbox
+planning reads only enabled policy-allowed sources, confirmation rehashes the
+planned artifact identity, and materialization revalidates the indexed wheel
+against the exact approved digest and size. Apply consumes the package lock and
+`EnvironmentRequest` persisted by the plan without importing bytes or
+recreating the lock.
 
 Template construction, package ingress, environment materialization, and
-catalog activation use their generic package/environment operations. There is
-no toolbox-specific host setup operation or readiness authority. The daemon
-control plane remains available when no active template exists, and template
-selection fails with `environment_template_unavailable` until an administrator
-publishes and activates a complete revision backed by generic package locks.
+catalog activation use generic package/environment operations. There is no
+toolbox-specific host setup operation or readiness authority. When no active
+template exists, selection fails with `environment_template_unavailable`
+while the general control plane remains available.
 
-The required built-in `sandbox_policy` reference is `compute-only`. Its exact
+The default template `sandbox_policy` reference is `compute-only`. Its exact
 effective policy is:
 
 ```json
@@ -954,15 +779,12 @@ and remains independent of dependency approval. A package being importable
 never grants filesystem, network, subprocess, artifact, broker, or host API
 capability.
 
-In the startup worker, the host validates template records, complete package
-locks, artifact availability, target tags, worker artifact digest, and
-the ability to enforce compute-only isolation. It then materializes and import
-probes both required templates before standard readiness succeeds. Readiness is
-derived from the active catalog plus real materialization receipts, never from
-intent or a queued/running setup record. If the platform cannot enforce the
-policy, the host neither advertises nor launches the affected revision. A
-required intent with `prewarm: false` is an explicit non-standard deployment;
-it reports degraded readiness until that built-in has passed the same checks.
+Template prewarm validates the template record, complete package lock,
+artifact availability, target tags, worker artifact digest, and enforceable
+isolation before committing a materialization receipt. Readiness is derived
+from active catalog revisions plus their real receipts. If the platform cannot
+enforce the policy, the host neither advertises nor launches the affected
+revision.
 
 Readiness diagnostics use the generic stable codes
 `environment_template_unavailable`, `package_source_unavailable`,
@@ -976,8 +798,8 @@ paths, interpreter paths, or installer output.
 
 Selection always chooses the smallest allowed complete template. Source using
 only the standard library, staged local modules, and the parent worker closure
-selects `core`. Source requiring only reviewed shipped compute distributions
-selects `py-compute`. Other reviewed requirements select another active
+selects `core`. Source requiring only reviewed compute distributions may
+select an active `py-compute` revision. Other reviewed requirements select another active
 template when one exists; otherwise they form an exact custom delta subject to
 package policy and, when required, dependency approval. A caller cannot force a
 larger template merely because it is installed.

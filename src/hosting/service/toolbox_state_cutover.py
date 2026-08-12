@@ -21,7 +21,6 @@ _COMMIT_RE = re.compile(r"[0-9a-f]{40}")
 _NEWER_TOOLBOX_STATE_NAMES = (
     "toolbox_sandboxes_v2.json",
     "toolbox_definition_plans.json",
-    "toolbox_host_configurations.json",
     "toolbox_dependency_approvals.json",
     "toolbox_definition_confirmations.json",
     "toolbox_definition_candidates.json",

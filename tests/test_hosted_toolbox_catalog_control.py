@@ -22,7 +22,7 @@ from tests.hosting_v3_fixtures import hosting_configuration, write_hosting_confi
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SIGNATURE = "A" * 86
+VERIFICATION_EVIDENCE = "A" * 86
 
 
 def _digest(char: str) -> str:
@@ -91,7 +91,7 @@ def _publish(
     published = repo.publish_inactive(
         template=ToolboxEnvironmentTemplateSpec.from_dict(payload or _template_payload()),
         artifacts=(artifact or _artifact(),),
-        verification_evidence=SIGNATURE,
+        verification_evidence=VERIFICATION_EVIDENCE,
         actor_id="admin:test",
     )
     if activate:
@@ -129,7 +129,7 @@ def test_catalog_publishes_generic_template_without_verification_evidence(
     assert entry["verification_evidence"] is None
 
 
-def test_artifact_reference_and_signature_are_strict() -> None:
+def test_artifact_reference_and_optional_verification_evidence_are_strict() -> None:
     assert ToolboxTemplateArtifactReference.from_dict(_artifact().to_dict()) == _artifact()
     row = _artifact().to_dict()
     row["path"] = "C:/secret"
@@ -212,7 +212,7 @@ def test_consumer_projection_is_bounded_and_audit_is_redacted(tmp_path: Path) ->
     published = svc._toolbox_template_catalog.publish_inactive(  # noqa: SLF001
         template=ToolboxEnvironmentTemplateSpec.from_dict(_template_payload()),
         artifacts=(_artifact(),),
-        verification_evidence=SIGNATURE,
+        verification_evidence=VERIFICATION_EVIDENCE,
         actor_id="admin:test",
     )
     svc.toolbox_template_activate(
@@ -241,7 +241,7 @@ def test_consumer_projection_is_bounded_and_audit_is_redacted(tmp_path: Path) ->
         "template_digest": published["template_digest"],
         "outcome": "activated",
     }
-    assert SIGNATURE not in json.dumps(state["audit"])
+    assert VERIFICATION_EVIDENCE not in json.dumps(state["audit"])
 
 
 def test_service_describe_requires_active_or_exact_revision(tmp_path: Path) -> None:
@@ -251,7 +251,7 @@ def test_service_describe_requires_active_or_exact_revision(tmp_path: Path) -> N
     published = svc._toolbox_template_catalog.publish_inactive(  # noqa: SLF001
         template=ToolboxEnvironmentTemplateSpec.from_dict(_template_payload()),
         artifacts=(_artifact(),),
-        verification_evidence=SIGNATURE,
+        verification_evidence=VERIFICATION_EVIDENCE,
         actor_id="admin:test",
     )
     with pytest.raises(ValueError, match="active_revision_not_found"):

@@ -67,8 +67,6 @@ def test_resolved_rollout_skips_reused_and_spawns_added_as_candidate(tmp_path: P
     class Service:
         _toolbox_required_python_abi = TARGET.python_abi
         _toolbox_required_platform = TARGET.platform
-        engines_state_file = tmp_path / "engines.json"
-        control_state_file = tmp_path / "access.json"
         hosting_configuration_revision = _digest("f")
 
         def __init__(self) -> None:

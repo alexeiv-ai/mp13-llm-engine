@@ -41,7 +41,7 @@ TEMPLATE_REVISION_DOMAIN = "hosting.toolbox.template_revision.v1"
 MAX_CATALOG_REVISIONS = 512
 MAX_CATALOG_AUDIT_EVENTS = 4096
 _ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")
-_SIGNATURE_RE = re.compile(r"[A-Za-z0-9_-]{43,1024}")
+_VERIFICATION_EVIDENCE_RE = re.compile(r"[A-Za-z0-9_-]{43,1024}")
 
 
 def _strict_fields(row: Mapping[str, Any], fields: set[str], *, label: str) -> None:
@@ -130,7 +130,7 @@ def _normalize_verification_evidence(
             raise ValueError("template_verification_evidence_without_verifier")
         return None
     evidence = str(value or "")
-    if not _SIGNATURE_RE.fullmatch(evidence):
+    if not _VERIFICATION_EVIDENCE_RE.fullmatch(evidence):
         raise ValueError("template_verification_evidence_invalid")
     return evidence
 

@@ -24,7 +24,7 @@ from hosting.toolbox.catalog import ToolboxEnvironmentTemplateSpec
 from tests.hosting_v3_fixtures import hosting_configuration, write_hosting_configuration
 
 
-SIGNATURE = "A" * 86
+VERIFICATION_EVIDENCE = "A" * 86
 
 
 def _digest(char: str) -> str:
@@ -108,7 +108,7 @@ def _service(tmp_path: Path, materializer) -> EngineHostService:
     published = service._toolbox_template_catalog.publish_inactive(  # noqa: SLF001
         template=ToolboxEnvironmentTemplateSpec.from_dict(_template()),
         artifacts=(ToolboxTemplateArtifactReference.from_dict(_artifact()),),
-        verification_evidence=SIGNATURE,
+        verification_evidence=VERIFICATION_EVIDENCE,
         actor_id="admin:test",
     )
     service.toolbox_template_activate(

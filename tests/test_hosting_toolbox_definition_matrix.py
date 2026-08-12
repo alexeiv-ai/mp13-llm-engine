@@ -159,7 +159,7 @@ def _alternative(
         wheel_filename="demo_pkg-1.0.0-py3-none-any.whl",
         artifact_digest="sha256:" + "a" * 64,
         compatibility_tags=("py3-none-any",),
-        provenance="signed-test",
+        provenance="generic-test",
         source_id="release",
     )
     payload = {
@@ -472,7 +472,7 @@ def test_environment_offer_builder_orders_truncates_and_computes_exact_additions
             wheel_filename=f"{distribution.replace('-', '_')}-1.0.0-py3-none-any.whl",
             artifact_digest="sha256:" + str(index + 1) * 64,
             compatibility_tags=("py3-none-any",),
-            provenance="signed-test",
+            provenance="generic-test",
             source_id="preferred",
         )
         for index, (root, distribution) in enumerate(
@@ -540,7 +540,7 @@ def test_environment_offer_builder_emits_explicit_removal_without_candidates() -
         wheel_filename="demo_pkg-1.0.0-py3-none-any.whl",
         artifact_digest="sha256:" + "7" * 64,
         compatibility_tags=("py3-none-any",),
-        provenance="signed-test",
+        provenance="generic-test",
         source_id="release",
     )
     active_environment = ActiveToolboxEnvironmentResolution(

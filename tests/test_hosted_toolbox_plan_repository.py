@@ -111,7 +111,7 @@ def _complete_inputs(definition: dict):
         wheel_filename="demo_pkg-1.0.0-py3-none-any.whl",
         artifact_digest="sha256:" + "3" * 64,
         compatibility_tags=("py3-none-any",),
-        provenance="signed-test",
+        provenance="generic-test",
         source_id="release",
     )
     mutation = ToolboxPackageMutationSpec(
