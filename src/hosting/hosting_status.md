@@ -594,6 +594,15 @@ the slice.
   bodies, credentials, and package policy were absent; remote inspection,
   errors, receipts, and audit omitted secret values and resolved host paths
 
+### TEST-R9.3A — unified lifecycle startup surface
+
+- Date: 2026-08-11
+- Plan IDs: R9.3 startup modes; P2; high expertise
+- Proof: 25 focused direct/background/HTTP-service/relay-equivalent startup,
+  package, and environment tests passed; each startup callable exposes exactly
+  the top-level MP13 configuration input and no toolbox mapping or mutable
+  control-state input
+
 Append one concise entry per completed slice. Include exact commands, counts,
 durations where useful, negative-path results, commit pin, and dependent receipt
 impact. Do not paste an unstructured full test transcript.

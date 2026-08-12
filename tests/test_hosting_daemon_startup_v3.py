@@ -7,6 +7,9 @@ from pathlib import Path
 import pytest
 
 from hosting.daemon.background import start_daemon_background
+from hosting.daemon.background import start_http_ingress_background
+from hosting.daemon.foreground import run_daemon_foreground, run_http_ingress_foreground
+from hosting.engine_host_cli import _ensure_relay_daemon_ready
 from hosting.daemon.local_ipc import EngineHostDaemon
 from hosting.hosting_configuration import HostingConfigurationError, load_hosting_configuration
 from hosting.service.host_service import EngineHostService
@@ -102,6 +105,20 @@ def test_startup_signatures_reject_removed_inputs() -> None:
         assert removed not in background_parameters
     assert "mp13_config_file" in daemon_parameters
     assert "mp13_config_file" in background_parameters
+
+
+def test_all_startup_paths_expose_one_configuration_input() -> None:
+    for callable_ in (
+        run_daemon_foreground,
+        start_daemon_background,
+        run_http_ingress_foreground,
+        start_http_ingress_background,
+        _ensure_relay_daemon_ready,
+    ):
+        parameters = inspect.signature(callable_).parameters
+        assert "mp13_config_file" in parameters
+        assert not any(name.startswith("toolbox_") for name in parameters)
+        assert "control_state_file" not in parameters
 
 
 def test_daemon_validates_configuration_before_initializing_pid_or_listener(tmp_path: Path) -> None:

@@ -826,7 +826,7 @@ Proof: record the exact security suite and negative-path results in
 
 ##### R9.3 Run lifecycle and no-double acceptance
 
-- [ ] Exercise direct, background, service, and relay-equivalent startup.
+- [x] Exercise direct, background, service, and relay-equivalent startup.
 - [ ] Exercise package upload, source resolution, environment build/reuse,
   template replacement, reference release, removal, repair, and GC across
   disconnect/retry/restart boundaries.
