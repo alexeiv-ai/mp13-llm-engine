@@ -151,3 +151,18 @@ def test_public_role_commands_use_only_generic_environment_names() -> None:
     assert "environment-remove" in all_commands
     assert not any(command.startswith("toolbox-template-") for command in all_commands)
     assert "toolbox-environment-remove" not in all_commands
+
+
+def test_lower_roles_cannot_mutate_templates_environments_references_or_gc() -> None:
+    sensitive = {
+        "environment-template-construct", "environment-template-activate",
+        "environment-template-replace", "environment-template-deprecate",
+        "environment-template-revoke", "environment-template-prewarm",
+        "environment-remove", "environment-reference-release", "environment-gc",
+    }
+    diagnostic = AuthMixin._commands_allowed_for_role("diagnostic_user")
+    worker = AuthMixin._commands_allowed_for_role("worker_user")
+    assert sensitive.isdisjoint(diagnostic)
+    assert "environment-template-list" in diagnostic
+    assert "environment-template-list" in worker
+    assert "environment-template-construct" not in worker

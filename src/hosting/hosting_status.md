@@ -500,6 +500,20 @@ the slice.
 - Proof: production public-surface search returned zero for the retired fields;
   18 focused environment/package/startup tests passed
 
+### TEST-R9A — internal security/removal checkpoint
+
+- Date: 2026-08-11
+- Plan IDs: R9.2/R9.4 (partial); P2; high expertise
+- Proof: 28 focused configuration, startup, package, environment, role, denial,
+  redaction, hashing, retry, and concurrency tests passed; diagnostic/worker
+  roles cannot mutate generic templates, environments, references, or GC
+- Production removal search: zero Python matches for the old authority filename,
+  upload/template/environment commands, three legacy environment roots, and
+  three retired environment class names
+- Remaining: migrate/delete inventoried legacy tests and permanent-doc matches,
+  exercise password/public-key policy parity, and run process/log/path leakage
+  acceptance before closing R9.2/R9.4
+
 Append one concise entry per completed slice. Include exact commands, counts,
 durations where useful, negative-path results, commit pin, and dependent receipt
 impact. Do not paste an unstructured full test transcript.
