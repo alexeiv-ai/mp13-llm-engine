@@ -189,7 +189,7 @@ def _background_session_renew_loop(args: argparse.Namespace, stop_event: threadi
                 channel.set_session_token(None)
             continue
         try:
-            ttl_remaining = int(data.get("ttl_remaining_seconds"))
+            ttl_remaining = int(str(data.get("ttl_remaining_seconds")))
         except Exception:
             continue
         if ttl_remaining > _SESSION_RENEW_MIN_TTL_SECONDS:
@@ -476,7 +476,8 @@ def _configured_model_path_from_config_row(row: Dict[str, Any]) -> Optional[str]
     cfg = _read_json_file(str(row.get("path") or ""))
     if not cfg:
         return None
-    engine_params = cfg.get("engine_params") if isinstance(cfg.get("engine_params"), dict) else {}
+    raw_engine_params = cfg.get("engine_params")
+    engine_params: Dict[str, Any] = dict(raw_engine_params) if isinstance(raw_engine_params, dict) else {}
     value = (
         engine_params.get("base_model_path")
         or cfg.get("base_model_path")
@@ -491,7 +492,8 @@ def _config_uses_generic_worker(row: Dict[str, Any]) -> bool:
     cfg = _read_json_file(str(row.get("path") or ""))
     if not cfg:
         return False
-    hosting_cfg = cfg.get("hosting") if isinstance(cfg.get("hosting"), dict) else {}
+    raw_hosting_cfg = cfg.get("hosting")
+    hosting_cfg: Dict[str, Any] = dict(raw_hosting_cfg) if isinstance(raw_hosting_cfg, dict) else {}
     marker = str(
         cfg.get("worker_kind")
         or cfg.get("worker_type")
@@ -501,7 +503,8 @@ def _config_uses_generic_worker(row: Dict[str, Any]) -> bool:
     ).strip().lower()
     if marker in {"generic", "non_model", "worker", "generic_worker"}:
         return True
-    spawn_cfg = cfg.get("spawn") if isinstance(cfg.get("spawn"), dict) else {}
+    raw_spawn_cfg = cfg.get("spawn")
+    spawn_cfg: Dict[str, Any] = dict(raw_spawn_cfg) if isinstance(raw_spawn_cfg, dict) else {}
     return bool(
         (isinstance(cfg.get("worker_command"), list) and cfg.get("worker_command"))
         or (isinstance(spawn_cfg.get("command"), list) and spawn_cfg.get("command"))
@@ -941,7 +944,7 @@ def _obtain_session_token(
 ) -> Optional[str]:
     print(f"\n{_c('warn', 'Authentication required. Please provide an admin private key.')}")
     print(_c('muted', "You can paste the private key content, a JSON SecretRecord blob (end with an empty line), or provide a file path."))
-    lines = []
+    lines: List[str] = []
     while True:
         try:
             line = input("> ")
@@ -1743,12 +1746,12 @@ def _print_live_consumers(res: Dict[str, Any], session_token: Optional[str]) -> 
         if bits:
             print(f"    Activity: {', '.join(bits)}")
 
-    actors = [dict(item or {}) for item in list(dict(res or {}).get("actors") or []) if isinstance(item, dict)]
-    if actors:
+    actor_rows = [dict(item or {}) for item in list(dict(res or {}).get("actors") or []) if isinstance(item, dict)]
+    if actor_rows:
         print()
         print("  Actor connection counts:")
-        for row in actors:
-            print(f"    - {row.get('actor_id')}: {row.get('connection_count')}")
+        for actor_row in actor_rows:
+            print(f"    - {actor_row.get('actor_id')}: {actor_row.get('connection_count')}")
 
 
 def _workflow_environment_key(info: Dict[str, Any]) -> str:
@@ -2496,7 +2499,7 @@ def _load_engine(args: argparse.Namespace, session_token: Optional[str]) -> Opti
                         models_raw = []
                     models = [dict(item or {}) for item in list(models_raw or []) if isinstance(item, dict)]
                     model_opts: Dict[str, tuple[str, str]] = {}
-                    model_by_key: Dict[str, str] = {}
+                    running_model_by_key: Dict[str, str] = {}
                     for idx, row in enumerate(models, start=1):
                         key = str(idx)
                         path = str(row.get("path") or "").strip()
@@ -2542,7 +2545,7 @@ def _load_engine(args: argparse.Namespace, session_token: Optional[str]) -> Opti
                                 continue
                             key = str(idx)
                             idx += 1
-                            model_by_key[key] = mpath
+                            running_model_by_key[key] = mpath
                             load_opts[key] = (f"Use running {mid}", mpath)
                         if not loaded_models and _operator_resource_kind(info).endswith("model instance"):
                             worker_id = str(info.get("worker_id") or eid).strip()
@@ -2567,8 +2570,8 @@ def _load_engine(args: argparse.Namespace, session_token: Optional[str]) -> Opti
                                 continue
                             break
                         force_new = load_choice == "new"
-                        if load_choice in model_by_key:
-                            model_path = model_by_key[load_choice]
+                        if load_choice in running_model_by_key:
+                            model_path = running_model_by_key[load_choice]
                             force_new = False
                         target_worker_id = target_worker_by_key.get(load_choice, "")
                         if target_worker_id:
