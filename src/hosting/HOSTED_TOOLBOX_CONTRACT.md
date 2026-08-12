@@ -920,43 +920,12 @@ only those physical fields, not logical template ID/digest. Every reuse still
 reruns the requesting template's complete import-root probes before a
 template-specific public receipt can be committed.
 
-Built-in realization is represented by one system-owned durable hosted
-operation. Its execution kind is `toolbox_setup`, its only selector is
-`host_scope: toolbox-host`, its receipt namespace is
-`toolbox_setup:toolbox-host`, and its owner is `system:toolbox-setup`. The
-request fingerprint binds the complete `config_revision`,
-`source_set_revision`, and detected target. Start returns the queued or running
-generic `hosting.operation_status` immediately; a duplicate request ID with the
-same fingerprint attaches to the same canonical operation.
-
-Setup progress uses only `resolution`, `acquisition`,
-`artifact_verification`, `environment_build`, `import_probe`, `prewarm`, and
-`publication`. Acquisition units are verified artifact bytes; candidate and
-publication phases use bounded item counts. The operation is never
-cancellable. Its terminal success code is `toolbox_setup_ready`; resolution or
-execution failure is terminal with a stable bounded diagnostic. Toolbox
-readiness remains false until the complete receipt and catalog publication has
-succeeded. Clients recover it through the generic hosted-operation
-status/result/request-recovery APIs and never create an actor-owned parallel
-record.
-
-On restart, a queued operation that had not claimed dispatch is redispatched
-once on the same operation ID. An operation interrupted after dispatch is never
-blindly replayed: it is reconciled as success only when its durable
-`builtin_publication_committed` checkpoint and current real materialization
-receipts prove complete publication. Otherwise the same record becomes terminal
-failure with `toolbox_setup_interrupted_after_dispatch`, readiness stays false,
-and no replacement or parallel setup record is created. The sanitized canonical
-status is projected as `toolbox_setup_operation` in the hosting setup summary.
-
-The daemon control plane remains available when toolbox setup is absent,
-partial, or invalid. `toolbox_readiness` then uses only the generic hosting
-readiness codes: `hosting_configuration_missing`,
-`environment_template_unavailable`, `environment_build_failed`, or
-`package_policy_rejected`; ready state uses `ready`. The normal projection
-contains a bounded summary and detected target but no parser exception,
-credential, signed query, origin path, or daemon path. No built-in catalog
-entry is published from an invalid or incomplete setup.
+Template construction, package ingress, environment materialization, and
+catalog activation use their generic package/environment operations. There is
+no toolbox-specific host setup operation or readiness authority. The daemon
+control plane remains available when no active template exists, and template
+selection fails with `environment_template_unavailable` until an administrator
+publishes and activates a complete revision backed by generic package locks.
 
 The required built-in `sandbox_policy` reference is `compute-only`. Its exact
 effective policy is:

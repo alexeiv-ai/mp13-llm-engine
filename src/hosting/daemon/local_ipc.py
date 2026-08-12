@@ -62,10 +62,6 @@ class EngineHostDaemon:
         local_transport = _daemon_local_ipc_endpoint(self.pid_file.path)
         self._local_transport = dict(local_transport)
         self.svc = EngineHostService(hosting_configuration=hosting_configuration)
-        self.svc._toolbox_setup_diagnostic = {  # noqa: SLF001
-            "code": "environment_template_missing",
-            "summary": "No environment template has been activated.",
-        }
         self.svc.assert_runtime_policy_safe()
         self._server: Optional[asyncio.AbstractServer] = None
         self._stop_event: Optional[asyncio.Event] = None

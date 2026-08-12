@@ -200,7 +200,6 @@ class EngineHostService(CoreMixin, MetricsMixin, StateMixin, ConfigMixin, Contro
         }
         self._ensure_metrics_initialized()
         self._toolbox_startup = None
-        self._toolbox_setup_operation = None
         self._toolbox_config_transition = None
         self._toolbox_artifact_store = AtomicToolboxArtifactStore(
             self.hosting_root / "toolbox_artifact_store"
