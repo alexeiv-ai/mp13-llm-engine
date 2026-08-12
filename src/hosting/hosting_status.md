@@ -603,6 +603,16 @@ the slice.
   the top-level MP13 configuration input and no toolbox mapping or mutable
   control-state input
 
+### CODE-R9.3B — public generic environment lifecycle
+
+- Date: 2026-08-11
+- Plan IDs: R9.1/R9.3 (partial); P2; high expertise
+- Outcome: reference list/release, execution begin/end, exact removal, and GC
+  are available through authenticated policy, daemon dispatch, channel, CLI,
+  and capability negotiation using only generic payload identities
+- Proof: 11 focused lifecycle/role/channel tests passed with exact payload
+  comparisons and lower-role denial coverage
+
 Append one concise entry per completed slice. Include exact commands, counts,
 durations where useful, negative-path results, commit pin, and dependent receipt
 impact. Do not paste an unstructured full test transcript.

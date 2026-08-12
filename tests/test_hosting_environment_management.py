@@ -152,6 +152,8 @@ def test_public_role_commands_use_only_generic_environment_names() -> None:
     )))
     assert "environment-template-list" in all_commands
     assert "environment-remove" in all_commands
+    assert "environment-reference-release" in all_commands
+    assert "environment-gc" in all_commands
     assert not any(command.startswith("toolbox-template-") for command in all_commands)
     assert "toolbox-environment-remove" not in all_commands
 
@@ -211,3 +213,21 @@ def test_repair_is_observational_by_default_and_mutation_requires_authority() ->
         request_id="mutate", toolbox_ids=["demo"], apply=True, mutation_authorized=True
     )
     assert started["status"] == "started"
+
+
+def test_environment_channel_exposes_exact_lifecycle_payloads() -> None:
+    from hosting.engine_host_channel import EngineHostControlChannel
+
+    channel = EngineHostControlChannel({})
+    calls = []
+    channel._invoke = lambda command, payload: calls.append((command, payload)) or {"status": "ok"}  # type: ignore[method-assign]
+    channel.environment_reference_release(reference_id="ref-1")
+    channel.environment_execution_begin(environment_id=LOCK_DIGEST, execution_id="exec-1")
+    channel.environment_execution_end(execution_id="exec-1")
+    channel.environment_gc()
+    assert calls == [
+        ("environment-reference-release", {"reference_id": "ref-1"}),
+        ("environment-execution-begin", {"environment_id": LOCK_DIGEST, "execution_id": "exec-1"}),
+        ("environment-execution-end", {"execution_id": "exec-1"}),
+        ("environment-gc", {}),
+    ]

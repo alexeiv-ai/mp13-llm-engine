@@ -91,6 +91,11 @@ _TOOLBOX_DEPENDENCY_APPROVAL_COMMANDS = {
 
 _TOOLBOX_ENVIRONMENT_ADMIN_COMMANDS = {
     "environment-remove",
+    "environment-reference-list",
+    "environment-reference-release",
+    "environment-execution-begin",
+    "environment-execution-end",
+    "environment-gc",
 }
 
 _PACKAGE_UPLOAD_COMMANDS = {

@@ -3501,6 +3501,21 @@ class EngineHostControlChannel:
         )
         return dict(res or {})
 
+    def environment_reference_list(self, *, cursor: str = "", limit: int = 100) -> Dict[str, Any]:
+        return dict(self._invoke("environment-reference-list", {"cursor": str(cursor or ""), "limit": int(limit)}) or {})
+
+    def environment_reference_release(self, *, reference_id: str) -> Dict[str, Any]:
+        return dict(self._invoke("environment-reference-release", {"reference_id": str(reference_id or "")}) or {})
+
+    def environment_execution_begin(self, *, environment_id: str, execution_id: str) -> Dict[str, Any]:
+        return dict(self._invoke("environment-execution-begin", {"environment_id": str(environment_id or ""), "execution_id": str(execution_id or "")}) or {})
+
+    def environment_execution_end(self, *, execution_id: str) -> Dict[str, Any]:
+        return dict(self._invoke("environment-execution-end", {"execution_id": str(execution_id or "")}) or {})
+
+    def environment_gc(self) -> Dict[str, Any]:
+        return dict(self._invoke("environment-gc", {}) or {})
+
     def toolbox_get_definition(
         self, *, toolbox_id: str, operator_details: bool = False
     ) -> Dict[str, Any]:

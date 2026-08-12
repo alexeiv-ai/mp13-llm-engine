@@ -896,6 +896,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "toolbox-state-archive-v1",
         "toolbox-gc",
         "environment-remove",
+        "environment-reference-list",
+        "environment-reference-release",
+        "environment-execution-begin",
+        "environment-execution-end",
+        "environment-gc",
         "toolbox-get-definition",
         "toolbox-plan-definition",
         "toolbox-confirm-definition-plan",
@@ -2012,6 +2017,21 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
             return 0
         if cmd == "environment-remove":
             _print_ok(svc.environment_remove(environment_id=str(payload.get("environment_id") or "")))
+            return 0
+        if cmd == "environment-reference-list":
+            _print_ok(svc.environment_reference_list(cursor=str(payload.get("cursor") or ""), limit=int(payload.get("limit") or 100)))
+            return 0
+        if cmd == "environment-reference-release":
+            _print_ok(svc.environment_reference_release(reference_id=str(payload.get("reference_id") or "")))
+            return 0
+        if cmd == "environment-execution-begin":
+            _print_ok(svc.environment_execution_begin(environment_id=str(payload.get("environment_id") or ""), execution_id=str(payload.get("execution_id") or "")))
+            return 0
+        if cmd == "environment-execution-end":
+            _print_ok(svc.environment_execution_end(execution_id=str(payload.get("execution_id") or "")))
+            return 0
+        if cmd == "environment-gc":
+            _print_ok(svc.environment_gc())
             return 0
         if cmd == "toolbox-get-definition":
             _print_ok(

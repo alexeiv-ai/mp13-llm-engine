@@ -3216,6 +3216,16 @@ class EngineHostDaemon:
             )
         if cmd == "environment-remove":
             return svc.environment_remove(environment_id=str(payload.get("environment_id") or ""))
+        if cmd == "environment-reference-list":
+            return svc.environment_reference_list(cursor=str(payload.get("cursor") or ""), limit=payload.get("limit") or 100)
+        if cmd == "environment-reference-release":
+            return svc.environment_reference_release(reference_id=str(payload.get("reference_id") or ""))
+        if cmd == "environment-execution-begin":
+            return svc.environment_execution_begin(environment_id=str(payload.get("environment_id") or ""), execution_id=str(payload.get("execution_id") or ""))
+        if cmd == "environment-execution-end":
+            return svc.environment_execution_end(execution_id=str(payload.get("execution_id") or ""))
+        if cmd == "environment-gc":
+            return svc.environment_gc()
         if cmd == "toolbox-get-definition":
             actor = str(payload.get("_claim_actor_id") or "service:local")
             return svc.toolbox_get_definition(
