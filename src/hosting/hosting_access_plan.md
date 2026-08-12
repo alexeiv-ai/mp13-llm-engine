@@ -180,19 +180,19 @@ R7 plan/confirmation field assertions are provisional and must be replaced.
 
 ### R7.2 — materialize, try, and publish exact candidates
 
-- [ ] Make materialization consume immutable generic environment
+- [x] Make materialization consume immutable generic environment
   receipts/references while preserving runtime, proxy, sandbox, exposure, and
   execution constraints.
-- [ ] Split existing candidate rollout at its pre-publication boundary into
+- [x] Split existing candidate rollout at its pre-publication boundary into
   durable prepare/get/renew/execute/publish/discard operations.
 - [ ] Add requested lifetime, repeated renewal, in-flight execution leases,
   quotas, expiry/discard cleanup, restart recovery, and stale authorization,
   definition, environment, package-lock, and configuration-pin checks.
 - [x] Add the frozen retention/limit fields to strict v3 lifecycle validation
   and sanitized health without creating another configuration authority.
-- [ ] Reuse normal `toolbox_worker` protocol and candidate routing; prove a
+- [x] Reuse normal `toolbox_worker` protocol and candidate routing; prove a
   candidate route is never visible through active toolbox execution.
-- [ ] Publish the exact warmed candidate without rebuild/reresolution, retain
+- [x] Publish the exact warmed candidate without rebuild/reresolution, retain
   one-shot apply, and keep handoff result/error/no-double semantics exact.
 
 Frequent-edit acceptance must exercise source-only edits with environment

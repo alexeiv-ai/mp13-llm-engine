@@ -1754,6 +1754,202 @@ class ToolboxRuntimeMixin:
                 now_ms=int(time.time() * 1000),
             )
 
+    def toolbox_publish_definition_candidate(
+        self,
+        *,
+        candidate_ref: str,
+        request_id: str,
+        owner_actor_id: str = "service:local",
+        authority_id: str = "authority:local",
+    ) -> Dict[str, Any]:
+        now_ms = int(time.time() * 1000)
+        candidate = self._toolbox_definition_candidates.get(
+            candidate_ref,
+            owner_actor_id=owner_actor_id,
+            authority_id=authority_id,
+            now_ms=now_ms,
+        )
+        self._validate_toolbox_candidate_pins(candidate)
+        prepared = self._hosted_operations.prepare(
+            owner_actor_id=str(owner_actor_id or "").strip(),
+            execution_kind=HostedExecutionKind.TOOLBOX_DEFINITION_CANDIDATE_PUBLISH,
+            selector={"kind": "toolbox_id", "id": candidate.toolbox_id},
+            namespace=f"toolbox-definition-candidate:{candidate.toolbox_id}",
+            request_id=str(request_id or "").strip(),
+            fingerprint=hosted_execution_fingerprint({
+                "candidate_ref_digest": candidate.candidate_ref_digest,
+                "definition_revision": candidate.definition_revision,
+                "pins": candidate.pins.to_dict(),
+            }),
+            metadata={
+                "toolbox_id": candidate.toolbox_id,
+                "definition_revision": candidate.definition_revision,
+                "candidate_ref_digest": candidate.candidate_ref_digest,
+                "configuration_revision": candidate.pins.configuration_revision,
+            },
+        )
+        status = dict(prepared.get("status") or {})
+        if prepared.get("action") != "dispatch":
+            return status
+        operation_id = str(dict(status.get("operation") or {}).get("operation_id") or "")
+        threading.Thread(
+            target=self._publish_resolved_toolbox_definition_candidate,
+            kwargs={
+                "candidate": candidate,
+                "candidate_ref": candidate_ref,
+                "operation_id": operation_id,
+            },
+            name=f"toolbox-candidate-publish-{operation_id[:12]}",
+            daemon=True,
+        ).start()
+        return status
+
+    def _publish_resolved_toolbox_definition_candidate(
+        self, *, candidate: Any, candidate_ref: str, operation_id: str
+    ) -> Dict[str, Any]:
+        from .toolbox_rollout import ToolboxDefinitionRolloutCoordinator
+
+        try:
+            return self._run_locked_toolbox_call(
+                candidate.toolbox_id,
+                ToolboxDefinitionRolloutCoordinator(self).publish_prepared_candidate,
+                candidate=candidate,
+                candidate_ref=candidate_ref,
+                operation_id=operation_id,
+            )
+        except Exception as exc:
+            return self._hosted_operations.finish(
+                operation_id=operation_id,
+                lifecycle=HostedOperationLifecycle.TERMINAL_FAILURE,
+                envelope={
+                    "contract": "hosting.toolbox.definition_apply_result",
+                    "status": "error",
+                    "code": "candidate_stale" if "candidate" in str(exc) else "apply_failed",
+                    "toolbox_id": candidate.toolbox_id,
+                    "diagnostics": [{
+                        "code": "candidate_stale" if "candidate" in str(exc) else "apply_failed",
+                        "summary": "The exact candidate could not be published.",
+                    }],
+                },
+                reason=str(exc) or "apply_failed",
+            )
+
+    def toolbox_discard_definition_candidate(
+        self,
+        *,
+        candidate_ref: str,
+        request_id: str,
+        owner_actor_id: str = "service:local",
+        authority_id: str = "authority:local",
+    ) -> Dict[str, Any]:
+        now_ms = int(time.time() * 1000)
+        candidate = self._toolbox_definition_candidates.get(
+            candidate_ref,
+            owner_actor_id=owner_actor_id,
+            authority_id=authority_id,
+            now_ms=now_ms,
+        )
+        prepared = self._hosted_operations.prepare(
+            owner_actor_id=str(owner_actor_id or "").strip(),
+            execution_kind=HostedExecutionKind.TOOLBOX_DEFINITION_CANDIDATE_DISCARD,
+            selector={"kind": "toolbox_id", "id": candidate.toolbox_id},
+            namespace=f"toolbox-definition-candidate:{candidate.toolbox_id}",
+            request_id=str(request_id or "").strip(),
+            fingerprint=hosted_execution_fingerprint({
+                "candidate_ref_digest": candidate.candidate_ref_digest,
+                "definition_revision": candidate.definition_revision,
+            }),
+            metadata={
+                "toolbox_id": candidate.toolbox_id,
+                "definition_revision": candidate.definition_revision,
+                "candidate_ref_digest": candidate.candidate_ref_digest,
+            },
+        )
+        status = dict(prepared.get("status") or {})
+        if prepared.get("action") != "dispatch":
+            return status
+        operation_id = str(dict(status.get("operation") or {}).get("operation_id") or "")
+        threading.Thread(
+            target=self._discard_resolved_toolbox_definition_candidate,
+            kwargs={
+                "candidate": candidate,
+                "candidate_ref": candidate_ref,
+                "operation_id": operation_id,
+            },
+            name=f"toolbox-candidate-discard-{operation_id[:12]}",
+            daemon=True,
+        ).start()
+        return status
+
+    def _discard_resolved_toolbox_definition_candidate(
+        self, *, candidate: Any, candidate_ref: str, operation_id: str
+    ) -> Dict[str, Any]:
+        try:
+            self._hosted_operations.mark_dispatch_claimed(operation_id=operation_id)
+            for phase, code, summary, cancellable in (
+                ("validation", "definition_candidate_discard_validated", "The discard request is valid.", True),
+                ("draining", "definition_candidate_discard_draining", "Candidate workers are being retired.", False),
+            ):
+                self._hosted_operations.update_progress(
+                    operation_id=operation_id,
+                    progress={
+                        "phase": phase, "code": code, "completed_units": None,
+                        "total_units": None, "updated_at_ms": int(time.time() * 1000),
+                        "summary": summary, "cancellable": cancellable,
+                    },
+                )
+            transitioned = self._toolbox_definition_candidates.transition(
+                candidate_ref,
+                owner_actor_id=candidate.owner_actor_id,
+                authority_id=candidate.authority_id,
+                state_name="discarded",
+                now_ms=int(time.time() * 1000),
+            )
+            active = self._toolbox_state_v2.get(candidate.toolbox_id)
+            active_engine_ids = {
+                str(dict(route or {}).get("engine_id") or "")
+                for route in dict(dict(active or {}).get("tool_routes") or {}).values()
+            }
+            for engine_id in list(candidate.retained_payload["candidate_engine_ids"]):
+                if engine_id not in active_engine_ids:
+                    self._retire_toolbox_registration(str(engine_id))
+            for reference_id in list(candidate.retained_payload["environment_references"]):
+                if reference_id not in set(dict(active or {}).get("environment_references") or []):
+                    self._environment_manager.release(reference_id=str(reference_id))
+            self._hosted_operations.update_progress(
+                operation_id=operation_id,
+                progress={
+                    "phase": "cleanup", "code": "definition_candidate_discard_cleanup",
+                    "completed_units": 1, "total_units": 1,
+                    "updated_at_ms": int(time.time() * 1000),
+                    "summary": "Candidate resources are retired.", "cancellable": False,
+                },
+            )
+            return self._hosted_operations.finish(
+                operation_id=operation_id,
+                lifecycle=HostedOperationLifecycle.TERMINAL_SUCCESS,
+                envelope={
+                    "contract": "hosting.toolbox.definition_candidate_discard_result.v1",
+                    "toolbox_id": candidate.toolbox_id,
+                    "definition_revision": candidate.definition_revision,
+                    "state": transitioned.state,
+                    "user_projection": {
+                        "code": "candidate_discarded",
+                        "summary": "The toolbox candidate was discarded.",
+                    },
+                },
+            )
+        except Exception as exc:
+            return self._hosted_operations.finish(
+                operation_id=operation_id,
+                lifecycle=HostedOperationLifecycle.TERMINAL_FAILURE,
+                envelope={
+                    "contract": "hosting.toolbox.definition_candidate_discard_result.v1",
+                    "status": "error", "code": str(exc) or "candidate_stale",
+                },
+                reason=str(exc) or "candidate_stale",
+            )
+
     def _apply_resolved_toolbox_definition(
         self,
         *,

@@ -363,6 +363,15 @@ as active execution. A durable candidate lease is acquired before dispatch and
 released only after the ordinary terminal result, so nominal candidate expiry
 cannot retire resources underneath an in-flight call.
 
+Publishing a ready candidate consumes only its retained definition, runtime
+profiles, tool routes, generic environment references, and already-warmed
+candidate registrations. It never invokes planning, resolution,
+materialization, staging, or spawn again. The active snapshot changes once at
+the normal atomic publication boundary and returns the existing definition
+apply result. Discard transitions the candidate before retiring its non-active
+workers and generic references; either mutation is denied while an execution
+lease remains in flight.
+
 The resulting plan is stored in the process-safe atomic definition-plan
 repository. Its ID binds toolbox ID, definition revision, expected active
 revision, catalog revision, package-policy revision, resolved profiles, and

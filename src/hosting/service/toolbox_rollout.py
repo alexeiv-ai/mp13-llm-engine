@@ -466,6 +466,125 @@ class ToolboxDefinitionRolloutCoordinator:
                 reason=code,
             )
 
+    def publish_prepared_candidate(
+        self,
+        *,
+        candidate: Any,
+        candidate_ref: str,
+        operation_id: str,
+    ) -> dict[str, Any]:
+        """Publish only the exact runtime payload retained by candidate preparation."""
+
+        repository = self.service._hosted_operations
+        operation = repository.get_by_operation_id(operation_id)
+        if operation is None:
+            raise KeyError(operation_id)
+        if operation["lifecycle"] == HostedOperationLifecycle.QUEUED.value:
+            repository.mark_dispatch_claimed(operation_id=operation_id)
+        payload = dict(candidate.retained_payload)
+        toolbox_id = candidate.toolbox_id
+        old_snapshot = self.service._toolbox_state_v2.get(toolbox_id)
+        expected_revision = payload["expected_active_revision"]
+        if dict(old_snapshot or {}).get("active_revision") != expected_revision:
+            raise ValueError("candidate_stale")
+        profiles = dict(payload["profiles"])
+        routes = dict(payload["routes"])
+        references = list(payload["environment_references"])
+        candidate_engine_ids = set(payload["candidate_engine_ids"])
+        if {
+            str(dict(row or {}).get("engine_id") or "") for row in profiles.values()
+        } - candidate_engine_ids - {
+            str(dict(row or {}).get("engine_id") or "")
+            for row in dict(dict(old_snapshot or {}).get("profiles") or {}).values()
+        }:
+            raise ValueError("candidate_stale")
+        self._progress(
+            operation_id,
+            phase="validation",
+            code="definition_candidate_publish_validated",
+            summary="The exact warmed candidate is valid for publication.",
+            cancellable=True,
+        )
+        self._progress(
+            operation_id,
+            phase="publication",
+            code="definition_candidate_publication",
+            summary="The exact warmed candidate routes are being published.",
+            cancellable=False,
+            completed_units=0,
+            total_units=1,
+        )
+        snapshot = self.service._toolbox_state_v2.publish(
+            toolbox_id=toolbox_id,
+            expected_revision=expected_revision,
+            definition=dict(payload["definition"]),
+            profiles=profiles,
+            tool_routes=routes,
+            environment_references=references,
+            published_at_ms=self._now_ms(),
+        )
+        active_engine_ids = {str(item["engine_id"]) for item in profiles.values()}
+        if active_engine_ids:
+            self.service.set_toolbox_registration_routing_states(
+                {engine_id: "active" for engine_id in active_engine_ids}
+            )
+        self._progress(
+            operation_id,
+            phase="draining",
+            code="definition_candidate_draining",
+            summary="Replaced workers are being drained.",
+            cancellable=False,
+        )
+        drain = self._drain_old(old_snapshot, active_engine_ids)
+        self._release_displaced_environment_references(
+            old_snapshot=old_snapshot, active_references=references
+        )
+        self.service._toolbox_definition_candidates.transition(
+            candidate_ref,
+            owner_actor_id=candidate.owner_actor_id,
+            authority_id=candidate.authority_id,
+            state_name="published",
+            now_ms=self._now_ms(),
+        )
+        self._progress(
+            operation_id,
+            phase="cleanup",
+            code="definition_candidate_publish_cleanup",
+            summary="Candidate publication cleanup is complete.",
+            cancellable=False,
+        )
+        confirmation = dict(payload["confirmation_result"])
+        return repository.finish(
+            operation_id=operation_id,
+            lifecycle=HostedOperationLifecycle.TERMINAL_SUCCESS,
+            envelope={
+                "contract": "hosting.toolbox.definition_apply_result",
+                "status": "ok",
+                "code": "definition_apply_succeeded",
+                "toolbox_id": toolbox_id,
+                "active_revision": snapshot["active_revision"],
+                "active_tool_names": sorted(snapshot["tool_routes"]),
+                "accepted_tool_keys": list(confirmation.get("accepted_tool_keys") or []),
+                "skipped_tools": list(confirmation.get("skipped_tools") or []),
+                "preserved_active_tool_keys": list(
+                    confirmation.get("preserved_active_tool_keys") or []
+                ),
+                "removed_tool_keys": list(confirmation.get("removed_tool_keys") or []),
+                "package_mutations": list(confirmation.get("package_mutations") or []),
+                "rollout_summary": {
+                    "reused_profiles": int(payload["reused_profile_count"]),
+                    "changed_profiles": len(candidate_engine_ids),
+                    "retired_profiles": len(drain["retired_engine_ids"]),
+                    "drain_pending_profiles": len(drain["drain_pending_engine_ids"]),
+                },
+                "user_projection": {
+                    "code": "definition_apply_succeeded",
+                    "summary": "The toolbox definition is active.",
+                },
+                "operator_details_available": True,
+            },
+        )
+
     def recover(self) -> dict[str, Any]:
         """Reconcile registrations and interrupted definition applies from active v2 truth."""
 

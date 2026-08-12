@@ -489,6 +489,8 @@ class AtomicJsonToolboxDefinitionCandidateRepository:
                     state["candidates"][key] = record.to_dict()
                     self._write(state)
                 raise ValueError("candidate_expired" if record.state == "expired" else "candidate_stale")
+            if record.execution_leases:
+                raise ValueError("candidate_execution_denied")
             transitioned = ToolboxDefinitionCandidateRecord.from_dict({**record.to_dict(), "state": state_name})
             state["candidates"][key] = transitioned.to_dict()
             self._write(state)

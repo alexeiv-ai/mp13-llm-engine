@@ -3686,6 +3686,28 @@ class EngineHostControlChannel:
             },
         ) or {})
 
+    def toolbox_publish_definition_candidate(
+        self, *, candidate_ref: str, request_id: str
+    ) -> Dict[str, Any]:
+        return self.start_host_operation(
+            command="toolbox-publish-definition-candidate",
+            payload={
+                "candidate_ref": str(candidate_ref or "").strip(),
+                "request_id": str(request_id or "").strip(),
+            },
+        )
+
+    def toolbox_discard_definition_candidate(
+        self, *, candidate_ref: str, request_id: str
+    ) -> Dict[str, Any]:
+        return self.start_host_operation(
+            command="toolbox-discard-definition-candidate",
+            payload={
+                "candidate_ref": str(candidate_ref or "").strip(),
+                "request_id": str(request_id or "").strip(),
+            },
+        )
+
     def model_runtime_status(self) -> Dict[str, Any]:
         res = self._invoke("model-runtime-status", {})
         return dict(res or {})

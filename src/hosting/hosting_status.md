@@ -18,8 +18,9 @@ projections, and stale/retry/restart/concurrency safety proofs are committed.
 The strict v3 candidate retention/quota policy, durable candidate repository,
 pre-publication rollout seam, candidate operation kinds, and shared validated
 candidate preparation, bounded get/renew, and ordinary gated candidate
-execution are committed. Next, wire exact publication, discard, expiry cleanup,
-and restart reconciliation.
+execution, exact warmed publication, and discard are committed. Next, add
+expiry cleanup and restart reconciliation, including stale worker/reference
+recovery.
 
 Resume in this order:
 
@@ -76,8 +77,8 @@ The pre-R7 P0 clean-cut items are complete.
 
 ### R7.2 candidate lifecycle
 
-- Expose exact publication and discard through authorized
-  daemon/channel/CLI surfaces without adding a worker kind or generic endpoint.
+- Add expiry/discard restart reconciliation without adding a worker kind or
+  generic endpoint.
 - Add restart reconciliation, resource cleanup, stale-pin revalidation, and
   exact warmed-candidate publication.
 - Enforce the same execution gates, sandbox, host-API/data/network approvals,
@@ -121,6 +122,7 @@ The pre-R7 P0 clean-cut items are complete.
 | CODE/TEST-R7.2E | One-shot apply and candidate preparation share actor/revision/pin/exact-approval validation; selected generic records remap to confirmed profile IDs, preparation persists the exact warmed payload without publication, retry is stable, and approval cannot be reused; focused lane passed 21 tests (one recorded legacy daemon fixture deselected). |
 | CODE/TEST-R7.2F | Authorized prepare/get/renew daemon, channel, and CLI surfaces expose only bounded actor-scoped records; renewal is idempotent and revalidates active/config/catalog/host-policy/source pins plus candidate workers; combined transport/auth/service/repository/operation lane passed 89 tests with no deselections. |
 | CODE/TEST-R7.2G | Candidate execution permits only changed-profile routes, selects the retained candidate worker, forwards ordinary tool/effect/callback/host-API/timeout policy into durable toolbox execution, and holds a lease until terminal cleanup; service/transport/auth/repository lane passed 57 tests. |
+| CODE/TEST-R7.2H | Publish consumes only retained warmed runtime state and emits the existing apply result without rebuild/spawn; discard atomically becomes terminal before retiring non-active workers/references, and both deny in-flight leases; focused lifecycle/transport lane passed 13 tests. |
 | CODE-R8A–C | Versioned neutral state, Python/JS shared manager adoption, GC/repair controls passed focused coverage. |
 | CODE/TEST-R9 partial | Structured auth, role/hash authority, redaction, startup modes, generic lifecycle, and retry/restart identity passed focused coverage. |
 | TEST-R8.2C checkpoint | Workflow operation suite passed; full helper suite passed 116 tests on resume. |

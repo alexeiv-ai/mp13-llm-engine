@@ -2295,6 +2295,8 @@ class EngineHostDaemon:
                     "toolbox-confirm-definition-plan",
                     "toolbox-apply-definition",
                     "toolbox-prepare-definition-candidate",
+                    "toolbox-publish-definition-candidate",
+                    "toolbox-discard-definition-candidate",
                     "environment-remove",
                     "environment-template-construct",
                     "toolbox-gc",
@@ -2491,6 +2493,8 @@ class EngineHostDaemon:
                 "toolbox-confirm-definition-plan",
                 "toolbox-apply-definition",
                 "toolbox-prepare-definition-candidate",
+                "toolbox-publish-definition-candidate",
+                "toolbox-discard-definition-candidate",
                 "environment-template-construct",
                 "toolbox-gc",
                 "toolbox-repair",
@@ -3366,6 +3370,23 @@ class EngineHostDaemon:
                     dict(payload["host_api_approval"])
                     if isinstance(payload.get("host_api_approval"), dict) else None
                 ),
+                owner_actor_id=actor,
+                authority_id=actor,
+            )
+        if cmd in {
+            "toolbox-publish-definition-candidate", "toolbox-discard-definition-candidate"
+        }:
+            if set(payload) - {"candidate_ref", "request_id", "_claim_actor_id"}:
+                raise ValueError("candidate_request_fields_invalid")
+            actor = str(payload.get("_claim_actor_id") or "service:local")
+            method = (
+                svc.toolbox_publish_definition_candidate
+                if cmd == "toolbox-publish-definition-candidate"
+                else svc.toolbox_discard_definition_candidate
+            )
+            return method(
+                candidate_ref=str(payload.get("candidate_ref") or ""),
+                request_id=str(payload.get("request_id") or ""),
                 owner_actor_id=actor,
                 authority_id=actor,
             )

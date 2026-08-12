@@ -7,6 +7,8 @@ import pytest
 
 from hosting.service.toolbox_candidates import AtomicJsonToolboxDefinitionCandidateRepository
 from hosting.toolbox.bundle_models import ToolboxPlanPins
+from hosting.service.host_service import EngineHostService
+from tests.hosting_v3_fixtures import hosting_configuration
 
 
 DIGESTS = ["sha256:" + character * 64 for character in "abcdef"]
@@ -184,3 +186,74 @@ def test_publish_and_discard_are_terminal_idempotent_transitions(tmp_path: Path)
             state_name="discarded",
             now_ms=4_000,
         )
+
+
+def test_service_discard_retires_candidate_worker_and_reference(tmp_path: Path) -> None:
+    service = EngineHostService(
+        engines_state_file=tmp_path / "engines.json",
+        hosting_configuration=hosting_configuration(tmp_path),
+    )
+    engine_id = "candidate-discard"
+    service.register_spawned(
+        engine_id=engine_id,
+        pid=1234,
+        command=["python", "worker.py"],
+        executor_kind="toolbox_executor",
+        routing_state="candidate",
+        bundle={
+            "toolbox_id": "demo", "definition_revision": DIGESTS[5],
+            "sandbox_profile_id": "profile", "resolved_profile_id": "profile",
+        },
+        environment={"environment_key": DIGESTS[0]},
+        tool_access={"allowed_tool_names": ["Alpha"]},
+    )
+    candidate_ref, _ = service._toolbox_definition_candidates.create(  # noqa: SLF001
+        plan_id=DIGESTS[0],
+        confirmation_ref="confirmation_one",
+        toolbox_id="demo",
+        definition_revision=DIGESTS[5],
+        changed_tool_keys=["pkg.tools:Alpha"],
+        pins=_pins(),
+        owner_actor_id="actor:a",
+        authority_id="authority:a",
+        request_id="prepare-discard",
+        requested_lifetime_ms=300_000,
+        retained_payload={
+            "definition": {"toolbox_id": "demo"},
+            "profiles": {},
+            "routes": {},
+            "environment_references": ["ref-candidate"],
+            "candidate_engine_ids": [engine_id],
+            "readiness": {},
+            "reused_profile_count": 0,
+            "confirmation_result": {},
+            "expected_active_revision": None,
+        },
+        now_ms=int(__import__("time").time() * 1000),
+    )
+    released = []
+    service._environment_manager.release = (  # type: ignore[method-assign]
+        lambda *, reference_id: released.append(reference_id) or {"state": "released"}
+    )
+    started = service.toolbox_discard_definition_candidate(
+        candidate_ref=candidate_ref,
+        request_id="discard-1",
+        owner_actor_id="actor:a",
+        authority_id="authority:a",
+    )
+    terminal = service._hosted_operations.wait_for_terminal(  # noqa: SLF001
+        operation_id=started["operation"]["operation_id"], timeout_seconds=10
+    )
+    assert terminal["lifecycle"] == "terminal_success"
+    assert terminal["result"] == {
+        "contract": "hosting.toolbox.definition_candidate_discard_result.v1",
+        "toolbox_id": "demo",
+        "definition_revision": DIGESTS[5],
+        "state": "discarded",
+        "user_projection": {
+            "code": "candidate_discarded",
+            "summary": "The toolbox candidate was discarded.",
+        },
+    }
+    assert service._find_registration(engine_id) is None  # noqa: SLF001
+    assert released == ["ref-candidate"]

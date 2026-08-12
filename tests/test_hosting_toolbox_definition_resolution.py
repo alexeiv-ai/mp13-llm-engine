@@ -572,7 +572,7 @@ def test_confirmed_plan_prepares_durable_candidate_without_publication(tmp_path:
             approver_actor_id="approver:dependencies",
             dependency_approver_authorized=True,
         )["approval_ref"]
-    _install_fake_rollout(service)
+    rollout = _install_fake_rollout(service)
 
     prepared = service.toolbox_prepare_definition_candidate(
         plan_id=plan["plan_id"],
@@ -690,6 +690,28 @@ def test_confirmed_plan_prepares_durable_candidate_without_publication(tmp_path:
                 owner_actor_id="actor:a",
                 authority_id="workspace:a",
             )
+    spawned_before_publish = rollout.spawned
+    published = service.toolbox_publish_definition_candidate(
+        candidate_ref=candidate["candidate_ref"],
+        request_id="publish-candidate",
+        owner_actor_id="actor:a",
+        authority_id="workspace:a",
+    )
+    publish_terminal = service._hosted_operations.wait_for_terminal(  # noqa: SLF001
+        operation_id=published["operation"]["operation_id"], timeout_seconds=10
+    )
+    assert publish_terminal["lifecycle"] == "terminal_success"
+    assert publish_terminal["result"]["contract"] == "hosting.toolbox.definition_apply_result"
+    active = service._toolbox_state_v2.get("custom-demo")  # noqa: SLF001
+    assert active["active_revision"] == candidate["definition_revision"]
+    assert set(active["tool_routes"]) == {"Fetch"}
+    assert rollout.spawned == spawned_before_publish
+    published_record = service.toolbox_get_definition_candidate(
+        candidate_ref=candidate["candidate_ref"],
+        owner_actor_id="actor:a",
+        authority_id="workspace:a",
+    )
+    assert published_record["state"] == "published"
 
 
 def test_authenticated_daemon_recovers_one_multi_tool_plan_and_confirmation(

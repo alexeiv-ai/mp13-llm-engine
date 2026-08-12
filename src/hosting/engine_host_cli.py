@@ -927,6 +927,8 @@ def _build_parser() -> argparse.ArgumentParser:
         "toolbox-get-definition-candidate",
         "toolbox-renew-definition-candidate",
         "toolbox-execute-definition-candidate",
+        "toolbox-publish-definition-candidate",
+        "toolbox-discard-definition-candidate",
         "environment-template-list",
         "environment-template-describe",
         "environment-template-construct",
@@ -1193,6 +1195,8 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
         "toolbox-confirm-definition-plan",
         "toolbox-apply-definition",
         "toolbox-prepare-definition-candidate",
+        "toolbox-publish-definition-candidate",
+        "toolbox-discard-definition-candidate",
         "environment-template-construct",
         "toolbox-gc",
         "toolbox-repair",
@@ -2164,6 +2168,19 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
                 tools_view=(dict(payload["tools_view"]) if isinstance(payload.get("tools_view"), dict) else None),
                 callback_binding=(dict(payload["callback_binding"]) if isinstance(payload.get("callback_binding"), dict) else None),
                 host_api_approval=(dict(payload["host_api_approval"]) if isinstance(payload.get("host_api_approval"), dict) else None),
+            ))
+            return 0
+        if cmd in {
+            "toolbox-publish-definition-candidate", "toolbox-discard-definition-candidate"
+        }:
+            method = (
+                svc.toolbox_publish_definition_candidate
+                if cmd == "toolbox-publish-definition-candidate"
+                else svc.toolbox_discard_definition_candidate
+            )
+            _print_ok(method(
+                candidate_ref=str(payload.get("candidate_ref") or ""),
+                request_id=str(payload.get("request_id") or ""),
             ))
             return 0
         if cmd == "environment-template-list":
