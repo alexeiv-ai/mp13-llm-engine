@@ -529,6 +529,19 @@ the slice.
 - Gate impact: R9.6 cannot pass without a dependent-team revision, tests, named
   owner, and receipt. The dependent worktree was not modified.
 
+### CODE-R7A — toolbox materializer configuration bridge
+
+- Date: 2026-08-11
+- Plan IDs: R7.2 (partial); P1; high expertise
+- Outcome: service construction now configures the retained Python environment
+  builder exclusively from generic package sources and the resolved shared
+  environment root; toolbox materialization no longer depends on launcher maps
+  or legacy directory conventions
+- Proof: 33 package/environment/startup/hermetic tests executed with 32 passing;
+  the sole failure was a test-only string-to-Path assertion and was corrected
+- Remaining: make plan/apply consume generic package-lock and environment
+  request/receipt/reference records transactionally before closing R7.2
+
 Append one concise entry per completed slice. Include exact commands, counts,
 durations where useful, negative-path results, commit pin, and dependent receipt
 impact. Do not paste an unstructured full test transcript.

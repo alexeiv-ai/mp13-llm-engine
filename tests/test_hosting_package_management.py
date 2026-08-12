@@ -115,6 +115,14 @@ def test_server_role_policy_authorizes_new_commands_and_rejects_old_family() -> 
     assert not any(command.startswith("toolbox-artifact-upload-") for command in worker)
 
 
+def test_service_configures_toolbox_materialization_from_generic_roots(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    builder = service._hermetic_toolbox_environment_builder
+    assert builder is not None
+    assert builder.environments_root == Path(service.hosting_configuration.resolved_paths["environment_root"]) / "content"
+    assert set(builder.artifact_sources) == {"ingress"}
+
+
 def test_upload_is_ordered_bounded_idempotent_and_content_addressed(tmp_path: Path) -> None:
     service = _service(tmp_path)
     content = b"daemon-owned-content"

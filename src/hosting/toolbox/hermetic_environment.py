@@ -331,10 +331,13 @@ class PythonEnvironmentBuilder:
         hosting_root: Path,
         *,
         artifact_sources: Mapping[str, Path],
+        environment_root: Path | None = None,
         gc_grace_ms: int = 24 * 60 * 60 * 1000,
         build_timeout_seconds: int = 300,
     ) -> None:
         self.resolver = HermeticToolboxEnvironmentResolver(hosting_root)
+        if environment_root is not None:
+            self.resolver.environments_root = Path(environment_root).expanduser().resolve() / "content"
         self.environments_root = self.resolver.environments_root
         self.locks_root = self.environments_root / ".locks"
         self.candidates_root = self.environments_root / ".candidates"

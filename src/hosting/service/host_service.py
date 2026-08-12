@@ -51,6 +51,7 @@ from .toolbox_artifact_store import AtomicToolboxArtifactStore
 from .toolbox_approvals import AtomicJsonToolboxDependencyApprovalRepository
 from .toolbox_confirmations import AtomicJsonToolboxConfirmationRepository
 from ..toolbox.target import detect_current_toolbox_target
+from ..toolbox.hermetic_environment import PythonEnvironmentBuilder
 from .workflow_helpers import WorkflowHelperMixin
 
 
@@ -96,7 +97,16 @@ class EngineHostService(CoreMixin, MetricsMixin, StateMixin, ConfigMixin, Contro
         current_target = detect_current_toolbox_target()
         configured_abi = ""
         configured_platform = ""
-        self._hermetic_toolbox_environment_builder = None
+        configured_sources = {
+            str(source_id): Path(hosting_configuration.resolved_paths["artifact_root"])
+            for source_id, source in dict(hosting_configuration.package_management.get("sources") or {}).items()
+            if bool(dict(source).get("enabled", True))
+        }
+        self._hermetic_toolbox_environment_builder = PythonEnvironmentBuilder(
+            self.hosting_root,
+            artifact_sources=configured_sources,
+            environment_root=hosting_configuration.resolved_paths["environment_root"],
+        )
         if toolbox_template_materializer is not None:
             self._toolbox_template_materializer = toolbox_template_materializer
         elif self._hermetic_toolbox_environment_builder is not None:
