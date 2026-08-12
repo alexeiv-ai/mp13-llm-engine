@@ -326,6 +326,11 @@ all targeted active keys are removed before result-key collision checks, so
 rename swaps are atomic. Update must retain its stable key, rename must change
 it, and request kind cannot change. Complete-definition planning derives stable
 `host:sha256:<digest>` IDs from each change kind and its prior/resulting key.
+Each normalized change is then bound to its bounded source import analysis,
+reviewed distribution mapping, resolved environment group, preferred exact
+package mutations, and dependency-approval requirement. This analysis is part
+of the immutable plan record and is revalidated on restart; public projection
+does not reconstruct it from mutable source or package state.
 
 The resulting plan is stored in the process-safe atomic definition-plan
 repository. Its ID binds toolbox ID, definition revision, expected active

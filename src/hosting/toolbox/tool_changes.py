@@ -9,7 +9,10 @@ from .bundle_models import (
     ToolboxAutoAssignmentRequestV2,
     ToolboxDefinitionSpec,
     ToolboxManualAssignmentRequestV2,
+    ToolboxEnvironmentMutationSpec,
+    ToolboxPackageMutationSpec,
 )
+from .dependency_analysis import ToolboxAnalyzedImport, analyze_toolbox_bundle_imports
 from .identity import identity_digest, require_digest
 
 
@@ -135,6 +138,90 @@ class NormalizedToolboxToolChange:
             {"change_id", "kind", "prior_tool_key", "tool_key", "request_kind"},
             "tool_change_normalized",
         ))
+
+
+@dataclass(frozen=True)
+class ToolboxToolAnalysis:
+    change_id: str
+    tool_key: str | None
+    prior_tool_key: str | None
+    change: str
+    imports: tuple[ToolboxAnalyzedImport, ...]
+    environment_id: str
+    package_mutations: tuple[ToolboxPackageMutationSpec, ...]
+    approval_required: bool
+
+    def __post_init__(self) -> None:
+        normalized = NormalizedToolboxToolChange(
+            self.change_id,
+            self.change,
+            self.prior_tool_key,
+            self.tool_key,
+            (
+                None
+                if all(
+                    key is None or key.startswith("intrinsic:")
+                    for key in (self.prior_tool_key, self.tool_key)
+                )
+                else "auto"
+            ),
+        )
+        imports = tuple(sorted(self.imports, key=lambda item: item.import_root))
+        if len(imports) > 512 or len({item.import_root for item in imports}) != len(imports):
+            raise ValueError("tool_analysis_imports_invalid")
+        mutations = tuple(sorted(
+            self.package_mutations, key=lambda item: (item.distribution, item.mutation)
+        ))
+        if len({item.distribution for item in mutations}) != len(mutations):
+            raise ValueError("tool_analysis_package_mutations_invalid")
+        if not isinstance(self.approval_required, bool):
+            raise ValueError("tool_analysis_approval_invalid")
+        object.__setattr__(self, "change_id", normalized.change_id)
+        object.__setattr__(self, "tool_key", normalized.tool_key)
+        object.__setattr__(self, "prior_tool_key", normalized.prior_tool_key)
+        object.__setattr__(self, "change", normalized.kind)
+        object.__setattr__(
+            self, "environment_id", require_digest(
+                self.environment_id, label="tool_analysis_environment_id"
+            )
+        )
+        object.__setattr__(self, "imports", imports)
+        object.__setattr__(self, "package_mutations", mutations)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "change_id": self.change_id,
+            "tool_key": self.tool_key,
+            "prior_tool_key": self.prior_tool_key,
+            "change": self.change,
+            "imports": [item.to_dict() for item in self.imports],
+            "environment_id": self.environment_id,
+            "package_mutations": [item.to_dict() for item in self.package_mutations],
+            "approval_required": self.approval_required,
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "ToolboxToolAnalysis":
+        row = _strict(
+            payload,
+            {
+                "change_id", "tool_key", "prior_tool_key", "change", "imports",
+                "environment_id", "package_mutations", "approval_required",
+            },
+            "tool_analysis",
+        )
+        if not isinstance(row["imports"], list) or not isinstance(row["package_mutations"], list):
+            raise ValueError("tool_analysis_lists_invalid")
+        return cls(
+            **{
+                **row,
+                "imports": tuple(ToolboxAnalyzedImport.from_dict(item) for item in row["imports"]),
+                "package_mutations": tuple(
+                    ToolboxPackageMutationSpec.from_dict(item)
+                    for item in row["package_mutations"]
+                ),
+            }
+        )
 
 
 def _definition_requests(
@@ -296,9 +383,73 @@ def deterministic_definition_changes(
     return tuple(sorted(rows, key=lambda item: item.change_id))
 
 
+def build_toolbox_tool_analysis(
+    *,
+    active_definition: ToolboxDefinitionSpec,
+    proposed_definition: ToolboxDefinitionSpec,
+    changes: Sequence[NormalizedToolboxToolChange],
+    environment_mutations: Sequence[ToolboxEnvironmentMutationSpec],
+) -> tuple[ToolboxToolAnalysis, ...]:
+    """Bind each normalized change to bounded source and resolved offer evidence."""
+
+    from mp13_engine.mp13_intrinsics_metadata import intrinsic_dependency_metadata
+
+    active = _definition_requests(active_definition)
+    proposed = _definition_requests(proposed_definition)
+    offers_by_tool: dict[str, ToolboxEnvironmentMutationSpec] = {}
+    for environment in environment_mutations:
+        for tool in environment.tool_mutations:
+            if tool.tool_key in offers_by_tool:
+                raise ValueError("tool_analysis_environment_duplicate")
+            offers_by_tool[tool.tool_key] = environment
+    rows = []
+    for change in changes:
+        selected_key = change.tool_key or change.prior_tool_key
+        if selected_key is None:
+            raise ValueError("tool_analysis_tool_key_invalid")
+        offer = offers_by_tool.get(selected_key)
+        if offer is None:
+            raise ValueError("tool_analysis_environment_missing")
+        request_row = (
+            proposed.get(change.tool_key or "")
+            or active.get(change.prior_tool_key or "")
+        )
+        if request_row is not None:
+            request = request_row[1]
+            source_analysis = analyze_toolbox_bundle_imports(
+                request.files,
+                declared_imports=request.dependency.declared_imports,
+            )
+        else:
+            intrinsic_key = change.tool_key or change.prior_tool_key or ""
+            if not intrinsic_key.startswith("intrinsic:"):
+                raise ValueError("tool_analysis_request_missing")
+            metadata = intrinsic_dependency_metadata((intrinsic_key.split(":", 1)[1],))
+            source_analysis = analyze_toolbox_bundle_imports(
+                (), declared_imports=metadata["import_roots"]
+            )
+        alternative = next(
+            item for item in offer.alternatives
+            if item.alternative_id == offer.preferred_alternative_id
+        )
+        rows.append(ToolboxToolAnalysis(
+            change_id=change.change_id,
+            tool_key=change.tool_key,
+            prior_tool_key=change.prior_tool_key,
+            change=change.kind,
+            imports=source_analysis.imports,
+            environment_id=offer.environment_id,
+            package_mutations=alternative.package_mutations,
+            approval_required=offer.dependency_approval_required,
+        ))
+    return tuple(sorted(rows, key=lambda item: item.change_id))
+
+
 __all__ = [
     "NormalizedToolboxToolChange",
     "ToolboxToolChange",
+    "ToolboxToolAnalysis",
+    "build_toolbox_tool_analysis",
     "deterministic_definition_changes",
     "merge_toolbox_tool_changes",
 ]

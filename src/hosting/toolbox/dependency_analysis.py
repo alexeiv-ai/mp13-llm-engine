@@ -39,6 +39,23 @@ class ToolboxImportEvidence:
             "kind": self.kind,
         }
 
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "ToolboxImportEvidence":
+        row = dict(payload or {})
+        if set(row) != {"relative_path", "line", "kind"}:
+            raise ValueError("toolbox_import_evidence_fields_invalid")
+        if (
+            not isinstance(row["relative_path"], str)
+            or not row["relative_path"]
+            or isinstance(row["line"], bool)
+            or not isinstance(row["line"], int)
+            or row["line"] < 0
+            or not isinstance(row["kind"], str)
+            or not row["kind"]
+        ):
+            raise ValueError("toolbox_import_evidence_invalid")
+        return cls(**row)
+
 
 @dataclass(frozen=True)
 class ToolboxDependencyDiagnostic:
@@ -79,6 +96,25 @@ class ToolboxAnalyzedImport:
             "distribution": self.distribution,
             "evidence": [item.to_dict() for item in self.evidence],
         }
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "ToolboxAnalyzedImport":
+        row = dict(payload or {})
+        if set(row) != {"import_root", "classification", "distribution", "evidence"}:
+            raise ValueError("toolbox_analyzed_import_fields_invalid")
+        if row["classification"] not in {
+            "standard_library", "local_staged", "parent_runtime",
+            "known_third_party", "declared_dynamic", "unresolved",
+        } or not isinstance(row["evidence"], list) or len(row["evidence"]) > MAX_IMPORT_EVIDENCE:
+            raise ValueError("toolbox_analyzed_import_invalid")
+        root = normalize_import_root(row["import_root"])
+        distribution = row["distribution"]
+        if distribution is not None:
+            distribution = normalize_distribution_name(distribution)
+        evidence = tuple(ToolboxImportEvidence.from_dict(item) for item in row["evidence"])
+        if len(set(evidence)) != len(evidence):
+            raise ValueError("toolbox_import_evidence_duplicate")
+        return cls(root, row["classification"], distribution, evidence)
 
 
 @dataclass(frozen=True)

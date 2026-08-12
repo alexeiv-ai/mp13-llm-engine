@@ -485,6 +485,7 @@ class ToolboxRuntimeMixin:
         from ..toolbox.identity import identity_digest
         from ..toolbox.tool_changes import (
             NormalizedToolboxToolChange,
+            build_toolbox_tool_analysis,
             deterministic_definition_changes,
         )
         from .toolbox_definition_resolution import ConfiguredToolboxPlanResolver
@@ -562,6 +563,12 @@ class ToolboxRuntimeMixin:
                 for item in normalized_changes
             )
         )
+        tool_analysis = build_toolbox_tool_analysis(
+            active_definition=active_definition_model,
+            proposed_definition=model,
+            changes=changes,
+            environment_mutations=environment_mutations,
+        )
         pins = ToolboxPlanPins(
             active_definition_revision=active_revision,
             target=context["target"],
@@ -580,6 +587,7 @@ class ToolboxRuntimeMixin:
             planned_environments=planned_environments,
             proposal_kind=proposal_kind,
             changes=changes,
+            tool_analysis=tool_analysis,
             parent_plan_id=None,
             reduction=None,
             active_profiles=active_profiles,
@@ -604,7 +612,7 @@ class ToolboxRuntimeMixin:
             "confirmation_required": True,
             "approval_required": approval_required,
             "changes": [item.to_dict() for item in record.changes],
-            "tool_analysis": [],
+            "tool_analysis": [item.to_dict() for item in record.tool_analysis],
             "environment_mutations": [item.to_dict() for item in environment_mutations],
             "profile_diff": {
                 classification: sum(

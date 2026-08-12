@@ -4,9 +4,18 @@ import pytest
 
 from hosting.operation_contract import HostedOperationLifecycle
 from hosting.service.toolbox_runtime import ToolboxRuntimeMixin
-from hosting.toolbox.bundle_models import ToolboxDefinitionSpec
+from hosting.toolbox.bundle_models import (
+    ToolboxDefinitionSpec,
+    ToolboxDependencyEdgeSpec,
+    ToolboxEnvironmentMutationSpec,
+    ToolboxPackageMutationSpec,
+    ToolboxResolutionAlternativeSpec,
+    ToolboxToolMutationSpec,
+)
+from hosting.toolbox.identity import identity_digest
 from hosting.toolbox.tool_changes import (
     ToolboxToolChange,
+    build_toolbox_tool_analysis,
     deterministic_definition_changes,
     merge_toolbox_tool_changes,
 )
@@ -297,3 +306,63 @@ def test_service_worker_returns_stable_conflict_without_calling_planner() -> Non
             "code": "tool_change_conflict",
         },
     }
+
+
+def test_tool_analysis_binds_bounded_evidence_environment_packages_and_approval() -> None:
+    active = _definition()
+    request = _auto("Weather")
+    request["files"][0]["content"] = (
+        "import json\nimport requests\nfrom pkg import local\n"
+        "def Weather():\n    return json.dumps(requests.__name__)\n"
+    )
+    proposed = _definition(autos=(request,), expected_revision=None)
+    changes = deterministic_definition_changes(active, proposed)
+    mutation = ToolboxPackageMutationSpec(
+        distribution="requests",
+        mutation="addition",
+        dependency_reason="direct",
+        from_version=None,
+        to_version="2.32.0",
+    )
+    alternative = ToolboxResolutionAlternativeSpec(
+        alternative_id=identity_digest("test.analysis.alternative.v1", request),
+        source_ids=("release",),
+        source_origins=("https://packages.example.invalid/simple",),
+        lock_digest=identity_digest("test.analysis.lock.v1", request),
+        artifacts=(),
+        package_mutations=(mutation,),
+    )
+    environment_id = identity_digest("test.analysis.environment.v1", request)
+    environment = ToolboxEnvironmentMutationSpec(
+        environment_id=environment_id,
+        tool_mutations=(ToolboxToolMutationSpec("pkg.tools:Weather", "added"),),
+        base_template_id="core",
+        base_template_revision="sha256:" + "a" * 64,
+        alternatives=(alternative,),
+        preferred_alternative_id=alternative.alternative_id,
+        alternatives_truncated=False,
+        confirmation_required=True,
+        dependency_approval_required=True,
+        dependency_edges=(ToolboxDependencyEdgeSpec("pkg.tools:Weather", (), ("requests",)),),
+    )
+
+    analysis = build_toolbox_tool_analysis(
+        active_definition=active,
+        proposed_definition=proposed,
+        changes=changes,
+        environment_mutations=(environment,),
+    )[0]
+    imports = {item.import_root: item for item in analysis.imports}
+
+    assert analysis.environment_id == environment_id
+    assert analysis.package_mutations == (mutation,)
+    assert analysis.approval_required is True
+    assert imports["json"].classification == "standard_library"
+    assert imports["requests"].classification == "known_third_party"
+    assert imports["requests"].distribution == "requests"
+    assert imports["requests"].evidence[0].to_dict() == {
+        "relative_path": "pkg/weather.py",
+        "line": 2,
+        "kind": "import",
+    }
+    assert imports["pkg"].classification == "local_staged"

@@ -28,7 +28,10 @@ from hosting.toolbox.bundle_models import (
     ToolboxToolMutationSpec,
 )
 from hosting.toolbox.identity import identity_digest
-from hosting.toolbox.tool_changes import deterministic_definition_changes
+from hosting.toolbox.tool_changes import (
+    build_toolbox_tool_analysis,
+    deterministic_definition_changes,
+)
 from hosting.toolbox.definition_planner import (
     classify_toolbox_profiles,
     plan_toolbox_definition,
@@ -210,6 +213,16 @@ def _planned_environments(draft, pins, environments):
     return tuple(records)
 
 
+def _tool_analysis(active, draft, environments):
+    changes = deterministic_definition_changes(active, draft.definition)
+    return changes, build_toolbox_tool_analysis(
+        active_definition=active,
+        proposed_definition=draft.definition,
+        changes=changes,
+        environment_mutations=environments,
+    )
+
+
 def _create_in_process(path: str, definition: dict, now_ms: int, queue) -> None:
     try:
         record = AtomicJsonToolboxDefinitionPlanRepository(Path(path)).create(
@@ -236,6 +249,7 @@ def _create_complete_in_process(path: str, definition: dict, now_ms: int, queue)
             planned_environments=planned,
             proposal_kind="complete_definition",
             changes=deterministic_definition_changes(active, draft.definition),
+            tool_analysis=_tool_analysis(active, draft, environments)[1],
             parent_plan_id=None,
             reduction=None,
             active_profiles=(),
@@ -457,6 +471,7 @@ def test_complete_plan_roundtrips_every_pin_offer_artifact_and_edge(tmp_path: Pa
         planned_environments=planned,
         proposal_kind="complete_definition",
         changes=deterministic_definition_changes(active, draft.definition),
+        tool_analysis=_tool_analysis(active, draft, environments)[1],
         parent_plan_id=None,
         reduction=None,
         active_profiles=(),
@@ -473,6 +488,7 @@ def test_complete_plan_roundtrips_every_pin_offer_artifact_and_edge(tmp_path: Pa
         planned_environments=planned,
         proposal_kind="complete_definition",
         changes=deterministic_definition_changes(active, draft.definition),
+        tool_analysis=_tool_analysis(active, draft, environments)[1],
         parent_plan_id=None,
         reduction=None,
         active_profiles=(),
@@ -489,6 +505,7 @@ def test_complete_plan_roundtrips_every_pin_offer_artifact_and_edge(tmp_path: Pa
     assert recovered.pins == pins
     assert recovered.pins.configuration_revision == CONFIGURATION_REVISION
     assert recovered.environment_mutations == environments
+    assert recovered.tool_analysis == _tool_analysis(active, draft, environments)[1]
     artifact = recovered.environment_mutations[0].alternatives[0].artifacts[0]
     assert artifact.artifact_digest == "sha256:" + "3" * 64
     assert recovered.profile_changes[0]["classification"] == "added"
@@ -582,6 +599,7 @@ def test_complete_plan_identity_changes_with_pin_and_offered_artifact(tmp_path: 
             ),
             proposal_kind="complete_definition",
             changes=deterministic_definition_changes(active, draft.definition),
+            tool_analysis=_tool_analysis(active, draft, current_environments)[1],
             parent_plan_id=None,
             reduction=None,
             active_profiles=(),

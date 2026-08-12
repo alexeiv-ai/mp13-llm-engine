@@ -22,7 +22,7 @@ from ..toolbox.definition_planner import (
     classify_toolbox_profiles,
 )
 from ..toolbox.identity import identity_digest, require_digest
-from ..toolbox.tool_changes import NormalizedToolboxToolChange
+from ..toolbox.tool_changes import NormalizedToolboxToolChange, ToolboxToolAnalysis
 from .operation_repository import _exclusive_process_file_lock, _replace_with_bounded_retries
 
 
@@ -377,6 +377,7 @@ class PersistedCompleteToolboxDefinitionPlan:
     planned_environments: tuple[ToolboxPlannedEnvironmentRecord, ...]
     proposal_kind: str
     changes: tuple[NormalizedToolboxToolChange, ...]
+    tool_analysis: tuple[ToolboxToolAnalysis, ...]
     parent_plan_id: str | None
     reduction: Mapping[str, Any] | None
     draft_plan: Mapping[str, Any]
@@ -506,6 +507,21 @@ class PersistedCompleteToolboxDefinitionPlan:
         }
         if actual_changed_keys != planned_changed_keys:
             raise ValueError("toolbox_complete_plan_change_coverage_invalid")
+        tool_analysis = tuple(sorted(self.tool_analysis, key=lambda item: item.change_id))
+        if (
+            any(not isinstance(item, ToolboxToolAnalysis) for item in tool_analysis)
+            or len({item.change_id for item in tool_analysis}) != len(tool_analysis)
+            or {item.change_id for item in tool_analysis} != {item.change_id for item in changes}
+        ):
+            raise ValueError("toolbox_complete_plan_tool_analysis_invalid")
+        for item in tool_analysis:
+            change = next(value for value in changes if value.change_id == item.change_id)
+            if (
+                item.change != change.kind
+                or item.tool_key != change.tool_key
+                or item.prior_tool_key != change.prior_tool_key
+            ):
+                raise ValueError("toolbox_complete_plan_tool_analysis_mismatch")
         parent_plan_id = (
             None if self.parent_plan_id is None
             else require_digest(self.parent_plan_id, label="toolbox_parent_plan_id")
@@ -560,6 +576,7 @@ class PersistedCompleteToolboxDefinitionPlan:
         object.__setattr__(self, "environment_mutations", mutations)
         object.__setattr__(self, "planned_environments", planned)
         object.__setattr__(self, "changes", changes)
+        object.__setattr__(self, "tool_analysis", tool_analysis)
         object.__setattr__(self, "parent_plan_id", parent_plan_id)
         object.__setattr__(self, "reduction", reduction)
         object.__setattr__(self, "draft_plan", draft)
@@ -587,6 +604,7 @@ class PersistedCompleteToolboxDefinitionPlan:
             "planned_environments": [item.to_dict() for item in self.planned_environments],
             "proposal_kind": self.proposal_kind,
             "changes": [item.to_dict() for item in self.changes],
+            "tool_analysis": [item.to_dict() for item in self.tool_analysis],
             "parent_plan_id": self.parent_plan_id,
             "reduction": None if self.reduction is None else dict(self.reduction),
             "draft_plan": dict(self.draft_plan),
@@ -602,7 +620,7 @@ class PersistedCompleteToolboxDefinitionPlan:
         row = dict(payload or {})
         fields = {
             "contract", "plan_id", "active_definition", "proposed_definition", "pins",
-            "environment_mutations", "planned_environments", "proposal_kind", "changes",
+            "environment_mutations", "planned_environments", "proposal_kind", "changes", "tool_analysis",
             "parent_plan_id", "reduction", "draft_plan", "profile_changes", "created_at_ms",
             "expires_at_ms", "owner_actor_id", "authority_id",
         }
@@ -625,6 +643,9 @@ class PersistedCompleteToolboxDefinitionPlan:
                 "changes": tuple(
                     NormalizedToolboxToolChange.from_dict(item)
                     for item in row["changes"]
+                ),
+                "tool_analysis": tuple(
+                    ToolboxToolAnalysis.from_dict(item) for item in row["tool_analysis"]
                 ),
                 "profile_changes": tuple(row["profile_changes"]),
             }
@@ -701,6 +722,7 @@ class AtomicJsonCompleteToolboxDefinitionPlanRepository:
         planned_environments: Sequence[ToolboxPlannedEnvironmentRecord],
         proposal_kind: str,
         changes: Sequence[NormalizedToolboxToolChange],
+        tool_analysis: Sequence[ToolboxToolAnalysis],
         parent_plan_id: str | None,
         reduction: Mapping[str, Any] | None,
         active_profiles: Sequence[ActiveToolboxProfileSnapshot | Mapping[str, Any]],
@@ -721,6 +743,7 @@ class AtomicJsonCompleteToolboxDefinitionPlanRepository:
             "planned_environments": [item.to_dict() for item in planned_environments],
             "proposal_kind": proposal_kind,
             "changes": [item.to_dict() for item in changes],
+            "tool_analysis": [item.to_dict() for item in tool_analysis],
             "parent_plan_id": parent_plan_id,
             "reduction": None if reduction is None else dict(reduction),
             "draft_plan": draft.to_persisted_dict(),
@@ -737,6 +760,7 @@ class AtomicJsonCompleteToolboxDefinitionPlanRepository:
             planned_environments=tuple(planned_environments),
             proposal_kind=proposal_kind,
             changes=tuple(changes),
+            tool_analysis=tuple(tool_analysis),
             parent_plan_id=parent_plan_id,
             reduction=reduction,
             draft_plan=draft.to_persisted_dict(),

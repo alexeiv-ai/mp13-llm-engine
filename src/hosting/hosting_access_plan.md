@@ -169,7 +169,7 @@ R7 plan/confirmation field assertions are provisional and must be replaced.
   toolbox definition planning.
 - [x] Implement compare-and-swap server-side tool-change merge, deterministic
   change IDs, atomic rename, and strict add/update/remove validation.
-- [ ] Emit bounded per-tool import/source evidence, mapped distributions,
+- [x] Emit bounded per-tool import/source evidence, mapped distributions,
   environment grouping, exact package mutations, and approval requirements.
 - [ ] Build immutable child plans for selective rejection, recomputing the
   complete closure and locks and reporting preserved/skipped/cascade outcomes.
