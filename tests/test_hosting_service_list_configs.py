@@ -4,6 +4,14 @@ import tempfile
 from pathlib import Path
 
 from hosting.service.host_service import EngineHostService
+from tests.hosting_v3_fixtures import hosting_configuration
+
+
+def _service(root: Path) -> EngineHostService:
+    return EngineHostService(
+        engines_state_file=root / "managed_engines.json",
+        hosting_configuration=hosting_configuration(root),
+    )
 
 
 def test_list_configs_uses_lightweight_module_discovery(monkeypatch) -> None:
@@ -11,10 +19,7 @@ def test_list_configs_uses_lightweight_module_discovery(monkeypatch) -> None:
     default_cfg = Path(__file__).resolve()
     cfg_store = Path(__file__).resolve().parent
 
-    svc = EngineHostService(
-        engines_state_file=base / "managed_engines.json",
-        control_state_file=base / "access_control.json",
-    )
+    svc = _service(base)
 
     monkeypatch.setattr(EngineHostService, "_default_config_path", lambda self: default_cfg)
     monkeypatch.setattr(EngineHostService, "_config_store_dir", lambda self: cfg_store)
@@ -45,10 +50,7 @@ def test_list_configs_validates_config_selectors_not_paths(tmp_path: Path, monke
     named_cfg = cfg_store / "granite-2b.json"
     named_cfg.write_text("{}", encoding="utf-8")
 
-    svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
-        control_state_file=tmp_path / "access_control.json",
-    )
+    svc = _service(tmp_path)
     seen_selectors = []
 
     def _merge(self, selector):
@@ -79,10 +81,7 @@ def test_list_configs_validates_config_selectors_not_paths(tmp_path: Path, monke
 def test_connect_from_config_emits_progress_events(tmp_path: Path, monkeypatch) -> None:
     cfg_path = tmp_path / "default.json"
     cfg_path.write_text("{}", encoding="utf-8")
-    svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
-        control_state_file=tmp_path / "access_control.json",
-    )
+    svc = _service(tmp_path)
 
     monkeypatch.setattr(EngineHostService, "_resolve_json_config_path", lambda self, _selector: cfg_path)
     monkeypatch.setattr(EngineHostService, "_merge_default_and_selected_config", lambda self, _selector: {})
@@ -116,10 +115,7 @@ def test_connect_from_config_emits_progress_events(tmp_path: Path, monkeypatch) 
 def test_connect_from_config_waits_for_model_worker_rpc_ready(tmp_path: Path, monkeypatch) -> None:
     cfg_path = tmp_path / "default.json"
     cfg_path.write_text("{}", encoding="utf-8")
-    svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
-        control_state_file=tmp_path / "access_control.json",
-    )
+    svc = _service(tmp_path)
     ready_calls = []
 
     monkeypatch.setattr(EngineHostService, "_resolve_json_config_path", lambda self, _selector: cfg_path)
@@ -189,10 +185,7 @@ def test_connect_from_config_reuses_reachable_worker_for_same_model(tmp_path: Pa
     alt_cfg = tmp_path / "alt.json"
     alt_cfg.write_text("{}", encoding="utf-8")
     model_path = tmp_path / "models" / "demo"
-    svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
-        control_state_file=tmp_path / "access_control.json",
-    )
+    svc = _service(tmp_path)
     spawned = []
 
     monkeypatch.setattr(EngineHostService, "_resolve_json_config_path", lambda self, selector: alt_cfg if selector == "alt" else cfg_path)
@@ -263,10 +256,7 @@ def test_connect_from_config_reuses_reachable_worker_for_same_model(tmp_path: Pa
 
 
 def test_build_engine_spawn_spec_uses_lightweight_module_discovery(tmp_path: Path, monkeypatch) -> None:
-    svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
-        control_state_file=tmp_path / "access_control.json",
-    )
+    svc = _service(tmp_path)
     discoverable_calls = []
 
     def _discoverable(_python: str, _module: str):
@@ -292,10 +282,7 @@ def test_connect_from_config_force_new_worker_bypasses_reuse(tmp_path: Path, mon
     cfg_path = tmp_path / "default.json"
     cfg_path.write_text("{}", encoding="utf-8")
     model_path = tmp_path / "models" / "demo"
-    svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
-        control_state_file=tmp_path / "access_control.json",
-    )
+    svc = _service(tmp_path)
     spawned = []
 
     monkeypatch.setattr(EngineHostService, "_resolve_json_config_path", lambda self, _selector: cfg_path)
@@ -355,10 +342,7 @@ def test_connect_from_config_force_new_worker_bypasses_reuse(tmp_path: Path, mon
 def test_connect_from_config_fails_when_model_worker_rpc_not_ready(tmp_path: Path, monkeypatch) -> None:
     cfg_path = tmp_path / "default.json"
     cfg_path.write_text("{}", encoding="utf-8")
-    svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
-        control_state_file=tmp_path / "access_control.json",
-    )
+    svc = _service(tmp_path)
 
     monkeypatch.setattr(EngineHostService, "_resolve_json_config_path", lambda self, _selector: cfg_path)
     monkeypatch.setattr(EngineHostService, "_merge_default_and_selected_config", lambda self, _selector: {})
@@ -408,10 +392,7 @@ def test_connect_from_config_fails_when_model_worker_rpc_not_ready(tmp_path: Pat
 def test_connect_from_config_generic_profile_spawns_without_model(tmp_path: Path, monkeypatch) -> None:
     cfg_path = tmp_path / "generic.json"
     cfg_path.write_text("{}", encoding="utf-8")
-    svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
-        control_state_file=tmp_path / "access_control.json",
-    )
+    svc = _service(tmp_path)
 
     monkeypatch.setattr(EngineHostService, "_resolve_json_config_path", lambda self, _selector: cfg_path)
     monkeypatch.setattr(
@@ -439,10 +420,7 @@ def test_connect_from_config_generic_profile_spawns_without_model(tmp_path: Path
 def test_connect_from_config_generic_profile_requires_worker_command(tmp_path: Path, monkeypatch) -> None:
     cfg_path = tmp_path / "generic_bad.json"
     cfg_path.write_text("{}", encoding="utf-8")
-    svc = EngineHostService(
-        engines_state_file=tmp_path / "managed_engines.json",
-        control_state_file=tmp_path / "access_control.json",
-    )
+    svc = _service(tmp_path)
 
     monkeypatch.setattr(EngineHostService, "_resolve_json_config_path", lambda self, _selector: cfg_path)
     monkeypatch.setattr(

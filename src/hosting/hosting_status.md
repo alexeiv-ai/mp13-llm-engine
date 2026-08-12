@@ -769,6 +769,16 @@ the slice.
   bounded `--maxfail=120` stop; remaining failures were concentrated in legacy
   toolbox repositories/startup fixtures plus service/list-config constructors
 
+### TEST-R3.2I — hosted config service fixture cut
+
+- Date: 2026-08-12
+- Plan IDs: R3.2 fixture removal and R9.4/R9.7 (partial); P0/P2; high expertise
+- Outcome: hosted config discovery, spawn-spec, model-worker reuse/readiness, and
+  generic-worker tests construct the service exclusively from v3 configuration
+- Proof: `python -m pytest tests/test_hosting_service_list_configs.py -q
+  --maxfail=30` passed 10 tests; the file contains zero legacy control-state
+  constructor or authority filename matches
+
 Append one concise entry per completed slice. Include exact commands, counts,
 durations where useful, negative-path results, commit pin, and dependent receipt
 impact. Do not paste an unstructured full test transcript.
