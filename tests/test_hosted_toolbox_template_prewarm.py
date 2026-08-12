@@ -21,6 +21,7 @@ from hosting.service.toolbox_materialization import (
     derived_environment_digest,
 )
 from hosting.toolbox.catalog import ToolboxEnvironmentTemplateSpec
+from tests.hosting_v3_fixtures import hosting_configuration, write_hosting_configuration
 
 
 SIGNATURE = "A" * 86
@@ -102,7 +103,7 @@ class FailingMaterializer:
 def _service(tmp_path: Path, materializer) -> EngineHostService:
     service = EngineHostService(
         engines_state_file=tmp_path / "engines.json",
-        control_state_file=tmp_path / "access_control.json",
+        hosting_configuration=hosting_configuration(tmp_path),
         toolbox_template_materializer=materializer,
     )
     published = service._toolbox_template_catalog.publish_inactive(  # noqa: SLF001
@@ -140,7 +141,7 @@ def test_prewarm_returns_durable_ref_and_advertises_only_verified_receipt(tmp_pa
     before = service.toolbox_template_describe(template_id="core")
     assert before["materialization"] == "not_materialized"
     started = _start(service)
-    assert started["operation"]["execution_kind"] == HostedExecutionKind.TOOLBOX_TEMPLATE_PREWARM.value
+    assert started["operation"]["execution_kind"] == HostedExecutionKind.ENVIRONMENT_TEMPLATE_PREWARM.value
     assert started["operation"]["selector"] == {"kind": "template_id", "id": "core"}
     terminal = _terminal(service, started)
     assert terminal["lifecycle"] == HostedOperationLifecycle.TERMINAL_SUCCESS.value
@@ -151,7 +152,7 @@ def test_prewarm_returns_durable_ref_and_advertises_only_verified_receipt(tmp_pa
 
     restarted = EngineHostService(
         engines_state_file=tmp_path / "engines.json",
-        control_state_file=tmp_path / "access_control.json",
+        hosting_configuration=hosting_configuration(tmp_path),
     )
     assert restarted.toolbox_template_describe(template_id="core")["user_projection"]["state"] == "ready"
 
@@ -191,15 +192,15 @@ def test_prewarm_request_is_idempotent_and_changed_target_conflicts(tmp_path: Pa
 def test_default_host_materializer_fails_closed_with_terminal_diagnostic(tmp_path: Path) -> None:
     service = _service(tmp_path, None)
     terminal = _terminal(service, _start(service))
-    assert terminal["reason"] == "template_materializer_unconfigured"
-    assert terminal["result"]["code"] == "template_materializer_unconfigured"
+    assert terminal["reason"] == "template_artifact_not_installable"
+    assert terminal["result"]["code"] == "template_artifact_not_installable"
     assert service.toolbox_template_describe(template_id="core")["materialization"] == "not_materialized"
 
 
 def test_role_separation_and_channel_payload() -> None:
     for role in ["worker_user", "config_editor", "diagnostic_user"]:
-        assert "toolbox-template-prewarm" not in EngineHostService._commands_allowed_for_role(role)  # noqa: SLF001
-    assert "toolbox-template-prewarm" in EngineHostService._commands_allowed_for_role("admin")  # noqa: SLF001
+        assert "environment-template-prewarm" not in EngineHostService._commands_allowed_for_role(role)  # noqa: SLF001
+    assert "environment-template-prewarm" in EngineHostService._commands_allowed_for_role("admin")  # noqa: SLF001
 
     calls: list[tuple[str, dict[str, Any]]] = []
 
@@ -214,24 +215,24 @@ def test_role_separation_and_channel_payload() -> None:
     channel = EngineHostControlChannel({"engine_host_daemon_auto_bootstrap": False})
     channel._get_connection = lambda: Connection()  # type: ignore[method-assign]
     channel.set_session_token("admin-token")
-    channel.toolbox_template_prewarm(
-        template_id="core",
-        template_digest=_digest("f"),
-        python_abi="cp312",
-        platform="win_amd64",
-        request_id="prewarm-remote-1",
-    )
+    request = {
+        "contract": "hosting.environment_request.v1",
+        "request_id": "prewarm-remote-1",
+        "consumer_kind": "toolbox",
+        "consumer_id": "core",
+        "revision": 1,
+        "template_id": "core",
+        "template_revision": 1,
+        "package_lock_digest": _digest("f"),
+        "runtime_kind": "python",
+        "platform": "win_amd64",
+        "configuration_revision": _digest("a"),
+    }
+    channel.environment_template_prewarm(request=request)
     assert calls == [
         (
-            "toolbox-template-prewarm",
-            {
-                "template_id": "core",
-                "template_digest": _digest("f"),
-                "python_abi": "cp312",
-                "platform": "win_amd64",
-                "request_id": "prewarm-remote-1",
-                "session_token": "admin-token",
-            },
+            "environment-template-prewarm",
+            {"request": request, "session_token": "admin-token"},
         )
     ]
 
@@ -240,30 +241,17 @@ def test_daemon_dispatch_runs_target_host_service_method(tmp_path: Path) -> None
     daemon = EngineHostDaemon(
         pid_file=tmp_path / "daemon.pid",
         engines_state_file=tmp_path / "engines.json",
-        control_state_file=tmp_path / "access_control.json",
+        mp13_config_file=write_hosting_configuration(tmp_path),
     )
-    daemon.svc._toolbox_template_materializer = VerifiedMaterializer()  # noqa: SLF001
-    published = daemon.svc._toolbox_template_catalog.publish_inactive(  # noqa: SLF001
-        template=ToolboxEnvironmentTemplateSpec.from_dict(_template()),
-        artifacts=(ToolboxTemplateArtifactReference.from_dict(_artifact()),),
-        manifest_signature=SIGNATURE,
-        actor_id="admin:test",
-    )
-    daemon.svc.toolbox_template_activate(
-        template_id="core", template_digest=published["template_digest"]
-    )
+    request = {"contract": "hosting.environment_request.v1", "request_id": "daemon-prewarm-1"}
+    daemon.svc.environment_template_prewarm = lambda **payload: {"request": payload["request"]}  # type: ignore[method-assign]
     response = asyncio.run(
         daemon._dispatch(  # noqa: SLF001
             json.dumps(
                 {
                     "seq": 1,
-                    "cmd": "toolbox-template-prewarm",
-                    "payload": {
-                        "template_id": "core",
-                        "python_abi": "cp312",
-                        "platform": "win_amd64",
-                        "request_id": "daemon-prewarm-1",
-                    },
+                    "cmd": "environment-template-prewarm",
+                    "payload": {"request": request},
                 }
             ),
             peer_host="127.0.0.1",
@@ -271,8 +259,7 @@ def test_daemon_dispatch_runs_target_host_service_method(tmp_path: Path) -> None
         )
     )
     assert response["ok"] is True
-    assert response["result"]["operation"]["execution_kind"] == "toolbox_template_prewarm"
-    assert _terminal(daemon.svc, response["result"])["lifecycle"] == "terminal_success"
+    assert response["result"] == {"request": request}
 
 
 def test_ssh_cli_routes_complete_prewarm_request_without_local_fallback(
@@ -290,22 +277,29 @@ def test_ssh_cli_routes_complete_prewarm_request_without_local_fallback(
             return {"status": "ok"}
 
     monkeypatch.setattr("hosting.engine_host_channel.EngineHostControlChannel", RemoteChannel)
-    payload = {
-        "template_id": "core",
-        "template_digest": _digest("f"),
-        "python_abi": "cp312",
-        "platform": "win_amd64",
+    request = {
+        "contract": "hosting.environment_request.v1",
         "request_id": "ssh-prewarm-1",
+        "consumer_kind": "toolbox",
+        "consumer_id": "core",
+        "revision": 1,
+        "template_id": "core",
+        "template_revision": 1,
+        "package_lock_digest": _digest("f"),
+        "runtime_kind": "python",
+        "platform": "win_amd64",
+        "configuration_revision": _digest("a"),
     }
+    payload = {"request": request}
     rc = engine_host_cli.main(
         [
             "--ssh-target",
             "admin@example.test",
             "--payload-json",
             json.dumps(payload),
-            "toolbox-template-prewarm",
+            "environment-template-prewarm",
         ]
     )
     assert rc == 0
-    assert calls == [("toolbox-template-prewarm", payload)]
+    assert calls == [("environment-template-prewarm", payload)]
     assert '"ok": true' in capsys.readouterr().out

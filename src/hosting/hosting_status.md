@@ -824,6 +824,21 @@ the slice.
   passed all three tests, including 401/403 enforcement and static per-engine
   path-policy behavior
 
+### TEST-R6.4C — shared-template prewarm surface cut
+
+- Date: 2026-08-12
+- Plan IDs: R4.1/R4.2, R6.4, and R9.1/R9.4 (partial); P0/P2; high expertise
+- Outcome: shared-template resolver fixtures load v3 hosting configuration;
+  public role, channel, daemon, and SSH-CLI prewarm coverage uses only
+  `environment-template-prewarm` with a worker-neutral `EnvironmentRequest`
+- Removal proof: the touched resolver/prewarm suites and catalog contain zero
+  `control_state_file`, `access_control.json`, `toolbox-template-prewarm`, or
+  `TOOLBOX_TEMPLATE_PREWARM` matches
+- Proof: `python -m pytest tests/test_hosted_toolbox_shared_template_resolver.py
+  tests/test_hosted_toolbox_template_prewarm.py
+  tests/test_hosted_toolbox_shipped_templates.py -q --maxfail=30` passed all 21
+  tests, including generic operation-kind persistence and fail-closed materialization
+
 Append one concise entry per completed slice. Include exact commands, counts,
 durations where useful, negative-path results, commit pin, and dependent receipt
 impact. Do not paste an unstructured full test transcript.

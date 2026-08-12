@@ -17,6 +17,7 @@ from hosting.service.toolbox_materialization import (
     derived_environment_digest,
 )
 from hosting_toolbox_test_catalog import realized_test_catalog
+from tests.hosting_v3_fixtures import hosting_configuration
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -50,7 +51,7 @@ class ReceiptMaterializer:
 def _ready_service(tmp_path: Path) -> EngineHostService:
     service = EngineHostService(
         engines_state_file=tmp_path / "engines.json",
-        control_state_file=tmp_path / "access_control.json",
+        hosting_configuration=hosting_configuration(tmp_path),
         toolbox_template_materializer=ReceiptMaterializer(),
     )
     operations = []
@@ -132,7 +133,8 @@ def test_consumer_bindings_share_physical_receipt_without_aliasing_runtime_ident
 
 def test_intrinsic_resolution_uses_py_compute_and_is_read_only(tmp_path: Path) -> None:
     service = _ready_service(tmp_path)
-    operations_before = (tmp_path / "state" / "hosted_operations.json").read_bytes()
+    operation_state = service.hosting_root / "state" / "hosted_operations.json"
+    operations_before = operation_state.read_bytes()
     engines_before = service._read_engines()  # noqa: SLF001
     resolution = service.resolve_hosted_template_environment(
         consumer_kind="toolbox",
@@ -146,13 +148,13 @@ def test_intrinsic_resolution_uses_py_compute_and_is_read_only(tmp_path: Path) -
         "numexpr", "numpy", "sympy"
     }
     assert service._read_engines() == engines_before  # noqa: SLF001
-    assert (tmp_path / "state" / "hosted_operations.json").read_bytes() == operations_before
+    assert operation_state.read_bytes() == operations_before
 
 
 def test_unverified_templates_are_not_resolvable(tmp_path: Path) -> None:
     service = EngineHostService(
         engines_state_file=tmp_path / "engines.json",
-        control_state_file=tmp_path / "access_control.json",
+        hosting_configuration=hosting_configuration(tmp_path),
     )
     with pytest.raises(ValueError, match="verified_template_target_unavailable"):
         service.resolve_hosted_template_environment(
@@ -253,14 +255,15 @@ def test_phase1_exit_same_inputs_are_deterministic_across_restart_without_worker
         "python_abi": "cp312",
         "platform": "win_amd64",
     }
-    before_operations = (tmp_path / "state" / "hosted_operations.json").read_bytes()
+    operation_state = first.hosting_root / "state" / "hosted_operations.json"
+    before_operations = operation_state.read_bytes()
     first_result = first.resolve_hosted_template_environment(**request)
     restarted = EngineHostService(
         engines_state_file=tmp_path / "engines.json",
-        control_state_file=tmp_path / "access_control.json",
+        hosting_configuration=hosting_configuration(tmp_path),
     )
     second_result = restarted.resolve_hosted_template_environment(**request)
     assert first_result == second_result
     assert first_result["binding"]["template_id"] == "core"
     assert restarted._read_engines() == []  # noqa: SLF001
-    assert (tmp_path / "state" / "hosted_operations.json").read_bytes() == before_operations
+    assert operation_state.read_bytes() == before_operations

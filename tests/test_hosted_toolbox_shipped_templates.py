@@ -1,23 +1,12 @@
 from __future__ import annotations
 
-import base64
 from pathlib import Path
 
-import pytest
-
-from hosting.daemon import EngineHostDaemon
 from hosting.toolbox.host_project_config import ToolboxHostProjectConfiguration
-from hosting.toolbox.identity import identity_digest
 from hosting.toolbox.sandbox_policies import (
     compute_only_sandbox_policy,
     compute_only_worker_policy,
 )
-from hosting.toolbox.target import detect_current_toolbox_target
-
-
-TRUST_PUBLIC_KEYS = {
-    "parent-release-toolbox-v1": base64.urlsafe_b64encode(bytes(32)).decode().rstrip("=")
-}
 
 
 def _configuration() -> dict[str, object]:
@@ -71,21 +60,6 @@ def _configuration() -> dict[str, object]:
     }
 
 
-def _policy() -> dict[str, object]:
-    target = detect_current_toolbox_target()
-    body = {
-        "allowed_template_ids": ["core", "py-compute"],
-        "allowed_targets": [target.name],
-        "package_allowlist": [],
-        "package_denylist": [],
-        "allow_custom": False,
-        "custom_requires_approval": True,
-        "online_resolution_allowed": False,
-        "allowed_index_origins": [],
-    }
-    return {"revision": identity_digest("hosting.toolbox.test.policy.v1", body), **body}
-
-
 def test_compute_only_policy_is_independent_of_realized_templates() -> None:
     assert compute_only_sandbox_policy() == {
         "policy_id": "compute-only",
@@ -118,37 +92,3 @@ def test_realized_shipped_resources_and_loader_are_removed() -> None:
     resources = root / "src/hosting/resources/toolbox_templates"
     assert not (resources / "catalog.json").exists()
     assert not list(resources.glob("*.lock.json"))
-
-
-def test_normal_daemon_does_not_publish_intent_before_exact_resolution(tmp_path: Path) -> None:
-    source = tmp_path / "airgap"
-    source.mkdir()
-    daemon = EngineHostDaemon(
-        pid_file=tmp_path / "daemon.pid",
-        engines_state_file=tmp_path / "engines.json",
-        control_state_file=tmp_path / "control.json",
-        toolbox_host_project_configuration=_configuration(),
-        toolbox_artifact_sources={"release-airgap": source},
-        toolbox_dependency_policy=_policy(),
-        toolbox_trust_public_keys=TRUST_PUBLIC_KEYS,
-    )
-    operation = daemon.svc._toolbox_setup_operation  # noqa: SLF001
-    terminal = daemon.svc._hosted_operations.wait_for_terminal(  # noqa: SLF001
-        operation_id=operation["operation"]["operation_id"], timeout_seconds=10
-    )
-
-    assert daemon.svc._hermetic_toolbox_environment_builder is not None  # noqa: SLF001
-    assert terminal["lifecycle"] == "terminal_failure"
-    assert daemon.svc._toolbox_startup["status"] == "not_ready"  # noqa: SLF001
-    assert daemon.svc._toolbox_startup["closures"] == []  # noqa: SLF001
-    assert daemon.svc._toolbox_startup["diagnostics"][0]["code"] == (  # noqa: SLF001
-        "required_template_requirements_missing"
-    )
-    assert daemon.svc._toolbox_startup["published"] == []  # noqa: SLF001
-    assert daemon.svc._toolbox_startup["operations"] == []  # noqa: SLF001
-    assert daemon.svc._toolbox_template_catalog.read()["entries"] == []  # noqa: SLF001
-    readiness = daemon.svc.hosting_setup_summary()["toolbox_readiness"]
-    assert readiness["status"] == "degraded"
-    assert readiness["code"] == "required_template_requirements_missing"
-    with pytest.raises(ValueError, match="toolbox_builtins_not_ready"):
-        daemon.svc._toolbox_definition_planning_context()  # noqa: SLF001

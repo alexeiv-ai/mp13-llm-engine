@@ -1581,7 +1581,7 @@ class ToolboxTemplateCatalogMixin:
             raise ValueError("template_prewarm_request_id_required")
         fingerprint = hosted_execution_fingerprint(
             {
-                "execution_kind": HostedExecutionKind.TOOLBOX_TEMPLATE_PREWARM.value,
+                "execution_kind": HostedExecutionKind.ENVIRONMENT_TEMPLATE_PREWARM.value,
                 "template_id": target_id,
                 "template_digest": target_digest,
                 "target": target,
@@ -1591,7 +1591,7 @@ class ToolboxTemplateCatalogMixin:
         owner = self._operation_owner(owner_actor_id)
         prepared = self._hosted_operations.prepare(
             owner_actor_id=owner,
-            execution_kind=HostedExecutionKind.TOOLBOX_TEMPLATE_PREWARM,
+            execution_kind=HostedExecutionKind.ENVIRONMENT_TEMPLATE_PREWARM,
             selector=HostedOperationSelector(kind="template_id", id=target_id),
             namespace=f"environment_template_prewarm:{target_id}",
             request_id=rid,
