@@ -89,7 +89,7 @@ TOOLBOX_DEFINITION_CONFIRMATION_PHASES = frozenset(
     {"validation", "acquisition", "receipt_commit"}
 )
 TOOLBOX_DEFINITION_APPLY_COMMITTED_PHASES = frozenset({"publication", "draining", "cleanup"})
-TOOLBOX_TEMPLATE_PREWARM_PHASES = frozenset(
+ENVIRONMENT_TEMPLATE_PREWARM_PHASES = frozenset(
     {"validation", "artifact_verification", "environment_build", "import_probe", "receipt_commit"}
 )
 TOOLBOX_SETUP_PHASES = frozenset(
@@ -106,10 +106,10 @@ TOOLBOX_SETUP_PHASES = frozenset(
 TOOLBOX_ARTIFACT_IMPORT_PHASES = frozenset(
     {"validation", "artifact_verification", "publication", "cleanup"}
 )
-TOOLBOX_ENVIRONMENT_REMOVE_PHASES = frozenset(
+ENVIRONMENT_REMOVE_PHASES = frozenset(
     {"validation", "reference_check", "removal", "cleanup"}
 )
-TOOLBOX_TEMPLATE_CONSTRUCT_PHASES = frozenset(
+ENVIRONMENT_TEMPLATE_CONSTRUCT_PHASES = frozenset(
     {
         "validation",
         "resolution",
@@ -132,11 +132,11 @@ class HostedExecutionKind(StrEnum):
     TOOLBOX_DEFINITION_APPLY = "toolbox_definition_apply"
     TOOLBOX_DEFINITION_PLAN = "toolbox_definition_plan"
     TOOLBOX_DEFINITION_CONFIRMATION = "toolbox_definition_confirmation"
-    TOOLBOX_TEMPLATE_PREWARM = "toolbox_template_prewarm"
+    ENVIRONMENT_TEMPLATE_PREWARM = "environment_template_prewarm"
     TOOLBOX_SETUP = "toolbox_setup"
     TOOLBOX_ARTIFACT_IMPORT = "toolbox_artifact_import"
-    TOOLBOX_ENVIRONMENT_REMOVE = "toolbox_environment_remove"
-    TOOLBOX_TEMPLATE_CONSTRUCT = "toolbox_template_construct"
+    ENVIRONMENT_REMOVE = "environment_remove"
+    ENVIRONMENT_TEMPLATE_CONSTRUCT = "environment_template_construct"
     TOOLBOX_MAINTENANCE = "toolbox_maintenance"
     TOOLBOX_DESCRIBE_REFRESH = "toolbox_describe_refresh"
     WORKFLOW_PYTHON = "workflow_python"
@@ -533,9 +533,9 @@ class HostedOperationStatus:
             if self.operation.execution_kind == HostedExecutionKind.TOOLBOX_DEFINITION_CONFIRMATION:
                 if self.progress.phase not in TOOLBOX_DEFINITION_CONFIRMATION_PHASES:
                     raise ValueError("toolbox_definition_confirmation_progress_phase_invalid")
-            if self.operation.execution_kind == HostedExecutionKind.TOOLBOX_TEMPLATE_PREWARM:
-                if self.progress.phase not in TOOLBOX_TEMPLATE_PREWARM_PHASES:
-                    raise ValueError("toolbox_template_prewarm_progress_phase_invalid")
+            if self.operation.execution_kind == HostedExecutionKind.ENVIRONMENT_TEMPLATE_PREWARM:
+                if self.progress.phase not in ENVIRONMENT_TEMPLATE_PREWARM_PHASES:
+                    raise ValueError("environment_template_prewarm_progress_phase_invalid")
             if self.operation.execution_kind == HostedExecutionKind.TOOLBOX_SETUP:
                 if self.progress.phase not in TOOLBOX_SETUP_PHASES:
                     raise ValueError("toolbox_setup_progress_phase_invalid")
@@ -546,16 +546,16 @@ class HostedOperationStatus:
                     raise ValueError("toolbox_artifact_import_progress_phase_invalid")
                 if self.progress.cancellable:
                     raise ValueError("toolbox_artifact_import_progress_cancellable")
-            if self.operation.execution_kind == HostedExecutionKind.TOOLBOX_ENVIRONMENT_REMOVE:
-                if self.progress.phase not in TOOLBOX_ENVIRONMENT_REMOVE_PHASES:
-                    raise ValueError("toolbox_environment_remove_progress_phase_invalid")
+            if self.operation.execution_kind == HostedExecutionKind.ENVIRONMENT_REMOVE:
+                if self.progress.phase not in ENVIRONMENT_REMOVE_PHASES:
+                    raise ValueError("environment_remove_progress_phase_invalid")
                 if self.progress.phase in {"removal", "cleanup"} and self.progress.cancellable:
-                    raise ValueError("toolbox_environment_remove_committed_progress_cancellable")
-            if self.operation.execution_kind == HostedExecutionKind.TOOLBOX_TEMPLATE_CONSTRUCT:
-                if self.progress.phase not in TOOLBOX_TEMPLATE_CONSTRUCT_PHASES:
-                    raise ValueError("toolbox_template_construct_progress_phase_invalid")
+                    raise ValueError("environment_remove_committed_progress_cancellable")
+            if self.operation.execution_kind == HostedExecutionKind.ENVIRONMENT_TEMPLATE_CONSTRUCT:
+                if self.progress.phase not in ENVIRONMENT_TEMPLATE_CONSTRUCT_PHASES:
+                    raise ValueError("environment_template_construct_progress_phase_invalid")
                 if self.progress.phase in {"receipt_commit", "publication", "cleanup"} and self.progress.cancellable:
-                    raise ValueError("toolbox_template_construct_committed_progress_cancellable")
+                    raise ValueError("environment_template_construct_committed_progress_cancellable")
             if self.operation.execution_kind == HostedExecutionKind.TOOLBOX_MAINTENANCE:
                 if self.progress.phase not in TOOLBOX_MAINTENANCE_PHASES:
                     raise ValueError("toolbox_maintenance_progress_phase_invalid")
@@ -647,11 +647,11 @@ __all__ = [
     "TOOLBOX_DEFINITION_APPLY_PHASES",
     "TOOLBOX_DEFINITION_PLAN_PHASES",
     "TOOLBOX_DEFINITION_CONFIRMATION_PHASES",
-    "TOOLBOX_TEMPLATE_PREWARM_PHASES",
+    "ENVIRONMENT_TEMPLATE_PREWARM_PHASES",
     "TOOLBOX_SETUP_PHASES",
     "TOOLBOX_ARTIFACT_IMPORT_PHASES",
-    "TOOLBOX_ENVIRONMENT_REMOVE_PHASES",
-    "TOOLBOX_TEMPLATE_CONSTRUCT_PHASES",
+    "ENVIRONMENT_REMOVE_PHASES",
+    "ENVIRONMENT_TEMPLATE_CONSTRUCT_PHASES",
     "TOOLBOX_MAINTENANCE_PHASES",
     "TOOLBOX_DESCRIBE_REFRESH_PHASES",
     "HostedExecutionKind",

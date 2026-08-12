@@ -109,7 +109,7 @@ class ToolboxMaintenanceMixin:
             owner_actor_id=owner,
             execution_kind=HostedExecutionKind.TOOLBOX_ENVIRONMENT_REMOVE,
             selector=HostedOperationSelector(kind="environment_digest", id=key),
-            namespace=f"toolbox_environment_remove:{key}",
+            namespace=f"environment_remove:{key}",
             request_id=rid,
             fingerprint=fingerprint,
             metadata={
@@ -127,7 +127,7 @@ class ToolboxMaintenanceMixin:
         thread = threading.Thread(
             target=self._run_toolbox_environment_remove,
             kwargs={"operation_id": operation_id, "environment_digest": key},
-            name=f"toolbox-environment-remove-{operation_id[-8:]}",
+            name=f"environment-remove-{operation_id[-8:]}",
             daemon=True,
         )
         try:

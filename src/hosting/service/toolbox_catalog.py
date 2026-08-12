@@ -1593,7 +1593,7 @@ class ToolboxTemplateCatalogMixin:
             owner_actor_id=owner,
             execution_kind=HostedExecutionKind.TOOLBOX_TEMPLATE_PREWARM,
             selector=HostedOperationSelector(kind="template_id", id=target_id),
-            namespace=f"toolbox_template_prewarm:{target_id}",
+            namespace=f"environment_template_prewarm:{target_id}",
             request_id=rid,
             fingerprint=fingerprint,
             metadata={"template_digest": target_digest, "target": target},
@@ -1612,7 +1612,7 @@ class ToolboxTemplateCatalogMixin:
                 "python_abi": python_abi,
                 "platform": platform,
             },
-            name=f"toolbox-template-prewarm-{operation_id[-8:]}",
+            name=f"environment-template-prewarm-{operation_id[-8:]}",
             daemon=True,
         )
         try:
@@ -1791,7 +1791,7 @@ class ToolboxTemplateCatalogMixin:
             owner_actor_id=owner,
             execution_kind=HostedExecutionKind.TOOLBOX_TEMPLATE_CONSTRUCT,
             selector=HostedOperationSelector(kind="template_id", id=target_id),
-            namespace=f"toolbox_template_construct:{target_id}",
+            namespace=f"environment_template_construct:{target_id}",
             request_id=rid,
             fingerprint=fingerprint,
             metadata={
@@ -1815,7 +1815,7 @@ class ToolboxTemplateCatalogMixin:
                 "base_entry": dict(base_entry),
                 "owner_actor_id": owner,
             },
-            name=f"toolbox-template-construct-{operation_id[-8:]}",
+            name=f"environment-template-construct-{operation_id[-8:]}",
             daemon=True,
         )
         try:

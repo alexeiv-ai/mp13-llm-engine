@@ -418,8 +418,11 @@ the slice.
   concurrent requests coalesced to one build; toolbox and workflow consumers
   acquired separate references to identical content; active/retained content
   resisted removal; legacy-only roots were ignored
+- Follow-up proof: hosted operation enum values, namespaces, validation codes,
+  and worker names now use generic environment kinds; 17 focused package,
+  environment, and daemon-startup tests passed after the cut
 - Remaining in R6: remove the toolbox manager/builder aliases and legacy readers,
-  and generalize the remaining toolbox-owned operation/audit implementation
+  then generalize the remaining toolbox-owned audit/receipt implementation
 
 Append one concise entry per completed slice. Include exact commands, counts,
 durations where useful, negative-path results, commit pin, and dependent receipt
