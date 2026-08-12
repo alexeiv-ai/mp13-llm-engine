@@ -104,7 +104,7 @@ class ConfiguredToolboxPlanResolver:
                     artifact_digest=digest,
                     compatibility_tags=tuple(sorted(str(item) for item in wheel_tags)),
                     provenance=(
-                        f"{template.provenance.source}:{template.provenance.manifest_digest}"
+                        f"{template.provenance.source}:{template.provenance.evidence_digest}"
                     ),
                     source_id=source_id,
                 )

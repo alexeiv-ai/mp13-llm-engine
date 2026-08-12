@@ -265,7 +265,7 @@ def test_admin_immutable_template_replacement_survives_restart(tmp_path: Path) -
     replacement["provenance"] = {
         **replacement["provenance"],
         "revision": "2026.08.08.2",
-        "manifest_digest": identity_digest(
+        "evidence_digest": identity_digest(
             "hosting.toolbox.test.replacement.v1", {"template_id": "core", "version": 2}
         ),
     }

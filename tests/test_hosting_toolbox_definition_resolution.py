@@ -257,8 +257,8 @@ def _service_with_verified_closure(
         provenance=ToolboxTemplateProvenance(
             source="signed-airgap:release",
             revision=imported["bundle_id"],
-            manifest_digest=imported["manifest_digest"],
-            signing_key_id="release-key",
+            evidence_digest=imported["manifest_digest"],
+            verifier_id="release-key",
         ),
     )
     from hosting.service.toolbox_catalog import ToolboxTemplateArtifactReference

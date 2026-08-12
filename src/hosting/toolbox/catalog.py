@@ -137,27 +137,29 @@ class ToolboxLockedDistributionSpec:
 class ToolboxTemplateProvenance:
     source: str
     revision: str
-    manifest_digest: str
-    signing_key_id: str
+    evidence_digest: str
+    verifier_id: str | None = None
 
     def __post_init__(self) -> None:
-        for field_name in ("source", "revision", "signing_key_id"):
+        for field_name in ("source", "revision"):
             value = _required_text(
                 getattr(self, field_name), label=f"template_provenance_{field_name}"
             )
             object.__setattr__(self, field_name, value)
         object.__setattr__(
             self,
-            "manifest_digest",
-            _canonical_digest(self.manifest_digest, label="template_manifest_digest"),
+            "evidence_digest",
+            _canonical_digest(self.evidence_digest, label="template_evidence_digest"),
         )
+        verifier = str(self.verifier_id or "").strip() or None
+        object.__setattr__(self, "verifier_id", verifier)
 
     def to_dict(self) -> dict[str, str]:
         return {
             "source": self.source,
             "revision": self.revision,
-            "manifest_digest": self.manifest_digest,
-            "signing_key_id": self.signing_key_id,
+            "evidence_digest": self.evidence_digest,
+            "verifier_id": self.verifier_id,
         }
 
     @classmethod
@@ -165,14 +167,14 @@ class ToolboxTemplateProvenance:
         row = dict(payload or {})
         _strict_fields(
             row,
-            {"source", "revision", "manifest_digest", "signing_key_id"},
+            {"source", "revision", "evidence_digest", "verifier_id"},
             label="template_provenance",
         )
         return cls(
             source=row.get("source"),
             revision=row.get("revision"),
-            manifest_digest=row.get("manifest_digest"),
-            signing_key_id=row.get("signing_key_id"),
+            evidence_digest=row.get("evidence_digest"),
+            verifier_id=row.get("verifier_id"),
         )
 
 

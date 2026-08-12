@@ -94,8 +94,8 @@ def resolved_builtin_template_candidate(
         provenance=ToolboxTemplateProvenance(
             source=provenance_source,
             revision=revision,
-            manifest_digest=manifest_digest,
-            signing_key_id=signing_key_id,
+            evidence_digest=manifest_digest,
+            verifier_id=signing_key_id,
         ),
     )
     references = tuple(

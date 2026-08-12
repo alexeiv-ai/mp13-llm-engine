@@ -48,8 +48,8 @@ def _template(
             "provenance": {
                 "source": "test",
                 "revision": "1",
-                "manifest_digest": _digest("d"),
-                "signing_key_id": "test-key",
+                "evidence_digest": _digest("d"),
+                "verifier_id": "test-key",
             },
         }
     )

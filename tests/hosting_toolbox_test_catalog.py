@@ -87,8 +87,8 @@ def _release(
         provenance=ToolboxTemplateProvenance(
             source="test-only-realized-template",
             revision="fixture-v1",
-            manifest_digest=manifest_digest,
-            signing_key_id="test-fixture-key",
+            evidence_digest=manifest_digest,
+            verifier_id="test-fixture-verifier",
         ),
     )
     artifact = {

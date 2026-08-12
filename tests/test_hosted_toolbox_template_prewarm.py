@@ -47,8 +47,8 @@ def _template() -> dict[str, Any]:
         "provenance": {
             "source": "release",
             "revision": "1",
-            "manifest_digest": _digest("c"),
-            "signing_key_id": "release-key-1",
+            "evidence_digest": _digest("c"),
+            "verifier_id": "release-key-1",
         },
     }
 

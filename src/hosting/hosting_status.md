@@ -141,6 +141,7 @@ The pre-R7 P0 clean-cut items are complete.
 | TEST-R9.4I | Toolbox host-project semantic tests now install their catalog intent explicitly after strict v3 service startup; removed setup-summary projections stay absent and revision invalidation remains covered. The file passed 6 tests. |
 | TEST-R9.4J | Removed the legacy signed-bundle daemon/setup, HTTPS-acquisition, and pre-generic R7 acceptance modules that depended on the five deleted startup maps and mandatory signing baseline. Native CI now exercises strict-v3 definition resolution; the replacement package/definition/cutover/workflow lane passed 21 tests. |
 | DOC/TEST-R9.4K | Permanent worker guidance now pins templates through generic package locks and environment receipts and describes verification as optional policy, not a signed-manifest baseline. Contract/removal documentation coverage passed 13 tests. |
+| CODE/TEST-R9.4L | Toolbox template semantic provenance now uses an evidence digest and optional verifier ID; required signing-key identity and readiness trust-key gating were removed. Catalog, dependency, materialization, definition-resolution, and host-transition coverage passed 85 tests. |
 | CODE-R8A–C | Versioned neutral state, Python/JS shared manager adoption, GC/repair controls passed focused coverage. |
 | CODE/TEST-R9 partial | Structured auth, role/hash authority, redaction, startup modes, generic lifecycle, and retry/restart identity passed focused coverage. |
 | TEST-R8.2C checkpoint | Workflow operation suite passed; full helper suite passed 116 tests on resume. |

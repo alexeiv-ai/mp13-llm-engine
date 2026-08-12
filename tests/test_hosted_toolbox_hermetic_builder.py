@@ -350,8 +350,8 @@ def test_catalog_prewarm_adapter_builds_complete_wheel_lock_on_target_host(tmp_p
         provenance=ToolboxTemplateProvenance(
             source="test",
             revision="one",
-            manifest_digest=_digest("7"),
-            signing_key_id="test-key",
+            evidence_digest=_digest("7"),
+            verifier_id="test-verifier",
         ),
     )
     entry = {

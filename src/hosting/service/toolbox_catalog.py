@@ -198,7 +198,7 @@ class AtomicJsonToolboxTemplateCatalog:
             raise ValueError("template_id_mismatch")
         identity_key = str(row["identity_key"] or "")
         expected_identity = (
-            f"{template.template_id}|{template.provenance.manifest_digest}|{template.lock_digest}"
+            f"{template.template_id}|{template.provenance.evidence_digest}|{template.lock_digest}"
         )
         if identity_key != expected_identity:
             raise ValueError("template_identity_key_mismatch")
@@ -360,7 +360,7 @@ class AtomicJsonToolboxTemplateCatalog:
         if not isinstance(manifest_signature, str) or not _SIGNATURE_RE.fullmatch(manifest_signature):
             raise ValueError("template_manifest_signature_invalid")
         digest = _template_digest(template, artifact_tuple, manifest_signature)
-        identity_key = f"{template.template_id}|{template.provenance.manifest_digest}|{template.lock_digest}"
+        identity_key = f"{template.template_id}|{template.provenance.evidence_digest}|{template.lock_digest}"
         with _exclusive_process_file_lock(self.lock_path):
             state = self._read_unlocked()
             collision = next(
@@ -541,7 +541,7 @@ class AtomicJsonToolboxTemplateCatalog:
                 raise ValueError("template_publish_batch_digest_mismatch")
             batch.append((template, artifacts, signature, digest))
         identities = [
-            f"{item.template_id}|{item.provenance.manifest_digest}|{item.lock_digest}"
+            f"{item.template_id}|{item.provenance.evidence_digest}|{item.lock_digest}"
             for item, _artifacts, _signature, _digest in batch
         ]
         if (
@@ -752,11 +752,6 @@ class ToolboxTemplateCatalogMixin:
             if isinstance(configured, ToolboxHostProjectConfiguration)
             else None
         )
-        configured_trust_keys = (
-            {key_id for source in configured.sources for key_id in source.trust_key_ids}
-            if isinstance(configured, ToolboxHostProjectConfiguration)
-            else set()
-        )
         state = self._toolbox_template_catalog.read()
         diagnostics: list[dict[str, str]] = []
         templates: list[dict[str, Any]] = []
@@ -773,36 +768,17 @@ class ToolboxTemplateCatalogMixin:
                 code = "environment_template_unavailable"
                 ready = False
                 template_digest = None
-                manifest_digest = None
+                evidence_digest = None
                 lock_digest = None
             elif entry["lifecycle"] == "revoked":
                 code = "environment_template_unavailable"
                 ready = False
                 template_digest = entry["template_digest"]
-                manifest_digest = entry["template"]["provenance"]["manifest_digest"]
-                lock_digest = entry["template"]["lock_digest"]
-            elif isinstance(configured, ToolboxHostProjectConfiguration) and not (
-                entry["template"]["provenance"]["signing_key_id"]
-                in configured_trust_keys
-                or (
-                    entry["template"]["provenance"]["signing_key_id"].startswith(
-                        "ed25519-set:"
-                    )
-                    and set(
-                        entry["template"]["provenance"]["signing_key_id"]
-                        .removeprefix("ed25519-set:")
-                        .split("+")
-                    ).issubset(configured_trust_keys)
-                )
-            ):
-                code = "package_policy_rejected"
-                ready = False
-                template_digest = entry["template_digest"]
-                manifest_digest = entry["template"]["provenance"]["manifest_digest"]
+                evidence_digest = entry["template"]["provenance"]["evidence_digest"]
                 lock_digest = entry["template"]["lock_digest"]
             else:
                 template_digest = entry["template_digest"]
-                manifest_digest = entry["template"]["provenance"]["manifest_digest"]
+                evidence_digest = entry["template"]["provenance"]["evidence_digest"]
                 lock_digest = entry["template"]["lock_digest"]
                 receipt = self._toolbox_materialization_receipts.get(
                     template_digest=template_digest,
@@ -815,7 +791,7 @@ class ToolboxTemplateCatalogMixin:
                 {
                     "template_id": template_id,
                     "template_digest": template_digest,
-                    "manifest_digest": manifest_digest,
+                    "evidence_digest": evidence_digest,
                     "lock_digest": lock_digest,
                     "target": target,
                     "ready": ready,

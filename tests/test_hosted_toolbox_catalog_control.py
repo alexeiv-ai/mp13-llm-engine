@@ -49,8 +49,8 @@ def _template_payload(
         "provenance": {
             "source": "release",
             "revision": revision,
-            "manifest_digest": _digest(revision[-1]),
-            "signing_key_id": "release-key-1",
+            "evidence_digest": _digest(revision[-1]),
+            "verifier_id": "release-key-1",
         },
     }
 
@@ -263,7 +263,7 @@ template = ToolboxEnvironmentTemplateSpec.from_dict({
  'locked_distributions': [{'name': 'hosting-runtime', 'version': '1.0', 'extras': []}],
  'exposed_import_roots': ['hosting'], 'lock_digest': digest(char),
  'parent_worker_artifact_digest': digest('b'), 'isolation_policy_version': '1.0',
- 'provenance': {'source': 'test', 'revision': char, 'manifest_digest': digest(char), 'signing_key_id': 'key-1'}})
+ 'provenance': {'source': 'test', 'revision': char, 'evidence_digest': digest(char), 'verifier_id': 'key-1'}})
 artifact = ToolboxTemplateArtifactReference(source_id='source', filename=name + '.whl', sha256=digest(char), size_bytes=10)
 repo = AtomicJsonToolboxTemplateCatalog(Path(state_path))
 published = repo.publish_inactive(template=template, artifacts=(artifact,), manifest_signature='A'*86, actor_id='admin:test')

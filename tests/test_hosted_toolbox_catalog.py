@@ -40,8 +40,8 @@ def _template_payload() -> dict:
         "provenance": {
             "source": "shipped-catalog",
             "revision": "2026.08.08",
-            "manifest_digest": _digest("c"),
-            "signing_key_id": "release-key-1",
+            "evidence_digest": _digest("c"),
+            "verifier_id": "release-key-1",
         },
     }
 
