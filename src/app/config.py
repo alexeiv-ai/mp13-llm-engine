@@ -263,7 +263,6 @@ def _run_host_auth_ops(args: argparse.Namespace) -> Optional[int]:
         or bool(args.host_auth_revoke_key)
         or bool(args.host_auth_issue_session)
         or bool(args.host_auth_revoke_session)
-        or (args.host_auth_require_auth is not None)
     )
     if not host_action:
         return None
@@ -292,11 +291,6 @@ def _run_host_auth_ops(args: argparse.Namespace) -> Optional[int]:
 
     if args.host_auth_revoke_session:
         print(json.dumps(svc.auth_revoke_session(str(args.host_auth_revoke_session)), indent=2))
-        return 0
-
-    if args.host_auth_require_auth is not None:
-        cfg = svc.set_control_config(require_auth=bool(args.host_auth_require_auth))
-        print(json.dumps(cfg, indent=2))
         return 0
 
     if args.host_auth_upsert_key:
@@ -929,7 +923,6 @@ def main() -> int:
     parser.add_argument("--host-auth-config-paths", type=str, default="", help="Comma-separated allowed config selectors for config scope.")
     parser.add_argument("--host-auth-engine-ids", type=str, default="", help="Comma-separated allowed engine IDs for traffic scope.")
     parser.add_argument("--host-auth-revoke-session", type=str, default=None, metavar="TOKEN", help="Revoke session token.")
-    parser.add_argument("--host-auth-require-auth", type=str, default=None, help="Set require_auth in host control config (true/false).")
     parser.add_argument("--host-auth-allowed-configs", type=str, default="", help="Comma-separated allowed configs for config_editor role key.")
     parser.add_argument(
         "--host-auth-allowed-engines",
@@ -941,16 +934,6 @@ def main() -> int:
     parser.add_argument("--host-auth-secret-env", type=str, default="", help="Environment variable name holding key secret.")
     parser.add_argument("--host-auth-secret-stdin", action="store_true", help="Read key secret from stdin (single line).")
     args = parser.parse_args()
-
-    if isinstance(args.host_auth_require_auth, str):
-        raw = str(args.host_auth_require_auth).strip().lower()
-        if raw in {"1", "true", "yes", "on"}:
-            args.host_auth_require_auth = True
-        elif raw in {"0", "false", "no", "off"}:
-            args.host_auth_require_auth = False
-        else:
-            print("Invalid --host-auth-require-auth value. Use true/false.")
-            return 1
 
     host_auth_rc = _run_host_auth_ops(args)
     if host_auth_rc is not None:

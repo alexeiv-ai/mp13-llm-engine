@@ -866,6 +866,19 @@ the slice.
   --maxfail=20` passed all seven apply, reuse, cancel, continuous-routing,
   in-flight retirement, and reference-release tests
 
+### TEST-R3.2K — app auth mutation surface removal
+
+- Date: 2026-08-12
+- Plan IDs: R3.2 and R9.1/R9.4 (partial); P0/P2; high expertise
+- Outcome: the application configuration CLI no longer exposes
+  `--host-auth-require-auth` or writes static authentication policy through the
+  running host; operators must change the v3 hosting authority before startup
+- Removal proof: `src/app/config.py` contains zero retired option, parsed-field,
+  or `set_control_config` matches
+- Proof: `python -m pytest tests/test_app_config_host_auth.py
+  tests/test_hosting_configuration_v3.py -q --maxfail=20` passed all 23 tests;
+  `python -m py_compile src/app/config.py` also passed
+
 Append one concise entry per completed slice. Include exact commands, counts,
 durations where useful, negative-path results, commit pin, and dependent receipt
 impact. Do not paste an unstructured full test transcript.
