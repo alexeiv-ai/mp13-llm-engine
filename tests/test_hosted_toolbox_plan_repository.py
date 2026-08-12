@@ -516,7 +516,9 @@ def test_complete_plan_roundtrips_every_pin_offer_artifact_and_edge(tmp_path: Pa
     assert repository.invalidate_all() == 0
 
 
-def test_runtime_planning_builds_deterministic_generic_lock_and_request() -> None:
+def test_runtime_planning_builds_deterministic_generic_lock_and_request(
+    tmp_path: Path,
+) -> None:
     draft, _active, pins, environments, _planned = _complete_inputs(
         _definition("complete", [_auto("Alpha")])
     )
@@ -532,13 +534,10 @@ def test_runtime_planning_builds_deterministic_generic_lock_and_request() -> Non
     )
 
     class PackageManager:
-        def import_verified_file(self, **kwargs):
-            assert kwargs["actor_id"] == "service:toolbox-planner"
-            return {
-                "artifact_id": kwargs["expected_digest"],
-                "size_bytes": 7,
-                "source_id": kwargs["source_id"],
-            }
+        def artifact_path(self, digest: str) -> Path:
+            path = tmp_path / digest.removeprefix("sha256:")
+            path.write_bytes(b"fixture")
+            return path
 
         def create_lock(self, **kwargs):
             assert kwargs["runtime_kind"] == "python"
@@ -553,9 +552,6 @@ def test_runtime_planning_builds_deterministic_generic_lock_and_request() -> Non
     fake = SimpleNamespace(
         hosting_configuration_revision=pins.configuration_revision,
         _package_manager=PackageManager(),
-        _toolbox_artifact_store=SimpleNamespace(
-            object_path=lambda digest: Path("cas") / digest.removeprefix("sha256:")
-        ),
     )
     first = ToolboxRuntimeMixin._plan_generic_toolbox_environments(
         fake,

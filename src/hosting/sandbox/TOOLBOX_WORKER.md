@@ -45,10 +45,11 @@ The primary implementation is split by responsibility:
   map imports to distributions, select a template or custom delta, and enforce
   host package policy.
 - [catalog.py](../toolbox/catalog.py),
-  [host_project_config.py](../toolbox/host_project_config.py), and
-  [service/toolbox_catalog.py](../service/toolbox_catalog.py) provide built-in
-  intent, immutable resolved-template catalog, and administrative lifecycle
-  controls. No realized lock is shipped as a package resource.
+  [packages/wheel_resolver.py](../packages/wheel_resolver.py), and
+  [service/toolbox_catalog.py](../service/toolbox_catalog.py) provide generic
+  package resolution, the immutable resolved-template catalog, and
+  administrative lifecycle controls. No realized lock is shipped as a package
+  resource.
 - [hermetic_environment.py](../toolbox/hermetic_environment.py) creates and
   verifies digest-addressed Python environments.
 - [bundle_models.py](../toolbox/bundle_models.py),

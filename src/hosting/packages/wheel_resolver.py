@@ -7,6 +7,7 @@ import os
 import subprocess
 import sys
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
 from urllib.parse import unquote, urlsplit
@@ -15,12 +16,19 @@ from urllib.request import url2pathname
 from packaging.utils import InvalidWheelFilename, parse_wheel_filename
 
 from .._process_utils import hidden_subprocess_kwargs
-from ..toolbox.builtin_resolver import ResolvedBuiltinWheelClosure
 from ..toolbox.catalog import ToolboxLockedDistributionSpec, normalize_distribution_name
 from ..toolbox.hermetic_environment import ToolboxLockedArtifactSpec
 from ..toolbox.identity import identity_digest
 from ..toolbox.target import ToolboxTargetIdentity, wheel_is_compatible
 from .manager import PackageArtifactManager
+
+
+@dataclass(frozen=True)
+class ResolvedPackageWheelClosure:
+    template_id: str
+    lock_digest: str
+    locked_distributions: tuple[ToolboxLockedDistributionSpec, ...]
+    locked_artifacts: tuple[ToolboxLockedArtifactSpec, ...]
 
 
 class GenericPackageWheelResolver:
@@ -74,7 +82,7 @@ class GenericPackageWheelResolver:
 
     def resolve_requirements(
         self, *, template_id: str, package_requirements: Sequence[str]
-    ) -> ResolvedBuiltinWheelClosure:
+    ) -> ResolvedPackageWheelClosure:
         requirements = tuple(str(item or "").strip() for item in package_requirements)
         if not requirements or any(not item for item in requirements):
             raise RuntimeError("required_template_requirements_missing")
@@ -161,7 +169,7 @@ class GenericPackageWheelResolver:
             or len({item.name for item in distributions}) != len(distributions)
         ):
             raise RuntimeError("required_template_resolution_bounds_exceeded")
-        return ResolvedBuiltinWheelClosure(
+        return ResolvedPackageWheelClosure(
             template_id=str(template_id),
             lock_digest=identity_digest(
                 "hosting.package.python_lock.v1",
@@ -176,4 +184,4 @@ class GenericPackageWheelResolver:
         )
 
 
-__all__ = ["GenericPackageWheelResolver"]
+__all__ = ["GenericPackageWheelResolver", "ResolvedPackageWheelClosure"]

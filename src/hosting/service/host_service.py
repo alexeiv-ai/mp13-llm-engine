@@ -46,8 +46,6 @@ from .toolbox_materialization import (
 from .toolbox_runtime import ToolboxRuntimeMixin
 from .toolbox_state_v2 import AtomicJsonToolboxStateV2Repository
 from .toolbox_plans import AtomicJsonCompleteToolboxDefinitionPlanRepository
-from .toolbox_host_config_state import AtomicJsonToolboxHostConfigurationRepository
-from .toolbox_artifact_store import AtomicToolboxArtifactStore
 from .toolbox_approvals import AtomicJsonToolboxDependencyApprovalRepository
 from .toolbox_confirmations import AtomicJsonToolboxConfirmationRepository
 from .toolbox_candidates import AtomicJsonToolboxDefinitionCandidateRepository
@@ -90,10 +88,6 @@ class EngineHostService(CoreMixin, MetricsMixin, StateMixin, ConfigMixin, Contro
         ).resolve()
         self._runtime_engines_lock = threading.RLock()
         self._runtime_engines: list[Dict[str, Any]] = []
-        self._toolbox_artifact_sources: Dict[str, Path] = {}
-        self._toolbox_host_project_config = None
-        self._toolbox_trust_public_keys = None
-        self._toolbox_source_credentials: Dict[str, str] = {}
         current_target = detect_current_toolbox_target()
         configured_abi = ""
         configured_platform = ""
@@ -135,9 +129,6 @@ class EngineHostService(CoreMixin, MetricsMixin, StateMixin, ConfigMixin, Contro
         self._toolbox_definition_plans = AtomicJsonCompleteToolboxDefinitionPlanRepository(
             self.hosting_root / "state" / "toolbox_definition_plans.json"
         )
-        self._toolbox_host_config_revisions = AtomicJsonToolboxHostConfigurationRepository(
-            self.hosting_root / "state" / "toolbox_host_configurations.json"
-        )
         self._toolbox_dependency_approvals = AtomicJsonToolboxDependencyApprovalRepository(
             self.hosting_root / "state" / "toolbox_dependency_approvals.json"
         )
@@ -150,7 +141,6 @@ class EngineHostService(CoreMixin, MetricsMixin, StateMixin, ConfigMixin, Contro
             retention_ms=int(candidate_policy["toolbox_candidate_retention_ms"]),
             limit_per_actor=int(candidate_policy["toolbox_candidate_limit_per_actor"]),
         )
-        self._configured_toolbox_dependency_policy = None
         self._model_runtime_identity = (
             model_runtime_identity
             if isinstance(model_runtime_identity, ModelRuntimeIdentity)
@@ -199,35 +189,6 @@ class EngineHostService(CoreMixin, MetricsMixin, StateMixin, ConfigMixin, Contro
             ),
         }
         self._ensure_metrics_initialized()
-        self._toolbox_startup = None
-        self._toolbox_config_transition = None
-        self._toolbox_artifact_store = AtomicToolboxArtifactStore(
-            self.hosting_root / "toolbox_artifact_store"
-        )
-        self._toolbox_verified_artifacts: dict[str, dict[str, Path]] = {}
-        self._toolbox_artifact_ingestion_diagnostic = None
-        if self._toolbox_host_project_config is not None:
-            self._toolbox_config_transition = self._toolbox_host_config_revisions.apply(
-                self._toolbox_host_project_config
-            )
-            if self._toolbox_config_transition["changed"]:
-                active_digests = set(self._toolbox_template_catalog.read()["active"].values())
-                self._toolbox_config_transition["invalidated_plans"] = (
-                    self._toolbox_definition_plans.invalidate_all()
-                )
-                self._toolbox_config_transition["invalidated_materialization_receipts"] = (
-                    self._toolbox_materialization_receipts.retain_template_digests(active_digests)
-                )
-            self._toolbox_startup = {
-                "status": "pending",
-                "config_revision": self._toolbox_host_project_config.config_revision,
-                "source_set_revision": self._toolbox_host_project_config.source_set_revision,
-                "target": self._toolbox_host_project_config.target.name,
-                "closures": [],
-                "diagnostics": [],
-                "published": [],
-                "operations": [],
-            }
 
     @property
     def _hosted_operations(self) -> AtomicJsonHostedOperationRepository:

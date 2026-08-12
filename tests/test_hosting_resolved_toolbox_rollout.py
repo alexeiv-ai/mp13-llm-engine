@@ -81,7 +81,6 @@ def test_resolved_rollout_skips_reused_and_spawns_added_as_candidate(tmp_path: P
                 )
             )
             self._environment_manager = SimpleNamespace(adopt_published=self._adopt)
-            self._toolbox_artifact_store = SimpleNamespace(object_path=lambda _digest: receipt_root / "unused")
 
         def _adopt(self, **kwargs):
             self.adopted.append(kwargs)
