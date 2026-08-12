@@ -111,6 +111,9 @@ EXAMPLES_BY_COMMAND = {
     "hosting-gc": [
         "'{\"request_id\":\"gc-1\"}' | python -m hosting.engine_host_cli --payload-stdin hosting-gc",
     ],
+    "environment-remove": [
+        "'{\"environment_id\":\"sha256:<digest>\",\"request_id\":\"remove-1\"}' | python -m hosting.engine_host_cli --payload-stdin environment-remove",
+    ],
     "toolbox-get-definition": [
         "'{\"toolbox_id\":\"toolbox-demo\"}' | python -m hosting.engine_host_cli --payload-stdin toolbox-get-definition",
     ],
@@ -1215,6 +1218,7 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
         "toolbox-prepare-definition-candidate",
         "toolbox-publish-definition-candidate",
         "toolbox-discard-definition-candidate",
+        "environment-remove",
         "environment-template-construct",
         "hosting-gc",
         "toolbox-repair",
@@ -1276,6 +1280,7 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
     if cmd_name in {
         "environment-template-prewarm",
         "environment-template-construct",
+        "environment-remove",
         "hosting-gc",
         "toolbox-repair",
         "toolbox-reconcile",
@@ -2072,7 +2077,10 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
             _print_ok(svc.hosting_gc(request_id=str(payload.get("request_id") or "")))
             return 0
         if cmd == "environment-remove":
-            _print_ok(svc.environment_remove(environment_id=str(payload.get("environment_id") or "")))
+            _print_ok(svc.environment_remove(
+                environment_id=str(payload.get("environment_id") or ""),
+                request_id=str(payload.get("request_id") or ""),
+            ))
             return 0
         if cmd == "environment-reference-list":
             _print_ok(svc.environment_reference_list(cursor=str(payload.get("cursor") or ""), limit=int(payload.get("limit") or 100)))

@@ -250,8 +250,8 @@ def test_environment_remove_has_exact_digest_selector_and_fixed_progress_phases(
         operation_id="op_environment_remove",
         request_id="remove-one",
         execution_kind=HostedExecutionKind.ENVIRONMENT_REMOVE,
-        selector=HostedOperationSelector(kind="environment_digest", id=digest),
-        fingerprint=hosted_execution_fingerprint({"environment_digest": digest}),
+        selector=HostedOperationSelector(kind="environment_id", id=digest),
+        fingerprint=hosted_execution_fingerprint({"environment_id": digest}),
         receipt_namespace=f"environment_remove:{digest}",
     )
     status = HostedOperationStatus(

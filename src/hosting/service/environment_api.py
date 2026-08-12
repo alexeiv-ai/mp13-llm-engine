@@ -98,8 +98,18 @@ class EnvironmentApiMixin:
     def environment_execution_end(self, **payload: Any) -> Dict[str, Any]:
         return self._environment_manager.execution_end(execution_id=str(payload.get("execution_id") or ""))
 
-    def environment_remove(self, **payload: Any) -> Dict[str, Any]:
-        return self._environment_manager.remove(environment_id=str(payload.get("environment_id") or ""))
+    def environment_remove(
+        self,
+        *,
+        environment_id: str,
+        request_id: str,
+        owner_actor_id: str = "service:local",
+    ) -> Dict[str, Any]:
+        return self._environment_remove_start(
+            environment_id=environment_id,
+            request_id=request_id,
+            owner_actor_id=owner_actor_id,
+        )
 
     def environment_gc(self, **payload: Any) -> Dict[str, Any]:
         return self._environment_manager.gc()

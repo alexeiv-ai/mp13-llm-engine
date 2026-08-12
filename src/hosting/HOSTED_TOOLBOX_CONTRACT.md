@@ -588,7 +588,7 @@ and becomes GC-eligible only after the last active/history retention reference
 and grace period expire.
 
 Environment removal is an administrator-only durable operation,
-`environment_remove`, selected by one canonical `environment_digest`.
+`environment_remove`, selected by one canonical `environment_id`.
 The digest is the exact immutable environment key; paths, globs, logical
 template IDs, and force flags are invalid. The operation validates the current
 configuration revision, reports progress through `validation`,

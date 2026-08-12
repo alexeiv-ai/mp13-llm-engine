@@ -242,18 +242,18 @@ def test_environment_remove_is_durable_idempotent_and_reports_progress(tmp_path:
     service._environment_manager_instance = builder  # type: ignore[attr-defined]
     digest = _digest("d")
 
-    first = service.toolbox_environment_remove(
-        environment_digest=digest, request_id="remove-one", owner_actor_id="admin:a"
+    first = service.environment_remove(
+        environment_id=digest, request_id="remove-one", owner_actor_id="admin:a"
     )
-    second = service.toolbox_environment_remove(
-        environment_digest=digest, request_id="remove-one", owner_actor_id="admin:a"
+    second = service.environment_remove(
+        environment_id=digest, request_id="remove-one", owner_actor_id="admin:a"
     )
     terminal = _wait_remove(service, first)
 
     assert first["operation"] == second["operation"]
     assert terminal["lifecycle"] == "terminal_success"
     assert terminal["result"]["status"] == "removed"
-    assert terminal["result"]["environment_digest"] == digest
+    assert terminal["result"]["environment_id"] == digest
     assert terminal["progress"]["phase"] == "cleanup"
     assert builder.removed == [digest]
 
@@ -274,8 +274,8 @@ def test_environment_remove_blocks_active_candidate_and_builder_references(tmp_p
         tool_access={"allowed_tool_names": []},
     )
 
-    started = service.toolbox_environment_remove(
-        environment_digest=digest, request_id="remove-blocked", owner_actor_id="admin:a"
+    started = service.environment_remove(
+        environment_id=digest, request_id="remove-blocked", owner_actor_id="admin:a"
     )
     terminal = _wait_remove(service, started)
 
@@ -292,15 +292,15 @@ def test_environment_remove_blocks_protected_digest_and_reports_already_absent(t
 
     blocked = _wait_remove(
         service,
-        service.toolbox_environment_remove(
-            environment_digest=protected, request_id="remove-protected", owner_actor_id="admin:a"
+        service.environment_remove(
+            environment_id=protected, request_id="remove-protected", owner_actor_id="admin:a"
         ),
     )
     absent_digest = _digest("c")
     absent = _wait_remove(
         service,
-        service.toolbox_environment_remove(
-            environment_digest=absent_digest, request_id="remove-absent", owner_actor_id="admin:a"
+        service.environment_remove(
+            environment_id=absent_digest, request_id="remove-absent", owner_actor_id="admin:a"
         ),
     )
 
@@ -342,14 +342,14 @@ def test_environment_remove_checks_unexpired_plan_confirmation_and_operation_ref
         "active_records",
         lambda **kwargs: [{
             "operation": {"operation_id": "other-operation"},
-            "metadata": {"environment_digest": digest},
+            "metadata": {"environment_id": digest},
         }],
     )
 
     terminal = _wait_remove(
         service,
-        service.toolbox_environment_remove(
-            environment_digest=digest, request_id="remove-persisted-blockers", owner_actor_id="admin:a"
+        service.environment_remove(
+            environment_id=digest, request_id="remove-persisted-blockers", owner_actor_id="admin:a"
         ),
     )
 
@@ -367,8 +367,8 @@ def test_environment_remove_reports_generic_active_execution_blocker(tmp_path: P
     service._environment_manager_instance = manager  # type: ignore[attr-defined]
     terminal = _wait_remove(
         service,
-        service.toolbox_environment_remove(
-            environment_digest=digest,
+        service.environment_remove(
+            environment_id=digest,
             request_id="remove-active-execution",
             owner_actor_id="admin:a",
         ),
@@ -664,6 +664,43 @@ def test_channel_and_daemon_require_op_start_for_mutating_maintenance(tmp_path: 
     assert wrapped["ok"] is True
     assert wrapped["result"]["operation"]["execution_kind"] == "hosting_gc"
     assert _wait_maintenance(daemon.svc, wrapped["result"])["lifecycle"] == "terminal_success"
+
+    environment_id = _digest("f")
+    raw_remove = asyncio.run(
+        daemon._dispatch(  # noqa: SLF001
+            json.dumps({
+                "seq": 3,
+                "cmd": "environment-remove",
+                "payload": {"environment_id": environment_id, "request_id": "raw-remove"},
+            }),
+            peer_host="127.0.0.1",
+            transport="local_ipc",
+        )
+    )
+    assert raw_remove["error_code"] == "operation_wrapper_required"
+    wrapped_remove = asyncio.run(
+        daemon._dispatch(  # noqa: SLF001
+            json.dumps({
+                "seq": 4,
+                "cmd": "op-start",
+                "payload": {
+                    "command": "environment-remove",
+                    "payload": {
+                        "environment_id": environment_id,
+                        "request_id": "wrapped-remove",
+                    },
+                },
+            }),
+            peer_host="127.0.0.1",
+            transport="local_ipc",
+        )
+    )
+    assert wrapped_remove["ok"] is True
+    remove_operation = wrapped_remove["result"]["operation"]
+    assert remove_operation["execution_kind"] == "environment_remove"
+    assert remove_operation["selector"] == {"kind": "environment_id", "id": environment_id}
+    remove_terminal = _wait_maintenance(daemon.svc, wrapped_remove["result"])
+    assert remove_terminal["result"]["contract"] == "hosting.environment_remove_result.v1"
 
 
 def test_remote_cli_wraps_mutating_maintenance_in_op_start(

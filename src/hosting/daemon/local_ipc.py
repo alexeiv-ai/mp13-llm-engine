@@ -2495,6 +2495,7 @@ class EngineHostDaemon:
                 "toolbox-prepare-definition-candidate",
                 "toolbox-publish-definition-candidate",
                 "toolbox-discard-definition-candidate",
+                "environment-remove",
                 "environment-template-construct",
                 "hosting-gc",
                 "toolbox-repair",
@@ -3225,7 +3226,11 @@ class EngineHostDaemon:
                 owner_actor_id=str(payload.get("_claim_actor_id") or "service:local"),
             )
         if cmd == "environment-remove":
-            return svc.environment_remove(environment_id=str(payload.get("environment_id") or ""))
+            return svc.environment_remove(
+                environment_id=str(payload.get("environment_id") or ""),
+                request_id=str(payload.get("request_id") or ""),
+                owner_actor_id=str(payload.get("_claim_actor_id") or "service:local"),
+            )
         if cmd == "environment-reference-list":
             return svc.environment_reference_list(cursor=str(payload.get("cursor") or ""), limit=payload.get("limit") or 100)
         if cmd == "environment-reference-release":

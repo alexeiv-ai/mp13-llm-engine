@@ -75,8 +75,8 @@ class HostedOperationsMixin:
                 raise ValueError("toolbox_artifact_import_selector_must_be_upload_id")
             namespace = f"toolbox_artifact_import:{target.id}"
         elif kind == HostedExecutionKind.ENVIRONMENT_REMOVE:
-            if target.kind != "environment_digest":
-                raise ValueError("environment_remove_selector_must_be_environment_digest")
+            if target.kind != "environment_id":
+                raise ValueError("environment_remove_selector_must_be_environment_id")
             namespace = f"environment_remove:{target.id}"
         elif kind == HostedExecutionKind.ENVIRONMENT_TEMPLATE_CONSTRUCT:
             if target.kind != "template_id":

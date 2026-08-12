@@ -112,42 +112,35 @@ class ToolboxMaintenanceMixin:
             "built_in", "protected", "reference",
         ) if item in blockers]
 
-    def toolbox_environment_remove(
+    def _environment_remove_start(
         self,
         *,
-        environment_digest: str,
+        environment_id: str,
         request_id: str,
         owner_actor_id: str = "service:local",
     ) -> dict[str, Any]:
-        key = require_digest(environment_digest, label="environment_digest")
+        key = require_digest(environment_id, label="environment_id")
         rid = str(request_id or "").strip()
         if not rid:
-            raise ValueError("toolbox_environment_remove_request_id_required")
-        configuration = getattr(self, "_toolbox_host_project_config", None)
-        if configuration is None:
-            raise ValueError("toolbox_host_project_configuration_required")
+            raise ValueError("environment_remove_request_id_required")
         fingerprint = hosted_execution_fingerprint(
             {
                 "execution_kind": HostedExecutionKind.ENVIRONMENT_REMOVE.value,
                 "configuration_revision": self.hosting_configuration_revision,
-                "environment_digest": key,
-                "config_revision": configuration.config_revision,
-                "source_set_revision": configuration.source_set_revision,
+                "environment_id": key,
             }
         )
         owner = self._operation_owner(owner_actor_id)
         prepared = self._hosted_operations.prepare(
             owner_actor_id=owner,
             execution_kind=HostedExecutionKind.ENVIRONMENT_REMOVE,
-            selector=HostedOperationSelector(kind="environment_digest", id=key),
+            selector=HostedOperationSelector(kind="environment_id", id=key),
             namespace=f"environment_remove:{key}",
             request_id=rid,
             fingerprint=fingerprint,
             metadata={
                 "configuration_revision": self.hosting_configuration_revision,
-                "environment_digest": key,
-                "config_revision": configuration.config_revision,
-                "source_set_revision": configuration.source_set_revision,
+                "environment_id": key,
             },
         )
         status = prepared.get("status")
@@ -157,8 +150,8 @@ class ToolboxMaintenanceMixin:
             return dict(status)
         operation_id = str(status["operation"]["operation_id"])
         thread = threading.Thread(
-            target=self._run_toolbox_environment_remove,
-            kwargs={"operation_id": operation_id, "environment_digest": key},
+            target=self._run_environment_remove,
+            kwargs={"operation_id": operation_id, "environment_id": key},
             name=f"environment-remove-{operation_id[-8:]}",
             daemon=True,
         )
@@ -169,7 +162,7 @@ class ToolboxMaintenanceMixin:
                 operation_id=operation_id,
                 lifecycle=HostedOperationLifecycle.TERMINAL_FAILURE,
                 envelope={
-                    "contract": "hosting.toolbox.environment_remove_result.v1",
+                    "contract": "hosting.environment_remove_result.v1",
                     "status": "error",
                     "code": "environment_remove_dispatch_failed",
                 },
@@ -178,8 +171,8 @@ class ToolboxMaintenanceMixin:
             raise
         return dict(status)
 
-    def _run_toolbox_environment_remove(
-        self, *, operation_id: str, environment_digest: str
+    def _run_environment_remove(
+        self, *, operation_id: str, environment_id: str
     ) -> None:
         self._hosted_operations.mark_dispatch_claimed(operation_id=operation_id)
 
@@ -217,17 +210,17 @@ class ToolboxMaintenanceMixin:
                 completed_units=1, total_units=1, cancellable=True,
             )
             blockers = self._environment_removal_blockers(
-                environment_digest=environment_digest, operation_id=operation_id
+                environment_digest=environment_id, operation_id=operation_id
             )
             if blockers:
                 return self._hosted_operations.finish(
                     operation_id=operation_id,
                     lifecycle=HostedOperationLifecycle.TERMINAL_SUCCESS,
                     envelope={
-                        "contract": "hosting.toolbox.environment_remove_result.v1",
+                        "contract": "hosting.environment_remove_result.v1",
                         "status": "blocked",
                         "code": "environment_removal_blocked",
-                        "environment_digest": environment_digest,
+                        "environment_id": environment_id,
                         "blocking_reference_kinds": blockers,
                     },
                 )
@@ -236,7 +229,7 @@ class ToolboxMaintenanceMixin:
                 "The exact unreferenced environment is being removed.",
                 completed_units=0, total_units=1, cancellable=False,
             )
-            removal = self._environment_manager.remove(environment_id=environment_digest)
+            removal = self._environment_manager.remove(environment_id=environment_id)
             result = str(removal.get("state") or "removed")
             progress(
                 "cleanup", "environment_remove_complete",
@@ -247,10 +240,10 @@ class ToolboxMaintenanceMixin:
                 operation_id=operation_id,
                 lifecycle=HostedOperationLifecycle.TERMINAL_SUCCESS,
                 envelope={
-                    "contract": "hosting.toolbox.environment_remove_result.v1",
+                    "contract": "hosting.environment_remove_result.v1",
                     "status": result,
                     "code": f"environment_{result}",
-                    "environment_digest": environment_digest,
+                    "environment_id": environment_id,
                 },
             )
         except Exception as exc:
@@ -258,10 +251,10 @@ class ToolboxMaintenanceMixin:
                 operation_id=operation_id,
                 lifecycle=HostedOperationLifecycle.TERMINAL_FAILURE,
                 envelope={
-                    "contract": "hosting.toolbox.environment_remove_result.v1",
+                    "contract": "hosting.environment_remove_result.v1",
                     "status": "error",
                     "code": "environment_remove_failed",
-                    "environment_digest": environment_digest,
+                    "environment_id": environment_id,
                     "diagnostics": [{"code": "environment_remove_failed", "summary": str(exc)}],
                 },
                 reason="environment_remove_failed",

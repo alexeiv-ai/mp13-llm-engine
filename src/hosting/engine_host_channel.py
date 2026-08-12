@@ -3487,14 +3487,14 @@ class EngineHostControlChannel:
             payload={"request_id": str(request_id or "").strip()},
         )
 
-    def environment_remove(self, *, environment_id: str) -> Dict[str, Any]:
-        res = self._invoke(
-            "environment-remove",
-            {
+    def environment_remove(self, *, environment_id: str, request_id: str) -> Dict[str, Any]:
+        return self.start_host_operation(
+            command="environment-remove",
+            payload={
                 "environment_id": str(environment_id or "").strip(),
+                "request_id": str(request_id or "").strip(),
             },
         )
-        return dict(res or {})
 
     def environment_reference_list(self, *, cursor: str = "", limit: int = 100) -> Dict[str, Any]:
         return dict(self._invoke("environment-reference-list", {"cursor": str(cursor or ""), "limit": int(limit)}) or {})

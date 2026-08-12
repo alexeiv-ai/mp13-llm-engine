@@ -292,11 +292,15 @@ def test_environment_channel_exposes_exact_lifecycle_payloads() -> None:
     channel = EngineHostControlChannel({})
     calls = []
     channel._invoke = lambda command, payload: calls.append((command, payload)) or {"status": "ok"}  # type: ignore[method-assign]
+    channel.environment_remove(environment_id=LOCK_DIGEST, request_id="remove-1")
     channel.environment_reference_release(reference_id="ref-1")
     channel.environment_execution_begin(environment_id=LOCK_DIGEST, execution_id="exec-1")
     channel.environment_execution_end(execution_id="exec-1")
     channel.environment_gc()
     assert calls == [
+        ("op-start", {"command": "environment-remove", "payload": {
+            "environment_id": LOCK_DIGEST, "request_id": "remove-1",
+        }}),
         ("environment-reference-release", {"reference_id": "ref-1"}),
         ("environment-execution-begin", {"environment_id": LOCK_DIGEST, "execution_id": "exec-1"}),
         ("environment-execution-end", {"execution_id": "exec-1"}),

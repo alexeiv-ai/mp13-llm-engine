@@ -233,14 +233,14 @@ class HostedOperationSelector:
     def __post_init__(self) -> None:
         if self.kind not in {
             "toolbox_id", "engine_id", "template_id", "host_scope", "upload_id",
-            "environment_digest",
+            "environment_id",
         }:
             raise ValueError("operation_selector_kind_invalid")
         _bounded_text(self.id, label="operation_selector_id", max_bytes=MAX_SELECTOR_ID_BYTES)
         if self.kind == "host_scope" and self.id not in {"hosting", "toolbox-host"}:
             raise ValueError("operation_host_scope_invalid")
-        if self.kind == "environment_digest":
-            canonical_sha256_digest(self.id, label="operation_environment_digest")
+        if self.kind == "environment_id":
+            canonical_sha256_digest(self.id, label="operation_environment_id")
 
     def to_dict(self) -> Dict[str, str]:
         return {"kind": self.kind, "id": self.id}

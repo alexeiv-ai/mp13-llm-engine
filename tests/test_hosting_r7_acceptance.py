@@ -650,7 +650,7 @@ def test_r7_real_daemon_no_double_acceptance(tmp_path: Path) -> None:
             daemon,
             seq=34,
             command="toolbox-environment-remove",
-            payload={"environment_digest": custom_environment, "request_id": "remove-custom-environment"},
+            payload={"environment_id": custom_environment, "request_id": "remove-custom-environment"},
             token=tokens["administrator"],
         ),
     )
