@@ -2,7 +2,7 @@
 
 Last updated: 2026-08-11
 
-Status: active; R0–R2 complete; R3 next
+Status: active; R0–R2 and R3.1 complete; R3.2 next
 
 This is the fresh execution ledger for
 [`hosting_access_plan.md`](hosting_access_plan.md). The prior toolbox corrective
@@ -15,10 +15,10 @@ complete.
 
 Current continuous block: C — implementation and acceptance (`high`, P0–P2)
 
-Active slice: none
+Active slice: R3 unified configuration (`high`, P0)
 
-R0.1–R0.7, R1.1–R1.5, and R2.1–R2.3 are complete. R3 is the next production
-slice; no dependent adoption is claimed.
+R0.1–R0.7, R1.1–R1.5, R2.1–R2.3, and R3.1 are complete. R3.2 is the next
+production slice; no dependent adoption is claimed.
 
 ## 2. Progress ledger
 
@@ -37,7 +37,7 @@ slice; no dependent adoption is claimed.
 | R1.4 Dependent read-only inventory | P0 | medium | Complete | DOC-R1 |
 | R1.5 Documentation cutover map | P0 | medium | Complete | DOC-R1 |
 | R2 Shared paths/config foundation | P0 | high | Complete | CODE-R2 |
-| R3 Unified hosting configuration | P0 | high | Not started | — |
+| R3 Unified hosting configuration | P0 | high | Active (R3.1 complete) | CODE-R3.1 |
 | R4 Single-path daemon startup | P0 | high | Not started | — |
 | R5 Generic package subsystem | P0 | high | Not started | — |
 | R6 Generic environment subsystem | P0 | high | Not started | — |
@@ -360,6 +360,22 @@ the slice.
 - Dependent handoff impact: root fields and `hosting.setup.v1` are now available;
   dependent adoption remains external R9.6 work
 
+### CODE-R3.1 — strict unified configuration repository
+
+- Date: 2026-08-11
+- Plan IDs: R3.1; P0; high expertise
+- Production boundary: immutable `hosting.configuration.v3` model, sanitized
+  inspection model, and the sole locked/atomic `hosting_config.json` repository
+- Outcome: strict control/package/environment sections preserve logical paths,
+  resolve at the host boundary, compute a canonical revision, and reject
+  unsupported contracts, unknown security fields, wrong types, invalid labels,
+  policy conflicts, missing credential refs, and non-SHA-256 baseline policy
+- Positive/negative proof: 17 focused configuration/repository/setup recovery
+  tests passed; sentinel credentials, query tokens, and resolved paths were
+  absent from remote inspection; invalid writes left the authority unchanged
+- Dependent handoff impact: the v3 static schema is executable; daemon startup
+  and dependent adoption remain R3.2–R4 and R9.6 work
+
 Append one concise entry per completed slice. Include exact commands, counts,
 durations where useful, negative-path results, commit pin, and dependent receipt
 impact. Do not paste an unstructured full test transcript.
@@ -368,7 +384,7 @@ impact. Do not paste an unstructured full test transcript.
 
 Current blockers: none recorded
 
-Execution pause: R2 is the next authorized slice and has not started.
+Execution pause: none; R3.2 is active.
 
 External evidence required before final completion:
 

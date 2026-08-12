@@ -554,11 +554,11 @@ declared state without losing unrelated configuration.
 
 ##### R3.1 Add strict models and repository
 
-- [ ] Implement `hosting.configuration.v3` models for `control`,
+- [x] Implement `hosting.configuration.v3` models for `control`,
   `package_management`, and `environment_management`.
-- [ ] Reject unknown security-sensitive keys, wrong types, unresolved labels,
+- [x] Reject unknown security-sensitive keys, wrong types, unresolved labels,
   unsupported versions, and credential-policy conflicts.
-- [ ] Make one repository exclusively responsible for locked reads and local
+- [x] Make one repository exclusively responsible for locked reads and local
   setup writes of `hosting_config.json`.
 
 Proof: schema/model tests cover valid minimal/full files and each rejection

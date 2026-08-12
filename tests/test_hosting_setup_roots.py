@@ -32,6 +32,32 @@ def _base_config() -> dict:
     }
 
 
+def _hosting_config(event_limit: int = 100) -> dict:
+    return {
+        "contract": "hosting.configuration.v3",
+        "control": {
+            "authentication": {},
+            "roles": {},
+            "session_policy": {},
+            "audit": {"event_limit": event_limit},
+        },
+        "package_management": {
+            "artifact_root": "@packages/artifacts",
+            "lock_root": "@packages/locks",
+            "sources": {},
+            "credentials": {},
+            "dependency_policy": {},
+            "verification": {"hash_algorithm": "sha256"},
+        },
+        "environment_management": {
+            "environment_root": "@environments",
+            "scratch_root": "@hosting/scratch",
+            "retention": {},
+            "cache": {},
+        },
+    }
+
+
 def _request(config_file: Path) -> dict:
     return {
         "contract": "hosting.setup.v1",
@@ -48,7 +74,7 @@ def test_root_plan_is_no_write_and_apply_preserves_unrelated_configuration(tmp_p
     config_file = tmp_path / "config" / "mp13_config.json"
     hosting_file = _hosting_configuration_file(config_file)
     _write(config_file, _base_config())
-    _write(hosting_file, {"contract": "hosting.configuration.v3", "control": {"preserved": True}})
+    _write(hosting_file, _hosting_config())
 
     plan = plan_local_hosting_setup(_request(config_file))
 
@@ -71,7 +97,7 @@ def test_root_plan_is_no_write_and_apply_preserves_unrelated_configuration(tmp_p
     assert applied["journal_state"] == "committed"
     assert stored["unrelated"] == {"preserved": True}
     assert stored["category_dirs"] == _request(config_file)["roots"]
-    assert json.loads(hosting_file.read_text(encoding="utf-8"))["control"] == {"preserved": True}
+    assert json.loads(hosting_file.read_text(encoding="utf-8"))["control"]["audit"] == {"event_limit": 100}
     assert not _journal_file(config_file).exists()
     for value in applied["resolved_roots"].values():
         assert Path(value).is_dir()
@@ -137,9 +163,9 @@ def test_root_update_recovery_is_idempotent(
     config_file = tmp_path / "mp13_config.json"
     hosting_file = _hosting_configuration_file(config_file)
     previous_top = _base_config()
-    previous_hosting = {"contract": "hosting.configuration.v3", "revision": "old"}
+    previous_hosting = _hosting_config(100)
     target_top = {**previous_top, "revision": "new"}
-    target_hosting = {"contract": "hosting.configuration.v3", "revision": "new"}
+    target_hosting = _hosting_config(200)
     _write(config_file, target_top if phase != "prepared" else previous_top)
     _write(hosting_file, target_hosting if phase in {"hosting_written", "committed"} else previous_hosting)
     _atomic_write_json(

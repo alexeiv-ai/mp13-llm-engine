@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterator, Mapping, Optional
 
 from . import hosting_config_cli as _cli
+from .hosting_configuration import HostingConfigurationRepository
 from mp13_engine.mp13_config_paths import (
     DEFAULT_CATEGORY_DIRS,
     HOSTING_CATEGORY_ROOT_KEYS,
@@ -114,6 +115,13 @@ def _hosting_configuration_file(config_file: Path) -> Path:
     return config_file.parent / "hosting" / "hosting_config.json"
 
 
+def _hosting_repository(config_file: Path, top_level: Mapping[str, Any]) -> HostingConfigurationRepository:
+    _, resolver = resolve_config_paths(
+        dict(top_level), cwd=config_file.parent, config_path=config_file
+    )
+    return HostingConfigurationRepository(_hosting_configuration_file(config_file), resolver)
+
+
 def _journal_file(config_file: Path) -> Path:
     return config_file.parent / "hosting" / ".hosting_setup_journal.json"
 
@@ -193,16 +201,17 @@ def _recover_root_update(config_file: Path) -> Optional[str]:
         return "discarded_prepared"
     if phase == "top_level_written":
         _atomic_write_json(top_path, previous_top)
+        repository = _hosting_repository(top_path, previous_top)
         if previous_hosting:
-            _atomic_write_json(hosting_path, previous_hosting)
-        elif hosting_path.exists():
-            hosting_path.unlink()
+            repository.write(previous_hosting)
+        else:
+            repository.delete()
         journal_path.unlink(missing_ok=True)
         return "rolled_back_top_level"
     if phase in {"hosting_written", "committed"}:
         _atomic_write_json(top_path, target_top)
         if write_hosting:
-            _atomic_write_json(hosting_path, target_hosting)
+            _hosting_repository(top_path, target_top).write(target_hosting)
         journal_path.unlink(missing_ok=True)
         return "completed_target"
     raise ValueError("hosting_setup_journal_phase_invalid")
@@ -332,7 +341,7 @@ def _apply_root_change(data: Dict[str, Any]) -> Dict[str, Any]:
         journal["phase"] = "top_level_written"
         _atomic_write_json(journal_path, journal)
         if write_hosting:
-            _atomic_write_json(hosting_file, target_hosting)
+            _hosting_repository(config_file, target).write(target_hosting)
         journal["phase"] = "hosting_written"
         _atomic_write_json(journal_path, journal)
         for value in plan["resolved_roots"].values():

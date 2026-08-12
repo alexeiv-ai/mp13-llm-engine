@@ -207,7 +207,7 @@ Target hosting directory:
 `<default_engine_config_dir>/hosting/`
 
 Managed files:
-1. `access_control.json`
+1. `hosting_config.json` using the strict `hosting.configuration.v3` contract
 2. `keyring/keys.json`
 3. `keyring/migrations.json`
 4. `audit/setup_audit.jsonl`
@@ -224,7 +224,14 @@ Client realm may contain private-key secret records and transport profiles used 
 Secure-state ownership:
 1. GUI/backend-owned stores may use `hosting.secure_state` now for encrypted JSON custody.
 2. Hosting-owned files remain owned by hosting and are not encrypted by GUI code.
-3. GUI/backend integrations should request sanitized hosting setup/status through `hosting.hosting_setup_api.get_local_hosting_setup_status`, `EngineHostService.hosting_setup_summary`, or daemon commands instead of reading `access_control.json`, `bootstrap/bootstrap_state.json`, or `bootstrap/client_key_map.json` directly.
+3. GUI/backend integrations request sanitized hosting setup/status through `hosting.hosting_setup_api.get_local_hosting_setup_status`, `EngineHostService.hosting_setup_summary`, or daemon commands instead of reading `hosting_config.json`, `bootstrap/bootstrap_state.json`, or `bootstrap/client_key_map.json` directly. Remote inspection reports logical roots and health only; resolved host paths are restricted to local administrative inspection.
+
+`hosting_config.json` has exactly four top-level keys: `contract`, `control`,
+`package_management`, and `environment_management`. Hosting setup validates the
+complete file and writes it through the locked repository; an invalid update is
+rejected before replacement. Credentials may be host-local values or keyring
+references, but inspection, errors, logs, and receipts never return their
+values or source URLs with sensitive query strings.
 4. The documented secure-state key environment names are `MP13_SECURE_STATE_KEY` and `MP13_HOSTING_SECURE_STATE_KEY`. Daemon-owned encrypted reads are not enabled until daemon startup key propagation and fail-start semantics are implemented.
 
 ## 6. Key Handling
