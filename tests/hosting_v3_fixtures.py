@@ -1,5 +1,7 @@
 """Canonical unified hosting configuration for v3 tests."""
 from pathlib import Path
+import json
+from collections.abc import Mapping
 
 from hosting.hosting_configuration import parse_hosting_configuration
 from mp13_engine.mp13_config_paths import resolve_config_paths
@@ -31,3 +33,28 @@ def hosting_configuration(root: Path):
             "retention": {}, "cache": {},
         },
     }, resolver)
+
+
+def write_hosting_configuration(root: Path) -> Path:
+    root = Path(root).resolve()
+    config = root / "mp13_config.json"
+    config.write_text(json.dumps({"category_dirs": {
+        "hosting_root_dir": "@config/host", "packages_root_dir": "@config/packages",
+        "environments_root_dir": "@config/environments",
+    }}), encoding="utf-8")
+    authority = root / "hosting" / "hosting_config.json"
+    authority.parent.mkdir(parents=True, exist_ok=True)
+    model = hosting_configuration(root)
+    def plain(value):
+        if isinstance(value, Mapping):
+            return {str(key): plain(item) for key, item in value.items()}
+        if isinstance(value, tuple):
+            return [plain(item) for item in value]
+        return value
+    authority.write_text(json.dumps({
+        "contract": model.contract,
+        "control": plain(model.control),
+        "package_management": plain(model.package_management),
+        "environment_management": plain(model.environment_management),
+    }), encoding="utf-8")
+    return config

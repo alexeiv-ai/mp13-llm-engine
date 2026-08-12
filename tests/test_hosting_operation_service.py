@@ -11,12 +11,13 @@ from hosting.daemon import EngineHostDaemon
 from hosting.engine_host_channel import EngineHostControlChannel
 from hosting.operation_contract import hosted_execution_fingerprint
 from hosting.service.host_service import EngineHostService
+from tests.hosting_v3_fixtures import hosting_configuration, write_hosting_configuration
 
 
 def _service(tmp_path: Path) -> EngineHostService:
     return EngineHostService(
         engines_state_file=tmp_path / "managed_engines.json",
-        control_state_file=tmp_path / "access_control.json",
+        hosting_configuration=hosting_configuration(tmp_path),
     )
 
 
@@ -233,13 +234,13 @@ def test_workflow_service_recreation_replays_and_recovers_without_worker_startup
 def test_daemon_restart_smoke_reads_terminal_operation_without_starting_worker(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr("hosting.daemon.security._tighten_windows_acl", lambda *_args, **_kwargs: None)
     pid_file = tmp_path / "daemon.pid"
-    control_file = tmp_path / "access_control.json"
+    config_file = write_hosting_configuration(tmp_path)
     engine_file = tmp_path / "managed_engines.json"
 
     first_daemon = EngineHostDaemon(
         pid_file=pid_file,
         engines_state_file=engine_file,
-        control_state_file=control_file,
+        mp13_config_file=config_file,
     )
     first_daemon._execute_startup_worker_recovery = lambda: {"status": "ok"}  # type: ignore[method-assign]
     first_daemon.svc.register_spawned(
@@ -308,7 +309,7 @@ def test_daemon_restart_smoke_reads_terminal_operation_without_starting_worker(t
     second_daemon = EngineHostDaemon(
         pid_file=pid_file,
         engines_state_file=engine_file,
-        control_state_file=control_file,
+        mp13_config_file=config_file,
     )
     second_daemon._execute_startup_worker_recovery = lambda: {"status": "ok"}  # type: ignore[method-assign]
     second_thread = _run(second_daemon)

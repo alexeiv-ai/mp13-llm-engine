@@ -638,6 +638,15 @@ the slice.
   identity is stable, cancellation cleans generic references before publication,
   and the publication checkpoint remains atomic
 
+### TEST-R9.3C — operation retry/restart identity
+
+- Date: 2026-08-11
+- Plan IDs: R9.3 no-double/restart (partial); P2; high expertise
+- Proof: eight operation-service tests passed after v3 fixture migration,
+  covering duplicate replay without redispatch, actor isolation, response-loss
+  recovery, queued cancellation, Python/JS recreation, and real daemon restart
+  with the original terminal operation and external result identity
+
 Append one concise entry per completed slice. Include exact commands, counts,
 durations where useful, negative-path results, commit pin, and dependent receipt
 impact. Do not paste an unstructured full test transcript.
