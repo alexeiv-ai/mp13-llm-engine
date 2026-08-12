@@ -167,7 +167,7 @@ R7 plan/confirmation field assertions are provisional and must be replaced.
 
 - [x] Resolve exact generic package locks and an `EnvironmentRequest` during
   toolbox definition planning.
-- [ ] Implement compare-and-swap server-side tool-change merge, deterministic
+- [x] Implement compare-and-swap server-side tool-change merge, deterministic
   change IDs, atomic rename, and strict add/update/remove validation.
 - [ ] Emit bounded per-tool import/source evidence, mapped distributions,
   environment grouping, exact package mutations, and approval requirements.

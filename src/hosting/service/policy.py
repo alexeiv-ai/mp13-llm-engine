@@ -186,6 +186,7 @@ class PolicyMixin:
             "package-lock-create",
             "toolbox-get-definition",
             "toolbox-plan-definition",
+            "toolbox-plan-tool-changes",
             "toolbox-confirm-definition-plan",
             "toolbox-approve-confirmed-definition-plan",
             "toolbox-apply-definition",

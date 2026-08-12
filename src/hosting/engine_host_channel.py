@@ -3541,6 +3541,26 @@ class EngineHostControlChannel:
             },
         )
 
+    def toolbox_plan_tool_changes(
+        self,
+        *,
+        toolbox_id: str,
+        expected_revision: str | None,
+        changes: list[Dict[str, Any]],
+        request_id: str,
+        operator_details: bool = False,
+    ) -> Dict[str, Any]:
+        return self.start_host_operation(
+            command="toolbox-plan-tool-changes",
+            payload={
+                "toolbox_id": str(toolbox_id or "").strip(),
+                "expected_revision": expected_revision,
+                "changes": [dict(item) for item in changes],
+                "request_id": str(request_id or "").strip(),
+                "operator_details": bool(operator_details),
+            },
+        )
+
     def toolbox_confirm_definition_plan(
         self,
         *,

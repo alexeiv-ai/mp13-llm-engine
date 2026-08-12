@@ -103,6 +103,22 @@ class HostedToolBoxRef:
             ttl_ms=int(ttl_ms),
         ) or {})
 
+    def plan_tool_changes(
+        self,
+        changes: list[Dict[str, Any]],
+        *,
+        expected_revision: str | None,
+        request_id: str,
+        operator_details: bool = False,
+    ) -> Dict[str, Any]:
+        return dict(self.host.toolbox_plan_tool_changes(
+            toolbox_id=self.toolbox_id,
+            expected_revision=expected_revision,
+            changes=[dict(item) for item in changes],
+            request_id=str(request_id or "").strip(),
+            operator_details=bool(operator_details),
+        ) or {})
+
     def confirm_definition_plan(
         self,
         *,

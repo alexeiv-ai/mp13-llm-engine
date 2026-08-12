@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import pytest
 
+from hosting.operation_contract import HostedOperationLifecycle
+from hosting.service.toolbox_runtime import ToolboxRuntimeMixin
 from hosting.toolbox.bundle_models import ToolboxDefinitionSpec
 from hosting.toolbox.tool_changes import (
     ToolboxToolChange,
@@ -199,4 +201,99 @@ def test_complete_definition_change_ids_are_stable_and_cover_intrinsics() -> Non
         ("add", None, "pkg.tools:Beta"),
         ("remove", "intrinsic:Clock", None),
         ("add", None, "intrinsic:Search"),
+    }
+
+
+def test_service_worker_merges_against_authoritative_revision_before_planning() -> None:
+    active = _definition(autos=(_auto("Alpha"),))
+
+    class Operations:
+        def __init__(self) -> None:
+            self.claimed = []
+
+        def mark_dispatch_claimed(self, *, operation_id):
+            self.claimed.append(operation_id)
+
+        def finish(self, *, operation_id, lifecycle, envelope):
+            return {
+                "operation_id": operation_id,
+                "lifecycle": lifecycle.value,
+                "result": envelope,
+            }
+
+    class Service(ToolboxRuntimeMixin):
+        def __init__(self) -> None:
+            self._hosted_operations = Operations()
+            self.planned = None
+
+        def toolbox_get_definition(self, *, toolbox_id, **_kwargs):
+            assert toolbox_id == "demo"
+            return {
+                "active_revision": active.revision,
+                "definition": active.to_dict(),
+            }
+
+        def _build_toolbox_definition_plan(self, **kwargs):
+            self.planned = kwargs
+            return {
+                "contract": "hosting.toolbox.definition_plan.v2",
+                "proposal_kind": kwargs["proposal_kind"],
+                "changes": [item.to_dict() for item in kwargs["normalized_changes"]],
+            }
+
+    service = Service()
+    result = service._run_toolbox_tool_changes_plan(
+        operation_id="op-1",
+        toolbox_id="demo",
+        expected_revision=active.revision,
+        changes=[_change("rename-alpha", "rename", "pkg.tools:Alpha", "auto", _auto("Beta"))],
+        operator_details=False,
+        owner_actor_id="actor:one",
+        authority_id="workspace:one",
+        ttl_ms=60_000,
+    )
+
+    assert service._hosted_operations.claimed == ["op-1"]
+    assert result["lifecycle"] == HostedOperationLifecycle.TERMINAL_SUCCESS.value
+    assert result["result"]["proposal_kind"] == "tool_changes"
+    assert result["result"]["changes"][0]["change_id"] == "rename-alpha"
+    assert ToolboxDefinitionSpec.from_dict(service.planned["definition"]).auto_requests[0].stable_key == "pkg.tools:Beta"
+
+
+def test_service_worker_returns_stable_conflict_without_calling_planner() -> None:
+    active = _definition(autos=(_auto("Alpha"),))
+
+    class Operations:
+        def mark_dispatch_claimed(self, **_kwargs):
+            return None
+
+        def finish(self, *, operation_id, lifecycle, envelope):
+            return {"lifecycle": lifecycle.value, "result": envelope}
+
+    class Service(ToolboxRuntimeMixin):
+        _hosted_operations = Operations()
+
+        def toolbox_get_definition(self, **_kwargs):
+            return {"active_revision": active.revision, "definition": active.to_dict()}
+
+        def _build_toolbox_definition_plan(self, **_kwargs):
+            raise AssertionError("stale batch reached planner")
+
+    result = Service()._run_toolbox_tool_changes_plan(
+        operation_id="op-2",
+        toolbox_id="demo",
+        expected_revision="sha256:" + "f" * 64,
+        changes=[_change("remove-alpha", "remove", "pkg.tools:Alpha")],
+        operator_details=False,
+        owner_actor_id="actor:one",
+        authority_id="workspace:one",
+        ttl_ms=60_000,
+    )
+    assert result == {
+        "lifecycle": HostedOperationLifecycle.TERMINAL_FAILURE.value,
+        "result": {
+            "contract": "hosting.toolbox.definition_plan_failure.v1",
+            "status": "failed",
+            "code": "tool_change_conflict",
+        },
     }

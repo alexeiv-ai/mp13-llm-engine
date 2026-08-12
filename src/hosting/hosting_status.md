@@ -2,7 +2,7 @@
 
 Last updated: 2026-08-12
 
-Status: active on R7.1 tool-change merge
+Status: active on R7.1 per-tool analysis
 
 This is the current execution ledger for
 [`hosting_access_plan.md`](hosting_access_plan.md). Detailed completed-slice
@@ -12,10 +12,10 @@ compact evidence index, and external completion gates.
 
 ## 1. Current gate and resume order
 
-Active slice: **R7.1 tool-change merge**. Exact generic package locks and strict
-`EnvironmentRequest` records are now pinned during planning and consumed
-unchanged by apply. The next boundary is the compare-and-swap server-side
-add/update/rename/remove merge.
+Active slice: **R7.1 per-tool analysis**. Exact generic package locks, strict
+environment requests, and the CAS tool-change endpoint are complete. The next
+boundary is bounded import/source evidence, distribution mapping, environment
+grouping, package mutations, and approval requirements per changed tool.
 
 Resume in this order:
 
@@ -72,8 +72,8 @@ The pre-R7 P0 clean-cut items are complete.
 
 ### R7.1 planning and selective revision
 
-- Implement server-side tool change sets, deterministic change IDs, per-tool
-  import evidence, and atomic rename.
+- Add bounded per-tool import evidence and map changes to exact package and
+  environment outcomes.
 - Implement immutable child plans with full closure/lock recomputation; never
   truncate an existing lock.
 - Replace provisional field-level plan/confirmation assertions while retaining
@@ -115,6 +115,7 @@ The pre-R7 P0 clean-cut items are complete.
 | CODE-R7A/B | Generic materializer/package/reference bridges and atomic candidate publication remain valid foundations; old plan/confirmation field assertions are provisional. |
 | CODE/TEST-R7.1A | Planning persists strict generic lock/request records and apply consumes the selected record without late lock creation; package/plan/rollout lane passed 29 tests and atomic routing passed 10. |
 | CODE/TEST-R7.1B | Strict CAS tool-change merge supports atomic add/update/rename/remove batches and deterministic complete-definition change IDs; focused lane passed 12 tests. |
+| CODE/TEST-R7.1C | Tool-change planning is exposed through authorized daemon/channel/CLI/reference surfaces and persists normalized proposal metadata; combined focused lane passed 109 tests (one removed-constructor fixture deselected). |
 | CODE-R8A–C | Versioned neutral state, Python/JS shared manager adoption, GC/repair controls passed focused coverage. |
 | CODE/TEST-R9 partial | Structured auth, role/hash authority, redaction, startup modes, generic lifecycle, and retry/restart identity passed focused coverage. |
 | TEST-R8.2C checkpoint | Workflow operation suite passed; full helper suite passed 116 tests on resume. |

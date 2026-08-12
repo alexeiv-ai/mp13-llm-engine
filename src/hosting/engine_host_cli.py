@@ -117,6 +117,9 @@ EXAMPLES_BY_COMMAND = {
     "toolbox-plan-definition": [
         "Get-Content toolbox-definition.json | python -m hosting.engine_host_cli --payload-stdin toolbox-plan-definition",
     ],
+    "toolbox-plan-tool-changes": [
+        "Get-Content toolbox-tool-changes.json | python -m hosting.engine_host_cli --payload-stdin toolbox-plan-tool-changes",
+    ],
     "toolbox-confirm-definition-plan": [
         "Get-Content toolbox-confirmation.json | python -m hosting.engine_host_cli --payload-stdin toolbox-confirm-definition-plan",
     ],
@@ -912,6 +915,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "environment-gc",
         "toolbox-get-definition",
         "toolbox-plan-definition",
+        "toolbox-plan-tool-changes",
         "toolbox-confirm-definition-plan",
         "toolbox-approve-confirmed-definition-plan",
         "toolbox-apply-definition",
@@ -1176,6 +1180,7 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
     effective_payload = _payload_with_cli_selectors(args, payload)
     durable_toolbox_commands = {
         "toolbox-plan-definition",
+        "toolbox-plan-tool-changes",
         "toolbox-confirm-definition-plan",
         "toolbox-apply-definition",
         "environment-template-construct",
@@ -2067,6 +2072,17 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
                     request_id=str(payload.get("request_id") or ""),
                     operator_details=bool(payload.get("operator_details", False)),
                     ttl_ms=int(payload.get("ttl_ms") or 15 * 60 * 1000),
+                )
+            )
+            return 0
+        if cmd == "toolbox-plan-tool-changes":
+            _print_ok(
+                svc.toolbox_plan_tool_changes(
+                    toolbox_id=str(payload.get("toolbox_id") or ""),
+                    expected_revision=payload.get("expected_revision"),
+                    changes=list(payload.get("changes") or []),
+                    request_id=str(payload.get("request_id") or ""),
+                    operator_details=bool(payload.get("operator_details", False)),
                 )
             )
             return 0

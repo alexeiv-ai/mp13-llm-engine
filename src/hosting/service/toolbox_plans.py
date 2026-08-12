@@ -22,6 +22,7 @@ from ..toolbox.definition_planner import (
     classify_toolbox_profiles,
 )
 from ..toolbox.identity import identity_digest, require_digest
+from ..toolbox.tool_changes import NormalizedToolboxToolChange
 from .operation_repository import _exclusive_process_file_lock, _replace_with_bounded_retries
 
 
@@ -374,6 +375,10 @@ class PersistedCompleteToolboxDefinitionPlan:
     pins: ToolboxPlanPins
     environment_mutations: tuple[ToolboxEnvironmentMutationSpec, ...]
     planned_environments: tuple[ToolboxPlannedEnvironmentRecord, ...]
+    proposal_kind: str
+    changes: tuple[NormalizedToolboxToolChange, ...]
+    parent_plan_id: str | None
+    reduction: Mapping[str, Any] | None
     draft_plan: Mapping[str, Any]
     profile_changes: tuple[Mapping[str, Any], ...]
     created_at_ms: int
@@ -474,6 +479,47 @@ class PersistedCompleteToolboxDefinitionPlan:
             }
             if actual_dependencies != expected_dependencies or actual_artifacts != expected_artifacts:
                 raise ValueError("toolbox_complete_plan_package_lock_mismatch")
+        if self.proposal_kind not in {"complete_definition", "tool_changes"}:
+            raise ValueError("toolbox_complete_plan_proposal_kind_invalid")
+        changes = tuple(sorted(self.changes, key=lambda item: item.change_id))
+        if (
+            any(not isinstance(item, NormalizedToolboxToolChange) for item in changes)
+            or len({item.change_id for item in changes}) != len(changes)
+            or (self.proposal_kind == "tool_changes" and not changes)
+            or (
+                self.proposal_kind == "complete_definition"
+                and any(not item.change_id.startswith("host:sha256:") for item in changes)
+            )
+        ):
+            raise ValueError("toolbox_complete_plan_changes_invalid")
+        actual_changed_keys = {
+            tool.tool_key
+            for environment in mutations
+            for tool in environment.tool_mutations
+            if tool.change != "unchanged"
+        }
+        planned_changed_keys = {
+            key
+            for item in changes
+            for key in (item.prior_tool_key, item.tool_key)
+            if key is not None
+        }
+        if actual_changed_keys != planned_changed_keys:
+            raise ValueError("toolbox_complete_plan_change_coverage_invalid")
+        parent_plan_id = (
+            None if self.parent_plan_id is None
+            else require_digest(self.parent_plan_id, label="toolbox_parent_plan_id")
+        )
+        if parent_plan_id is None:
+            if self.reduction is not None:
+                raise ValueError("toolbox_complete_plan_root_reduction_invalid")
+            reduction = None
+        else:
+            reduction = dict(self.reduction or {})
+            if set(reduction) != {
+                "excluded_changes", "preserved_active_tool_keys", "cascade_exclusions"
+            }:
+                raise ValueError("toolbox_complete_plan_reduction_invalid")
         draft = dict(self.draft_plan or {})
         fields = {
             "definition", "definition_revision", "profiles", "bundles",
@@ -492,8 +538,8 @@ class PersistedCompleteToolboxDefinitionPlan:
             item.custom_resolved_lock_digest is not None for item in profiles
         ):
             raise ValueError("toolbox_complete_plan_draft_profiles_invalid")
-        changes = tuple(dict(item) for item in self.profile_changes)
-        for item in changes:
+        profile_changes = tuple(dict(item) for item in self.profile_changes)
+        for item in profile_changes:
             if set(item) != {
                 "classification", "active_profile_id", "proposed_profile_id", "changed_fields"
             } or item["classification"] not in {"reused", "added", "replaced", "removed"}:
@@ -513,8 +559,11 @@ class PersistedCompleteToolboxDefinitionPlan:
             raise ValueError("toolbox_complete_plan_owner_invalid")
         object.__setattr__(self, "environment_mutations", mutations)
         object.__setattr__(self, "planned_environments", planned)
+        object.__setattr__(self, "changes", changes)
+        object.__setattr__(self, "parent_plan_id", parent_plan_id)
+        object.__setattr__(self, "reduction", reduction)
         object.__setattr__(self, "draft_plan", draft)
-        object.__setattr__(self, "profile_changes", changes)
+        object.__setattr__(self, "profile_changes", profile_changes)
         object.__setattr__(self, "owner_actor_id", owner)
         object.__setattr__(self, "authority_id", authority)
         encoded = json.dumps(
@@ -536,6 +585,10 @@ class PersistedCompleteToolboxDefinitionPlan:
             "pins": self.pins.to_dict(),
             "environment_mutations": [item.to_dict() for item in self.environment_mutations],
             "planned_environments": [item.to_dict() for item in self.planned_environments],
+            "proposal_kind": self.proposal_kind,
+            "changes": [item.to_dict() for item in self.changes],
+            "parent_plan_id": self.parent_plan_id,
+            "reduction": None if self.reduction is None else dict(self.reduction),
             "draft_plan": dict(self.draft_plan),
             "profile_changes": [dict(item) for item in self.profile_changes],
             "created_at_ms": self.created_at_ms,
@@ -549,7 +602,8 @@ class PersistedCompleteToolboxDefinitionPlan:
         row = dict(payload or {})
         fields = {
             "contract", "plan_id", "active_definition", "proposed_definition", "pins",
-            "environment_mutations", "planned_environments", "draft_plan", "profile_changes", "created_at_ms",
+            "environment_mutations", "planned_environments", "proposal_kind", "changes",
+            "parent_plan_id", "reduction", "draft_plan", "profile_changes", "created_at_ms",
             "expires_at_ms", "owner_actor_id", "authority_id",
         }
         if set(row) != fields:
@@ -567,6 +621,10 @@ class PersistedCompleteToolboxDefinitionPlan:
                 "planned_environments": tuple(
                     ToolboxPlannedEnvironmentRecord.from_dict(item)
                     for item in row["planned_environments"]
+                ),
+                "changes": tuple(
+                    NormalizedToolboxToolChange.from_dict(item)
+                    for item in row["changes"]
                 ),
                 "profile_changes": tuple(row["profile_changes"]),
             }
@@ -641,6 +699,10 @@ class AtomicJsonCompleteToolboxDefinitionPlanRepository:
         pins: ToolboxPlanPins,
         environment_mutations: Sequence[ToolboxEnvironmentMutationSpec],
         planned_environments: Sequence[ToolboxPlannedEnvironmentRecord],
+        proposal_kind: str,
+        changes: Sequence[NormalizedToolboxToolChange],
+        parent_plan_id: str | None,
+        reduction: Mapping[str, Any] | None,
         active_profiles: Sequence[ActiveToolboxProfileSnapshot | Mapping[str, Any]],
         now_ms: int,
         ttl_ms: int,
@@ -657,6 +719,10 @@ class AtomicJsonCompleteToolboxDefinitionPlanRepository:
             "pins": pins.to_dict(),
             "environment_mutations": [item.to_dict() for item in environment_mutations],
             "planned_environments": [item.to_dict() for item in planned_environments],
+            "proposal_kind": proposal_kind,
+            "changes": [item.to_dict() for item in changes],
+            "parent_plan_id": parent_plan_id,
+            "reduction": None if reduction is None else dict(reduction),
             "draft_plan": draft.to_persisted_dict(),
             "profile_changes": list(classify_toolbox_profiles(draft, active_profiles)),
             "owner_actor_id": str(owner_actor_id or "").strip(),
@@ -669,6 +735,10 @@ class AtomicJsonCompleteToolboxDefinitionPlanRepository:
             pins=pins,
             environment_mutations=tuple(environment_mutations),
             planned_environments=tuple(planned_environments),
+            proposal_kind=proposal_kind,
+            changes=tuple(changes),
+            parent_plan_id=parent_plan_id,
+            reduction=reduction,
             draft_plan=draft.to_persisted_dict(),
             profile_changes=tuple(identity_payload["profile_changes"]),
             created_at_ms=now_ms,

@@ -2290,6 +2290,7 @@ class EngineHostDaemon:
                 target_payload = dict(acl.get("payload") or target_payload)
                 if target_cmd in {
                     "toolbox-plan-definition",
+                    "toolbox-plan-tool-changes",
                     "toolbox-confirm-definition-plan",
                     "toolbox-apply-definition",
                     "environment-remove",
@@ -2483,6 +2484,7 @@ class EngineHostDaemon:
             payload = dict(acl.get("payload") or payload)
             if cmd in {
                 "toolbox-plan-definition",
+                "toolbox-plan-tool-changes",
                 "toolbox-confirm-definition-plan",
                 "toolbox-apply-definition",
                 "environment-template-construct",
@@ -3242,6 +3244,23 @@ class EngineHostDaemon:
                 owner_actor_id=actor,
                 authority_id=actor,
                 ttl_ms=int(payload.get("ttl_ms") or 15 * 60 * 1000),
+            )
+        if cmd == "toolbox-plan-tool-changes":
+            allowed = {
+                "toolbox_id", "expected_revision", "changes", "request_id",
+                "operator_details", "_claim_actor_id",
+            }
+            if any(key not in allowed and not str(key).startswith("_claim_") for key in payload):
+                raise ValueError("tool_change_invalid")
+            actor = str(payload.get("_claim_actor_id") or "service:local")
+            return svc.toolbox_plan_tool_changes(
+                toolbox_id=str(payload.get("toolbox_id") or ""),
+                expected_revision=payload.get("expected_revision"),
+                changes=list(payload.get("changes") or []),
+                request_id=str(payload.get("request_id") or ""),
+                operator_details=bool(payload.get("operator_details", False)),
+                owner_actor_id=actor,
+                authority_id=actor,
             )
         if cmd == "toolbox-confirm-definition-plan":
             actor = str(payload.get("_claim_actor_id") or "service:local")

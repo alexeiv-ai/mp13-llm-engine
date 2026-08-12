@@ -28,6 +28,7 @@ from hosting.toolbox.bundle_models import (
     ToolboxToolMutationSpec,
 )
 from hosting.toolbox.identity import identity_digest
+from hosting.toolbox.tool_changes import deterministic_definition_changes
 from hosting.toolbox.definition_planner import (
     classify_toolbox_profiles,
     plan_toolbox_definition,
@@ -233,6 +234,10 @@ def _create_complete_in_process(path: str, definition: dict, now_ms: int, queue)
             pins=pins,
             environment_mutations=environments,
             planned_environments=planned,
+            proposal_kind="complete_definition",
+            changes=deterministic_definition_changes(active, draft.definition),
+            parent_plan_id=None,
+            reduction=None,
             active_profiles=(),
             now_ms=now_ms,
             ttl_ms=60_000,
@@ -450,6 +455,10 @@ def test_complete_plan_roundtrips_every_pin_offer_artifact_and_edge(tmp_path: Pa
         pins=pins,
         environment_mutations=environments,
         planned_environments=planned,
+        proposal_kind="complete_definition",
+        changes=deterministic_definition_changes(active, draft.definition),
+        parent_plan_id=None,
+        reduction=None,
         active_profiles=(),
         now_ms=1_000,
         ttl_ms=60_000,
@@ -462,6 +471,10 @@ def test_complete_plan_roundtrips_every_pin_offer_artifact_and_edge(tmp_path: Pa
         pins=pins,
         environment_mutations=environments,
         planned_environments=planned,
+        proposal_kind="complete_definition",
+        changes=deterministic_definition_changes(active, draft.definition),
+        parent_plan_id=None,
+        reduction=None,
         active_profiles=(),
         now_ms=1_100,
         ttl_ms=60_000,
@@ -567,6 +580,10 @@ def test_complete_plan_identity_changes_with_pin_and_offered_artifact(tmp_path: 
             planned_environments=_planned_environments(
                 draft, current_pins, current_environments
             ),
+            proposal_kind="complete_definition",
+            changes=deterministic_definition_changes(active, draft.definition),
+            parent_plan_id=None,
+            reduction=None,
             active_profiles=(),
             now_ms=now_ms,
             ttl_ms=60_000,

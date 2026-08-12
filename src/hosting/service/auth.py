@@ -81,6 +81,7 @@ _TOOLBOX_TEMPLATE_ADMIN_COMMANDS = {
 _TOOLBOX_DEFINITION_COMMANDS = {
     "toolbox-get-definition",
     "toolbox-plan-definition",
+    "toolbox-plan-tool-changes",
     "toolbox-confirm-definition-plan",
     "toolbox-apply-definition",
 }

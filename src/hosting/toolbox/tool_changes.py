@@ -41,6 +41,15 @@ class ToolboxToolChange:
     request_kind: str | None
     request: ToolboxAutoAssignmentRequestV2 | ToolboxManualAssignmentRequestV2 | None
 
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "change_id": self.change_id,
+            "kind": self.kind,
+            "target_tool_key": self.target_tool_key,
+            "request_kind": self.request_kind,
+            "request": None if self.request is None else self.request.to_dict(),
+        }
+
     @classmethod
     def from_dict(cls, payload: Mapping[str, Any]) -> "ToolboxToolChange":
         row = _strict(
@@ -84,6 +93,32 @@ class NormalizedToolboxToolChange:
     tool_key: str | None
     request_kind: str | None
 
+    def __post_init__(self) -> None:
+        if not _PRINTABLE_ID.fullmatch(str(self.change_id or "")):
+            raise ValueError("tool_change_id_invalid")
+        if self.kind not in {"add", "update", "rename", "remove"}:
+            raise ValueError("tool_change_kind_invalid")
+        prior = _tool_key(self.prior_tool_key, nullable=True)
+        resulting = _tool_key(self.tool_key, nullable=True)
+        if (
+            (self.kind == "add" and (prior is not None or resulting is None))
+            or (self.kind == "remove" and (prior is None or resulting is not None))
+            or (self.kind == "update" and (prior is None or prior != resulting))
+            or (self.kind == "rename" and (prior is None or resulting is None or prior == resulting))
+        ):
+            raise ValueError("tool_change_normalized_keys_invalid")
+        if self.request_kind not in {"auto", "manual", None}:
+            raise ValueError("tool_change_request_kind_invalid")
+        keys = {item for item in (prior, resulting) if item is not None}
+        if self.request_kind is None and any(
+            not item.startswith("intrinsic:") for item in keys
+        ):
+            raise ValueError("tool_change_request_kind_invalid")
+        if self.request_kind is not None and any(
+            item.startswith("intrinsic:") for item in keys
+        ):
+            raise ValueError("tool_change_request_kind_invalid")
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "change_id": self.change_id,
@@ -92,6 +127,14 @@ class NormalizedToolboxToolChange:
             "tool_key": self.tool_key,
             "request_kind": self.request_kind,
         }
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "NormalizedToolboxToolChange":
+        return cls(**_strict(
+            payload,
+            {"change_id", "kind", "prior_tool_key", "tool_key", "request_kind"},
+            "tool_change_normalized",
+        ))
 
 
 def _definition_requests(
@@ -158,6 +201,8 @@ def merge_toolbox_tool_changes(
             resulting_key = change.request.stable_key
             if change.kind == "update" and resulting_key != change.target_tool_key:
                 raise ValueError("tool_change_update_key_changed")
+            if change.kind == "update" and change.request.to_dict() == prior[1].to_dict():
+                raise ValueError("tool_change_no_effect")
             if change.kind == "rename" and resulting_key == change.target_tool_key:
                 raise ValueError("tool_change_rename_key_unchanged")
         elif change.kind == "add":
@@ -171,7 +216,7 @@ def merge_toolbox_tool_changes(
             change.kind,
             change.target_tool_key,
             resulting_key,
-            change.request_kind,
+            prior[0] if change.kind == "remove" and prior is not None else change.request_kind,
         ))
 
     merged = {

@@ -319,6 +319,14 @@ tool ownership but changes any triple field is `replaced`; unmatched proposed
 and active profiles are `added` and `removed`. The comparison is deterministic
 and performs no staging, environment acquisition, registration, or routing.
 
+`toolbox-plan-tool-changes` performs a compare-and-swap merge against that same
+authoritative active revision. Its strict batch contains at most 512 unique
+change IDs and targets. Add, update, rename, and remove are validated together;
+all targeted active keys are removed before result-key collision checks, so
+rename swaps are atomic. Update must retain its stable key, rename must change
+it, and request kind cannot change. Complete-definition planning derives stable
+`host:sha256:<digest>` IDs from each change kind and its prior/resulting key.
+
 The resulting plan is stored in the process-safe atomic definition-plan
 repository. Its ID binds toolbox ID, definition revision, expected active
 revision, catalog revision, package-policy revision, resolved profiles, and

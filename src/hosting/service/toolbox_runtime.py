@@ -246,6 +246,122 @@ class ToolboxRuntimeMixin:
         worker.start()
         return status
 
+    def toolbox_plan_tool_changes(
+        self,
+        *,
+        toolbox_id: str,
+        expected_revision: str | None,
+        changes: List[Dict[str, Any]],
+        request_id: str,
+        operator_details: bool = False,
+        owner_actor_id: str = "service:local",
+        authority_id: str = "authority:local",
+        ttl_ms: int = 15 * 60 * 1000,
+    ) -> Dict[str, Any]:
+        from ..toolbox.tool_changes import ToolboxToolChange
+
+        tid = str(toolbox_id or "").strip()
+        parsed = tuple(
+            ToolboxToolChange.from_dict(item) for item in list(changes or [])
+        )
+        if not 1 <= len(parsed) <= 512:
+            raise ValueError("tool_change_count_invalid")
+        actor = str(owner_actor_id or "").strip()
+        authority = str(authority_id or "").strip()
+        rid = str(request_id or "").strip()
+        normalized_input = [
+            item.to_dict() for item in sorted(parsed, key=lambda item: item.change_id)
+        ]
+        fingerprint = hosted_execution_fingerprint({
+            "toolbox_id": tid,
+            "expected_revision": expected_revision,
+            "changes": normalized_input,
+            "configuration_revision": self.hosting_configuration_revision,
+            "operator_details": bool(operator_details),
+            "ttl_ms": int(ttl_ms),
+            "authority_id": authority,
+        })
+        prepared = self._hosted_operations.prepare(
+            owner_actor_id=actor,
+            execution_kind=HostedExecutionKind.TOOLBOX_DEFINITION_PLAN,
+            selector={"kind": "toolbox_id", "id": tid},
+            namespace=f"toolbox-definition-plan:{tid}",
+            request_id=rid,
+            fingerprint=fingerprint,
+            metadata={
+                "toolbox_id": tid,
+                "proposal_kind": "tool_changes",
+                "configuration_revision": self.hosting_configuration_revision,
+                "retain_terminal_result": True,
+            },
+        )
+        status = dict(prepared.get("status") or {})
+        if prepared.get("action") != "dispatch":
+            return status
+        operation_id = str(dict(status["operation"])["operation_id"])
+        worker = threading.Thread(
+            target=self._run_toolbox_tool_changes_plan,
+            kwargs={
+                "operation_id": operation_id,
+                "toolbox_id": tid,
+                "expected_revision": expected_revision,
+                "changes": normalized_input,
+                "operator_details": bool(operator_details),
+                "owner_actor_id": actor,
+                "authority_id": authority,
+                "ttl_ms": int(ttl_ms),
+            },
+            name=f"toolbox-tool-changes-plan-{operation_id[:12]}",
+            daemon=True,
+        )
+        worker.start()
+        return status
+
+    def _run_toolbox_tool_changes_plan(
+        self, *, operation_id: str, toolbox_id: str, expected_revision: str | None,
+        changes: List[Dict[str, Any]], **kwargs: Any
+    ) -> Dict[str, Any]:
+        from ..toolbox.bundle_models import ToolboxDefinitionSpec
+        from ..toolbox.tool_changes import merge_toolbox_tool_changes
+
+        self._hosted_operations.mark_dispatch_claimed(operation_id=operation_id)
+        try:
+            snapshot = self.toolbox_get_definition(toolbox_id=toolbox_id)
+            active = ToolboxDefinitionSpec.from_dict(snapshot["definition"])
+            proposed, normalized = merge_toolbox_tool_changes(
+                toolbox_id=toolbox_id,
+                expected_revision=expected_revision,
+                active_revision=snapshot["active_revision"],
+                active_definition=active,
+                changes=changes,
+            )
+            result = self._build_toolbox_definition_plan(
+                definition=proposed.to_dict(),
+                proposal_kind="tool_changes",
+                normalized_changes=normalized,
+                **kwargs,
+            )
+            return self._hosted_operations.finish(
+                operation_id=operation_id,
+                lifecycle=HostedOperationLifecycle.TERMINAL_SUCCESS,
+                envelope=result,
+            )
+        except Exception as exc:
+            code = (
+                "tool_change_conflict"
+                if str(exc) in {"tool_change_revision_conflict", "toolbox_revision_conflict"}
+                else "tool_change_invalid"
+            )
+            return self._hosted_operations.finish(
+                operation_id=operation_id,
+                lifecycle=HostedOperationLifecycle.TERMINAL_FAILURE,
+                envelope={
+                    "contract": "hosting.toolbox.definition_plan_failure.v1",
+                    "status": "failed",
+                    "code": code,
+                },
+            )
+
     def _run_toolbox_definition_plan(self, *, operation_id: str, **kwargs: Any) -> Dict[str, Any]:
         self._hosted_operations.mark_dispatch_claimed(operation_id=operation_id)
         try:
@@ -353,6 +469,8 @@ class ToolboxRuntimeMixin:
         self,
         *,
         definition: Dict[str, Any],
+        proposal_kind: str = "complete_definition",
+        normalized_changes: Any = None,
         operator_details: bool = False,
         owner_actor_id: str = "service:local",
         authority_id: str = "authority:local",
@@ -365,6 +483,10 @@ class ToolboxRuntimeMixin:
             plan_toolbox_definition,
         )
         from ..toolbox.identity import identity_digest
+        from ..toolbox.tool_changes import (
+            NormalizedToolboxToolChange,
+            deterministic_definition_changes,
+        )
         from .toolbox_definition_resolution import ConfiguredToolboxPlanResolver
 
         model = ToolboxDefinitionSpec.from_dict(definition)
@@ -374,6 +496,9 @@ class ToolboxRuntimeMixin:
             from .toolbox_state_v2 import ToolboxRevisionConflictError
 
             raise ToolboxRevisionConflictError("toolbox_revision_conflict")
+        active_definition_model = ToolboxDefinitionSpec.from_dict(
+            self.toolbox_get_definition(toolbox_id=model.toolbox_id)["definition"]
+        )
         context = self._toolbox_definition_planning_context()
         configuration = context["configuration"]
         if configuration is None:
@@ -411,9 +536,7 @@ class ToolboxRuntimeMixin:
             draft.custom_environment_count and context["policy"].custom_requires_approval
         )
         environment_mutations = build_toolbox_environment_mutations(
-            active_definition=ToolboxDefinitionSpec.from_dict(
-                self.toolbox_get_definition(toolbox_id=model.toolbox_id)["definition"]
-            ),
+            active_definition=active_definition_model,
             draft=draft,
             candidates=candidates,
             active_environments=active_environments,
@@ -429,6 +552,16 @@ class ToolboxRuntimeMixin:
             platform=context["platform"],
             consumer_revision=consumer_revision,
         )
+        changes = (
+            deterministic_definition_changes(active_definition_model, model)
+            if normalized_changes is None
+            else tuple(
+                item
+                if isinstance(item, NormalizedToolboxToolChange)
+                else NormalizedToolboxToolChange.from_dict(item)
+                for item in normalized_changes
+            )
+        )
         pins = ToolboxPlanPins(
             active_definition_revision=active_revision,
             target=context["target"],
@@ -441,12 +574,14 @@ class ToolboxRuntimeMixin:
         now_ms = int(time.time() * 1000)
         record = self._toolbox_definition_plans.create(
             draft,
-            active_definition=ToolboxDefinitionSpec.from_dict(
-                self.toolbox_get_definition(toolbox_id=model.toolbox_id)["definition"]
-            ),
+            active_definition=active_definition_model,
             pins=pins,
             environment_mutations=environment_mutations,
             planned_environments=planned_environments,
+            proposal_kind=proposal_kind,
+            changes=changes,
+            parent_plan_id=None,
+            reduction=None,
             active_profiles=active_profiles,
             now_ms=now_ms,
             ttl_ms=int(ttl_ms),
@@ -458,7 +593,9 @@ class ToolboxRuntimeMixin:
         return {
             "contract": "hosting.toolbox.definition_plan.v2",
             "plan_id": record.plan_id,
+            "parent_plan_id": record.parent_plan_id,
             "toolbox_id": record.toolbox_id,
+            "proposal_kind": record.proposal_kind,
             "definition_hash": record.proposed_definition.revision,
             "expected_revision": record.proposed_definition.expected_revision,
             "pins": record.pins.to_dict(),
@@ -466,6 +603,8 @@ class ToolboxRuntimeMixin:
             "can_apply": False,
             "confirmation_required": True,
             "approval_required": approval_required,
+            "changes": [item.to_dict() for item in record.changes],
+            "tool_analysis": [],
             "environment_mutations": [item.to_dict() for item in environment_mutations],
             "profile_diff": {
                 classification: sum(
@@ -473,6 +612,7 @@ class ToolboxRuntimeMixin:
                 )
                 for classification in ("reused", "added", "replaced", "removed")
             },
+            "reduction": record.reduction,
             "diagnostics": [],
             "user_projection": {
                 "state": state,
