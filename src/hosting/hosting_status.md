@@ -53,7 +53,7 @@ and remaining permanent documents are migrated and the named proofs pass.
 | R5 Generic package subsystem | P0 | high | Complete | CODE-R5 |
 | R6 Generic environment subsystem | P0 | high | Active (foundation complete) | CODE-R6A |
 | R7 Toolbox adoption | P1 | high | Not started | — |
-| R8 Worker-neutral state/operations | P1 | high | Active (R8.1/R8.2 complete) | CODE-R8A/R8B |
+| R8 Worker-neutral state/operations | P1 | high | Complete | CODE-R8A/R8B/R8C |
 | R9 Public surfaces/acceptance/handoff | P2 | high | Not started | — |
 
 Do not mark a row complete merely because an older toolbox-specific
@@ -552,6 +552,16 @@ the slice.
 - Proof: 17 focused package/environment tests passed; matching Python-helper and
   JS-node inputs reused one physical build while retaining independent references,
   and removal remained denied until both consumers released
+
+### CODE-R8C — repair mutation authorization
+
+- Date: 2026-08-11
+- Plan IDs: R8.3; P1; high expertise
+- Outcome: `toolbox-repair` is an observational review by default; mutation
+  requires both explicit `apply: true` and a server-supplied authorization bit;
+  payloads cannot assert mutation authority
+- Proof: 10 focused environment/maintenance tests passed, covering observation,
+  denied unauthorized mutation, and authorized dispatch
 
 Append one concise entry per completed slice. Include exact commands, counts,
 durations where useful, negative-path results, commit pin, and dependent receipt

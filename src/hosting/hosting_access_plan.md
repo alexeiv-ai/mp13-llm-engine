@@ -792,7 +792,7 @@ independent retention where toolbox, Python helper, and Node references differ.
 - [x] Apply quotas and bounded listing/pagination to package/environment state.
 - [x] Make GC mark from all consumer references before sweeping and re-check
   activity under lock before deletion.
-- [ ] Make repair observational by default and explicitly authorized for any
+- [x] Make repair observational by default and explicitly authorized for any
   mutation.
 
 Proof: stress and adversarial tests cover large state, concurrent create/GC,

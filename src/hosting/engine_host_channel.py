@@ -3674,6 +3674,7 @@ class EngineHostControlChannel:
         toolbox_ids: Optional[list[str]] = None,
         only_inconsistent: bool = True,
         details: bool = False,
+        apply: bool = False,
     ) -> Dict[str, Any]:
         return self.start_host_operation(
             command="toolbox-repair",
@@ -3682,6 +3683,7 @@ class EngineHostControlChannel:
                 "toolbox_ids": [str(item or "").strip() for item in list(toolbox_ids or []) if str(item or "").strip()],
                 "only_inconsistent": bool(only_inconsistent),
                 "details": bool(details),
+                "apply": bool(apply),
             },
         )
 

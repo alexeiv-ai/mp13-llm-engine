@@ -18,6 +18,7 @@ from hosting.environments import (
 from hosting.service.auth import AuthMixin
 from hosting.sandbox.python_runtime import HostedPythonRuntimeManager
 from hosting.sandbox.js_runtime import HostedJsRuntimeBase
+from hosting.service.toolbox_env import ToolboxMaintenanceMixin
 
 
 REVISION = "sha256:" + "a" * 64
@@ -188,3 +189,22 @@ def test_lower_roles_cannot_mutate_templates_environments_references_or_gc() -> 
     assert "environment-template-list" in diagnostic
     assert "environment-template-list" in worker
     assert "environment-template-construct" not in worker
+
+
+def test_repair_is_observational_by_default_and_mutation_requires_authority() -> None:
+    class RepairHarness(ToolboxMaintenanceMixin):
+        def toolbox_review_snapshot(self, *, toolbox_ids=None):
+            return {"status": "ok", "contract": "hosting.toolbox.review.v2", "summary": {"issue_count": 1}}
+
+        def _toolbox_maintenance_start(self, **payload):
+            return {"status": "started", **payload}
+
+    harness = RepairHarness()
+    observed = harness.toolbox_repair(request_id="observe", toolbox_ids=["demo"])
+    assert observed["mutation_applied"] is False
+    with pytest.raises(PermissionError, match="mutation_not_authorized"):
+        harness.toolbox_repair(request_id="mutate", toolbox_ids=["demo"], apply=True)
+    started = harness.toolbox_repair(
+        request_id="mutate", toolbox_ids=["demo"], apply=True, mutation_authorized=True
+    )
+    assert started["status"] == "started"

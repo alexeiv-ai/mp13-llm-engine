@@ -773,8 +773,15 @@ class ToolboxMaintenanceMixin:
         toolbox_ids: Optional[List[str]] = None,
         only_inconsistent: bool = True,
         details: bool = False,
+        apply: bool = False,
+        mutation_authorized: bool = False,
         owner_actor_id: str = "service:local",
     ) -> Dict[str, Any]:
+        if not apply:
+            snapshot = self.toolbox_review_snapshot(toolbox_ids=toolbox_ids)
+            return {**snapshot, "recommended_action": "repair" if snapshot["summary"]["issue_count"] else "observe", "mutation_applied": False}
+        if not mutation_authorized:
+            raise PermissionError("toolbox_repair_mutation_not_authorized")
         return self._toolbox_maintenance_start(
             action="repair",
             request_id=request_id,

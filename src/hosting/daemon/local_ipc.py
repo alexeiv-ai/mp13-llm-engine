@@ -3340,6 +3340,8 @@ class EngineHostDaemon:
                 toolbox_ids=[str(item or "").strip() for item in list(payload.get("toolbox_ids") or []) if str(item or "").strip()],
                 only_inconsistent=bool(payload.get("only_inconsistent", True)),
                 details=bool(payload.get("details", False)),
+                apply=bool(payload.get("apply", False)),
+                mutation_authorized=True,
                 owner_actor_id=str(payload.get("_claim_actor_id") or "service:local"),
             )
         if cmd == "toolbox-reconcile":

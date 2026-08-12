@@ -2127,6 +2127,7 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
                     toolbox_ids=[str(item or "").strip() for item in list(payload.get("toolbox_ids") or []) if str(item or "").strip()],
                     only_inconsistent=bool(payload.get("only_inconsistent", True)),
                     details=bool(payload.get("details", False)),
+                    apply=bool(payload.get("apply", False)),
                 )
             )
             return 0
