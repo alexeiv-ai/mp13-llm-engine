@@ -630,7 +630,7 @@ never resolve an unqualified logical ID during confirmation or apply.
 Custom toolbox requirements are solved offline over the generic manager's
 daemon-indexed wheel set. Resolution uses a dry-run installer report with no
 indexes, no installed-state reuse, wheels only, and bounded time/artifact size.
-The host revalidates wheel metadata, target compatibility, source policy,
+The host revalidates wheel metadata, target support, source policy,
 daemon-computed SHA-256 identity, and generic-CAS availability before creating
 an offer. Missing or mutated bytes fail closed and never enter a package lock.
 ### Hermetic environment input and identity

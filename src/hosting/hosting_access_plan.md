@@ -224,7 +224,7 @@ side-effect-free.
   examples; remove old fields, commands, aliases, codes, contract IDs,
   filenames, roots, fallbacks, and mandatory-signing language. Inspect any
   intentionally retained historical match.
-- [ ] **R9.5 Permanent docs:** update configuration, setup, startup/CLI,
+- [x] **R9.5 Permanent docs:** update configuration, setup, startup/CLI,
   security, package/environment, toolbox, candidate, and worker guidance only
   as behavior ships. Executable examples must pass; permanent docs must not
   depend normatively on the transient plan/status/handoff.

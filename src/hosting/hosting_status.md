@@ -2,7 +2,7 @@
 
 Last updated: 2026-08-12
 
-Status: R9.4 removals complete; R9.5 permanent documentation active
+Status: R9.5 permanent documentation complete; R9.6 consumer adoption gated
 
 This is the current execution ledger for
 [`hosting_access_plan.md`](hosting_access_plan.md). Detailed completed-slice
@@ -12,7 +12,7 @@ compact evidence index, and external completion gates.
 
 ## 1. Current gate and resume order
 
-**R9.4 removals are complete; R9.5 permanent documentation is active.** R7.2 candidate lifecycle is complete. R7.1 planning and selective revision is complete:
+**R9.5 permanent documentation is complete; R9.6 consumer adoption is gated.** R7.2 candidate lifecycle is complete. R7.1 planning and selective revision is complete:
 generic locks/requests, CAS changes, evidence, child replanning, exact public
 projections, and stale/retry/restart/concurrency safety proofs are committed.
 The strict v3 candidate retention/quota policy, durable candidate repository,
@@ -27,8 +27,8 @@ lifecycle state and never moves generic package/environment state.
 
 Resume in this order:
 
-1. Complete R9.5 permanent documentation alignment.
-2. Obtain dependent adoption evidence and run final matrices.
+1. Obtain dependent adoption evidence.
+2. Run final aggregate/platform matrices.
 3. Reconcile all remaining evidence and close R9.8.
 
 Do not run the repository-wide aggregate at resume. Its last diagnostic run
@@ -140,6 +140,7 @@ The pre-R7 P0 clean-cut items are complete.
 | CODE/TEST-R9.4T | Removed the obsolete `toolbox_artifact_import` hosted-operation kind, selector namespace, progress phases, cancellation branch, and contract fixture. Generic package upload/commit and environment operations remain; focused operation/package/environment coverage passed 64 tests. |
 | DOC/TEST-R9.4U | Replaced the permanent contract's signed bundle/setup/built-in authority with the shipped generic package CAS/index, locks, active catalog, prewarm, and readiness behavior; removed the retired host-config state filename and mandatory-signing fixture vocabulary. Contract/catalog/plan/definition/rollout coverage passed 57 tests. |
 | TEST-R9.4V | Final production/test/doc vocabulary and constructor scans leave only explicit rejection, absence, and historical handoff matches. Removed-surface, strict-startup, generic-root, CLI/settings rejection, builder, contract, and definition-resolution coverage passed 102 tests. |
+| DOC/TEST-R9.5 | Configuration, setup, startup/CLI, security/access, generic package/environment, toolbox/candidate, and worker guidance now describe only shipped v3 and generic lifecycle behavior. Executable durable-doc, public guarantee, startup, configuration, and setup coverage passed 56 tests. |
 | CODE-R8A–C | Versioned neutral state, Python/JS shared manager adoption, GC/repair controls passed focused coverage. |
 | CODE/TEST-R9 partial | Structured auth, role/hash authority, redaction, startup modes, generic lifecycle, and retry/restart identity passed focused coverage. |
 | TEST-R8.2C checkpoint | Workflow operation suite passed; full helper suite passed 116 tests on resume. |
