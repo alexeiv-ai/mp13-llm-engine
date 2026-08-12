@@ -18,7 +18,7 @@ import time
 from multiprocessing.connection import Client as MPClient
 from multiprocessing.connection import Listener as MPListener
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 
 from ..sandbox.host_capabilities import (
     CapabilityAuthorityLease,
@@ -735,7 +735,7 @@ class EngineHostDaemon:
         c = str(cmd or "").strip()
         return c in {"claim-engine", "claim-endpoint", "claim-resource"}
 
-    def _effective_endpoint_mode(self) -> Dict[str, str]:
+    def _effective_endpoint_mode(self) -> Dict[str, Optional[str]]:
         cfg = self.svc.get_control_config()
         default_mode = str(cfg.get("endpoint_mode_default") or "shared").strip().lower()
         if default_mode not in {"exclusive", "shared"}:
@@ -1753,7 +1753,7 @@ class EngineHostDaemon:
         active_task = bool(task is not None and not task.done())
         wait_for_service_result = bool(active_task and command in {"connect-from-config", "spawn"})
         task_cancel_requested = bool(active_task and not wait_for_service_result)
-        if task_cancel_requested:
+        if task_cancel_requested and task is not None:
             task.cancel()
 
         teardown = await asyncio.to_thread(self._operation_cancel_teardown, op)
@@ -1932,24 +1932,23 @@ class EngineHostDaemon:
                             self.port = int(sockname[1] or self.port)
                 except Exception:
                     pass
-            write_kwargs = {
-                "pid": os.getpid(),
-                "port": self.port,
-                "shutdown_token": self.shutdown_token,
-                "transport": str(self._local_transport.get("transport") or ""),
-                "ipc_family": str(self._local_transport.get("family") or ""),
-                "ipc_address": str(self._local_transport.get("address") or ""),
-            }
             self._started_at = time.time()
             self._started_monotonic = time.monotonic()
-            write_kwargs["started_at"] = self._started_at
             try:
-                self.pid_file.write(**write_kwargs)
+                self.pid_file.write(
+                    pid=os.getpid(),
+                    port=self.port,
+                    shutdown_token=self.shutdown_token,
+                    transport=str(self._local_transport.get("transport") or ""),
+                    ipc_family=str(self._local_transport.get("family") or ""),
+                    ipc_address=str(self._local_transport.get("address") or ""),
+                    started_at=self._started_at,
+                )
             except TypeError:
                 self.pid_file.write(
-                    pid=int(write_kwargs["pid"]),
-                    port=int(write_kwargs["port"]),
-                    shutdown_token=str(write_kwargs["shutdown_token"]),
+                    pid=os.getpid(),
+                    port=self.port,
+                    shutdown_token=self.shutdown_token,
                 )
             started = True
             write_daemon_report(
@@ -1971,7 +1970,10 @@ class EngineHostDaemon:
             )
             if enable_tcp:
                 logger.info("EngineHostDaemon starting on 127.0.0.1:%d", self.port)
-                async with self._server:
+                server = self._server
+                if server is None:
+                    raise RuntimeError("daemon_tcp_server_not_started")
+                async with server:
                     await self._stop_event.wait()
             else:
                 await self._stop_event.wait()
@@ -2178,7 +2180,7 @@ class EngineHostDaemon:
                 acl = self.svc.enforce_daemon_claim_policy(
                     cmd,
                     payload,
-                    peer_host=peer_host,
+                    peer_host=peer_host or "",
                     is_localhost=is_localhost,
                 )
                 if not bool(acl.get("ok", False)):
@@ -2507,9 +2509,9 @@ class EngineHostDaemon:
                 result = self._register_host_capability_session(
                     payload,
                     transport=transport,
-                    peer_host=peer_host,
+                    peer_host=peer_host or "",
                     peer_pid=peer_pid,
-                    peer_process_info=peer_process_info,
+                    peer_process_info=dict(peer_process_info or {}),
                 )
                 return {"seq": seq, "ok": True, "result": result}
             if cmd == "host-capability-session-list":
@@ -3319,7 +3321,7 @@ class EngineHostDaemon:
                 confirmation_ref=str(payload.get("confirmation_ref") or ""),
                 request_id=str(payload.get("request_id") or ""),
                 dependency_approval_ref=payload.get("dependency_approval_ref"),
-                requested_lifetime_ms=payload.get("requested_lifetime_ms"),
+                requested_lifetime_ms=cast(int, payload.get("requested_lifetime_ms")),
                 owner_actor_id=actor,
                 authority_id=actor,
             )
