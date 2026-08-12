@@ -2,7 +2,7 @@
 
 Last updated: 2026-08-12
 
-Status: R9.1 public surfaces complete; R9.3 lifecycle acceptance active
+Status: R9.3 lifecycle acceptance complete; R9.4 removals active
 
 This is the current execution ledger for
 [`hosting_access_plan.md`](hosting_access_plan.md). Detailed completed-slice
@@ -12,7 +12,7 @@ compact evidence index, and external completion gates.
 
 ## 1. Current gate and resume order
 
-**R9.1 public surfaces are complete; R9.3 lifecycle acceptance is active.** R7.2 candidate lifecycle is complete. R7.1 planning and selective revision is complete:
+**R9.3 lifecycle acceptance is complete; R9.4 removals are active.** R7.2 candidate lifecycle is complete. R7.1 planning and selective revision is complete:
 generic locks/requests, CAS changes, evidence, child replanning, exact public
 projections, and stale/retry/restart/concurrency safety proofs are committed.
 The strict v3 candidate retention/quota policy, durable candidate repository,
@@ -27,8 +27,9 @@ lifecycle state and never moves generic package/environment state.
 
 Resume in this order:
 
-1. Complete R9.3 lifecycle/no-double coverage.
-2. Perform R9.4 removals and R9.5 permanent documentation alignment.
+1. Perform the R9.4 production/test/doc removal scans and remove stale
+   surfaces and fixtures.
+2. Complete R9.5 permanent documentation alignment.
 3. Obtain dependent adoption evidence and run final matrices.
 4. Reconcile all remaining evidence and close R9.8.
 
@@ -76,12 +77,12 @@ are authoritative for unfinished item-level work.
 
 The pre-R7 P0 clean-cut items are complete.
 
-### R9.3 lifecycle/no-double acceptance
+### R9.4 removal
 
-- Cover the frequent-edit candidate matrix, package/environment lifecycle,
-  second-worker concurrency, retry/restart, and at-most-once durable effects.
-- Preserve ordinary effect approvals and cancellation semantics for candidate
-  execution while proving retention cannot interrupt an in-flight call.
+- Run the R1 vocabulary and constructor scans over production, tests, docs,
+  and examples; inspect intentional historical matches.
+- Remove old commands, fields, aliases, codes, filenames, roots, fallbacks,
+  and mandatory-signing language without adding compatibility translations.
 - Keep the 24 removed-constructor/missing-v3-config toolbox sandbox fixtures as
   explicit R9.4 test-removal debt; the mixed diagnostic currently reaches 119
   passes before those known failures.
@@ -128,6 +129,7 @@ The pre-R7 P0 clean-cut items are complete.
 | TEST-R7.3B | Generic GC and explicit removal preserve toolbox/other-worker references, active executions, and live candidate leases; environment/maintenance lane passed 31 tests. |
 | CODE/TEST-R7.3C | Gate and consistency fail closed for released declared generic references; review exposes generic protection counts; offline v1 archive refuses newer lifecycle repositories and excludes shared state; R7.3 authority lane passed 54 tests. |
 | CODE/TEST-R9.1 | Channel/daemon/CLI candidate commands retain frozen payloads; capabilities advertise tool-change and candidate support; `HostedToolBoxRef` exposes typed atomic changes, candidate preparation, and reconnectable candidate sessions; public/auth/CLI lane passed 117 tests. |
+| TEST-R9.3 | Package/environment lifecycle, atomic tool changes, candidate prepare/renew/execute/publish/discard/expiry, maintenance, and durable-operation concurrency/restart/no-double lane passed 158 tests; the authenticated daemon fixture now uses strict v3 configuration and the frozen confirmation projection. |
 | CODE-R8A–C | Versioned neutral state, Python/JS shared manager adoption, GC/repair controls passed focused coverage. |
 | CODE/TEST-R9 partial | Structured auth, role/hash authority, redaction, startup modes, generic lifecycle, and retry/restart identity passed focused coverage. |
 | TEST-R8.2C checkpoint | Workflow operation suite passed; full helper suite passed 116 tests on resume. |

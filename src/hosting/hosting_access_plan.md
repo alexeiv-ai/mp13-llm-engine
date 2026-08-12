@@ -216,7 +216,7 @@ side-effect-free.
 - [x] **R9.1 Public surfaces:** align channel, API, CLI, help, capabilities,
   request/result/error shapes, and add typed high-level tool-change and
   candidate-session methods while retaining advanced full-definition planning.
-- [ ] **R9.3 Lifecycle/no-double:** cover upload, resolution, build/reuse,
+- [x] **R9.3 Lifecycle/no-double:** cover upload, resolution, build/reuse,
   replacement, release, removal, repair, GC, toolbox/second-worker concurrency,
   the frequent-edit candidate matrix above, disconnect/retry/restart, and prove
   one authorized logical request causes at most one durable/execution effect.

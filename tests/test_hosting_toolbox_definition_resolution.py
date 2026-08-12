@@ -31,7 +31,7 @@ from hosting.toolbox.orchestration import ToolboxSandboxOrchestrator
 from hosting.toolbox.staging import ToolboxBundleStager
 from hosting.toolbox.identity import identity_digest
 from hosting.toolbox.host_project_config import ToolboxHostProjectConfiguration
-from tests.hosting_v3_fixtures import hosting_configuration
+from tests.hosting_v3_fixtures import hosting_configuration, write_hosting_configuration
 
 
 def _b64(value: bytes) -> str:
@@ -148,7 +148,9 @@ def _definition() -> dict:
     }
 
 
-def _service_with_verified_closure(tmp_path: Path, *, policy=None):
+def _service_with_verified_closure(
+    tmp_path: Path, *, policy=None, require_auth: bool = False
+):
     private = Ed25519PrivateKey.generate()
     public = _b64(private.public_key().public_bytes_raw())
     source = tmp_path / "source"
@@ -157,6 +159,7 @@ def _service_with_verified_closure(tmp_path: Path, *, policy=None):
         engines_state_file=tmp_path / "engines.json",
         hosting_configuration=hosting_configuration(
             tmp_path,
+            require_auth=require_auth,
             package_sources={
                 "release": {
                     "kind": "airgap_store",
@@ -717,13 +720,10 @@ def test_confirmed_plan_prepares_durable_candidate_without_publication(tmp_path:
 def test_authenticated_daemon_recovers_one_multi_tool_plan_and_confirmation(
     tmp_path: Path,
 ) -> None:
-    service, _template = _service_with_verified_closure(tmp_path)
+    service, _template = _service_with_verified_closure(tmp_path, require_auth=True)
     service.auth_upsert_key(
         key_id="consumer", key_secret="consumer-secret", role="worker_user",
         auth_method="shared_secret",
-    )
-    service.set_control_config(
-        require_auth=True, access_profile={"connectivity_mode": "local_only"}
     )
     token = service.auth_issue_session(
         key_id="consumer", key_secret="consumer-secret", scope="control"
@@ -731,7 +731,7 @@ def test_authenticated_daemon_recovers_one_multi_tool_plan_and_confirmation(
     daemon = EngineHostDaemon(
         pid_file=tmp_path / "daemon.pid",
         engines_state_file=tmp_path / "unused-engines.json",
-        control_state_file=tmp_path / "unused-control.json",
+        mp13_config_file=write_hosting_configuration(tmp_path, require_auth=True),
     )
     daemon.svc = service
     definition = _definition()
@@ -799,5 +799,7 @@ def test_authenticated_daemon_recovers_one_multi_tool_plan_and_confirmation(
         operation_id=confirmed["result"]["operation"]["operation_id"], timeout_seconds=10
     )
     assert terminal["lifecycle"] == "terminal_success"
-    assert set(terminal["result"]["accepted_tool_keys"]) == offered_tools
+    assert set(terminal["result"]["accepted_change_ids"]) == {
+        item["change_id"] for item in planned["changes"]
+    }
     assert not daemon._operations_state_file.exists()  # noqa: SLF001
