@@ -22,6 +22,7 @@ from test_hosting_toolbox_definition_resolution import (
     _configuration as _definition_resolution_configuration,
     _service_with_verified_closure,
 )
+from tests.hosting_v3_fixtures import hosting_configuration
 
 
 TARGET = detect_current_toolbox_target()
@@ -115,13 +116,39 @@ def _configuration() -> dict[str, Any]:
     }
 
 
-def _service(root: Path) -> EngineHostService:
+def _install_project_semantics(
+    service: EngineHostService, configuration: Mapping[str, Any]
+) -> None:
+    parsed = ToolboxHostProjectConfiguration.from_dict(configuration)
+    service._toolbox_host_project_config = parsed  # noqa: SLF001
+    transition = service._toolbox_host_config_revisions.apply(parsed)  # noqa: SLF001
+    service._toolbox_config_transition = transition  # noqa: SLF001
+    if transition["changed"]:
+        active_digests = set(service._toolbox_template_catalog.read()["active"].values())  # noqa: SLF001
+        transition["invalidated_plans"] = service._toolbox_definition_plans.invalidate_all()  # noqa: SLF001
+        transition["invalidated_materialization_receipts"] = (  # noqa: SLF001
+            service._toolbox_materialization_receipts.retain_template_digests(active_digests)  # noqa: SLF001
+        )
+    service._toolbox_startup = {  # noqa: SLF001
+        "status": "pending",
+        "config_revision": parsed.config_revision,
+        "source_set_revision": parsed.source_set_revision,
+        "target": parsed.target.name,
+        "closures": [],
+        "diagnostics": [],
+        "published": [],
+        "operations": [],
+    }
+
+
+def _service(
+    root: Path, *, project_configuration: Mapping[str, Any] | None = None
+) -> EngineHostService:
     service = EngineHostService(
-        engines_state_file=root / "engines.json",
-        control_state_file=root / "control_state.json",
+        hosting_configuration=hosting_configuration(root),
         toolbox_template_materializer=VerifiedMaterializer(),
-        toolbox_host_project_configuration=_configuration(),
     )
+    _install_project_semantics(service, project_configuration or _configuration())
     service._toolbox_startup = service._resolve_configured_toolbox_startup(  # noqa: SLF001
         progress=lambda *_args: None
     )
@@ -200,15 +227,9 @@ def test_configured_intents_remain_unpublished_until_exact_resolution(
     assert service._toolbox_startup["operations"] == []  # noqa: SLF001
     assert service._toolbox_template_catalog.read()["entries"] == []  # noqa: SLF001
     summary = service.hosting_setup_summary()
-    assert summary["toolbox_readiness"]["status"] == "degraded"
-    assert summary["toolbox_readiness"]["code"] == "environment_template_unavailable"
-    parsed = ToolboxHostProjectConfiguration.from_dict(_configuration())
-    assert summary["toolbox_host_project"] == parsed.public_dict()
-    assert "credential_ref" not in str(summary["toolbox_host_project"])
-    serialized = str(summary["toolbox_readiness"])
-    assert "artifact_source" not in serialized
-    assert "python_executable" not in serialized
-    assert "installer" not in serialized
+    assert summary["configuration"]["configuration_health"]["status"] == "ok"
+    assert "toolbox_readiness" not in summary
+    assert "toolbox_host_project" not in summary
 
 
 def test_airgap_source_rejects_paths_credentials_and_https_mix() -> None:
@@ -286,8 +307,9 @@ def test_admin_immutable_template_replacement_survives_restart(tmp_path: Path) -
     assert len(core_entries) == 2
     assert state["active"]["core"] == published["template_digest"]
     assert {item["lifecycle"] for item in core_entries} == {"active", "deprecated"}
-    status = restarted.hosting_setup_summary()["toolbox_readiness"]
-    assert status["status"] == "degraded"
+    status = restarted.toolbox_required_template_status(
+        python_abi=TARGET.python_abi, platform=TARGET.platform
+    )
     assert status["templates"][0]["template_digest"] == published["template_digest"]
 
 
@@ -295,6 +317,7 @@ def test_configuration_revision_change_invalidates_unused_state_but_preserves_ac
     tmp_path: Path,
 ) -> None:
     service, template = _service_with_verified_closure(tmp_path)
+    _install_project_semantics(service, _definition_resolution_configuration())
     catalog = service._toolbox_template_catalog.read()  # noqa: SLF001
     published_digest = catalog["active"]["core"]
     published_entry = next(
@@ -345,11 +368,9 @@ def test_configuration_revision_change_invalidates_unused_state_but_preserves_ac
 
     changed = _definition_resolution_configuration()
     changed["retention"]["artifact_cache_grace_seconds"] += 1
-    restarted = EngineHostService(
-        engines_state_file=tmp_path / "engines.json",
-        control_state_file=tmp_path / "control_state.json",
-        toolbox_template_materializer=VerifiedMaterializer(),
-        toolbox_host_project_configuration=changed,
+    restarted = _service(
+        tmp_path,
+        project_configuration=changed,
     )
 
     assert restarted._toolbox_config_transition["changed"] is True  # noqa: SLF001
@@ -375,9 +396,6 @@ def test_configuration_revision_change_invalidates_unused_state_but_preserves_ac
         restarted._toolbox_definition_plans.get(plan["plan_id"], now_ms=int(time.time() * 1000))  # noqa: SLF001
     restarted.close()
 
-    unconfigured = EngineHostService(
-        engines_state_file=tmp_path / "engines.json",
-        control_state_file=tmp_path / "control_state.json",
-    )
+    unconfigured = EngineHostService(hosting_configuration=hosting_configuration(tmp_path))
     assert unconfigured._toolbox_host_project_config is None  # noqa: SLF001
     assert unconfigured._toolbox_config_transition is None  # noqa: SLF001
