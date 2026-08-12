@@ -2,7 +2,7 @@
 
 Last updated: 2026-08-12
 
-Status: R9.6 consumer adoption gated; R9.7 local matrix partially complete
+Status: R9.6 consumer adoption gated; R9.7 local matrix complete, external lanes gated
 
 This is the current execution ledger for
 [`hosting_access_plan.md`](hosting_access_plan.md). Detailed completed-slice
@@ -12,19 +12,17 @@ compact evidence index, and external completion gates.
 
 ## 1. Current gate and resume order
 
-**R9.6 consumer adoption is gated; the locally executable R9.7 matrix is
-partially complete.** The repository aggregate, Windows x64 native target, and
-relay-equivalent lanes pass. The declared lint lane fails its existing baseline,
-no type-check lane is configured, four native CI targets require external
-runners, and the opt-in Windows sensitive-sandbox lane requires an external
-engine model or configuration.
+**R9.6 consumer adoption is gated; every locally executable R9.7 lane is now
+green.** The repository aggregate, actionable lint, declared type check,
+security/redaction proof, Windows x64 native target, and relay-equivalent lanes
+pass. Four native CI targets require external runners, and the opt-in Windows
+sensitive-sandbox lane requires an external engine model or configuration.
 
 Resume in this order:
 
 1. Obtain the dependent owner/revision/test adoption receipt.
-2. Remediate the lint baseline and establish/run the required type lane.
-3. Run the external native/platform and sensitive-sandbox lanes.
-4. Reconcile all remaining evidence and close R9.8.
+2. Run the external native/platform and sensitive-sandbox lanes.
+3. Reconcile all remaining evidence and close R9.8.
 
 Do not repeat the repository aggregate unless code changes after the recorded
 R9.7 run or a remaining lane exposes a regression.
@@ -42,7 +40,7 @@ R9.7 run or a remaining lane exposes a regression.
 | R6 Generic environments | Complete | Final aggregate/platform proof at R9.7. |
 | R7 Toolbox adoption | Complete | Public acceptance/removal proof at R9. |
 | R8 Worker-neutral state | Complete | Final local aggregate proof recorded at R9.7. |
-| R9 Acceptance/handoff | Partial | Dependent receipt, lint/type remediation, external platform lanes, and closeout remain. |
+| R9 Acceptance/handoff | Partial | Dependent receipt, external platform lanes, and closeout remain. |
 
 The plan progress table records completed blocks; its remaining-work checkboxes
 are authoritative for unfinished item-level work.
@@ -72,9 +70,8 @@ The pre-R7 P0 clean-cut items are complete.
 ### R9 closeout
 
 - Obtain the dependent implementation pin/receipt.
-- Remediate the declared lint lane and establish the required type lane.
 - Run the four external native targets and opt-in sensitive Windows sandbox.
-- Reconcile the remaining security/redaction evidence and close R9.8.
+- Reconcile external evidence and close R9.8.
 
 ## 5. Compact evidence index
 
@@ -134,9 +131,12 @@ The pre-R7 P0 clean-cut items are complete.
 | DOC/TEST-R9.4U | Replaced the permanent contract's signed bundle/setup/built-in authority with the shipped generic package CAS/index, locks, active catalog, prewarm, and readiness behavior; removed the retired host-config state filename and mandatory-signing fixture vocabulary. Contract/catalog/plan/definition/rollout coverage passed 57 tests. |
 | TEST-R9.4V | Final production/test/doc vocabulary and constructor scans leave only explicit rejection, absence, and historical handoff matches. Removed-surface, strict-startup, generic-root, CLI/settings rejection, builder, contract, and definition-resolution coverage passed 102 tests. |
 | DOC/TEST-R9.5 | Configuration, setup, startup/CLI, security/access, generic package/environment, toolbox/candidate, and worker guidance now describe only shipped v3 and generic lifecycle behavior. Executable durable-doc, public guarantee, startup, configuration, and setup coverage passed 56 tests. |
-| TEST-R9.7A | Corrected pytest configuration loads declared markers/filters and an explicit asyncio fixture scope; with the declared pytest-asyncio dependency installed, the repository aggregate passed 1250 tests with 2 identified environment/platform skips. |
+| TEST-R9.7A | After the final local type/lint remediation slices, `python -m pytest -q` passed 1257 tests with 2 identified environment/platform skips. |
 | TEST-R9.7B | The Windows x64 native probe confirmed `cp312-win_amd64` and imported `pydantic_core` from a matching native extension; restart healing, definition resolution, and target coverage passed 20 tests. Relay autostart/configuration, strict-v3 startup, and callback-lease coverage passed 25 tests. |
-| OPEN-R9.7C | `python -m pylint src/hosting` exits 1 at 8.03/10, and `python -m pylint --errors-only src/hosting` also exits 1 on the existing baseline. No mypy, pyright, or other type-check command/configuration is declared. |
+| CODE/TEST-R9.7C | Declared actionable lint policy preserves fatal/error and useful warning checks while documenting intentional mixin/runtime architecture exceptions; `python -m pylint src/hosting` passed at 10.00/10. |
+| CODE/TEST-R9.7D | The declared mypy lane checks `src/hosting`, follows imported dependencies in skip mode, and disables only the deliberate sibling-mixin `attr-defined` pattern; `python -m mypy` passed all 130 source files. |
+| TEST-R9.7E | Focused authentication, daemon-state, operation/result, callable-surface, host-capability, catalog, and identity security/redaction proof passed 172 tests. |
+| OPEN-R9.7F | Windows ARM64, Linux x64/ARM64, macOS ARM64, and opt-in Windows sensitive-sandbox results require external runners/resources and remain open. |
 | CODE-R8A–C | Versioned neutral state, Python/JS shared manager adoption, GC/repair controls passed focused coverage. |
 | CODE/TEST-R9 partial | Structured auth, role/hash authority, redaction, startup modes, generic lifecycle, and retry/restart identity passed focused coverage. |
 | TEST-R8.2C checkpoint | Workflow operation suite passed; full helper suite passed 116 tests on resume. |
@@ -144,11 +144,9 @@ The pre-R7 P0 clean-cut items are complete.
 ## 6. External completion gates
 
 - Parent implementation pin and dependent owner/revision/test receipt.
-- Lint-baseline remediation and a declared passing type-check lane.
 - Native CI results for Windows ARM64, Linux x64/ARM64, and macOS ARM64.
 - Opt-in Windows sensitive-sandbox validation with an external engine model or
   configuration; the local aggregate skip records the exact requirement.
-- Final secret/path/process-argument redaction proof.
 - R9.8 reconciliation after R9.6 and every required R9.7 lane pass.
 
 ## 7. Ledger rules

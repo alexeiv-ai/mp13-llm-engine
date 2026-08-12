@@ -1,7 +1,7 @@
 # Unified hosting configuration and package/environment cutover plan
 
-Status: active breaking-change plan; R7 toolbox adoption complete and R9 public
-acceptance/handoff active
+Status: active breaking-change plan; local R9.7 acceptance complete, with R9.6
+consumer adoption and external R9.7 platform lanes still gated
 
 This is the current execution plan, not a history log. Completed-slice detail is
 retained in Git history and summarized in `hosting_status.md`. Exact external
@@ -129,14 +129,13 @@ only in `HOSTING_CLIENT_BREAKING_CHANGES.md`.
 
 Resume in this order:
 
-1. Complete R9.1 public surfaces and typed high-level client methods.
-2. Complete R9.3 lifecycle/no-double coverage, then R9.4 removals.
-3. Bring permanent docs and the consumer handoff to the shipped contract.
-4. Run the aggregate/platform matrix only after removals make its result
-   meaningful, obtain the dependent receipt, and perform R9.8 closeout.
-
-Do not run the repository aggregate merely on resume. Its last diagnostic
-reached 509 passes before 100 expected legacy-fixture failures.
+1. Obtain the R9.6 dependent-owner adoption receipt.
+2. Run and record Windows ARM64, Linux x64/ARM64, and macOS ARM64 native CI.
+3. Run the opt-in Windows sensitive-sandbox lane with an external engine model
+   or configuration.
+4. Reconcile those external results and the receipt, then perform R9.8
+   closeout. Do not repeat locally green lanes unless intervening code changes
+   or an external lane exposes a regression.
 
 Completed foundations that remain usable include shared roots/setup, strict v3
 configuration loading, single-path startup, generic package ingress/locks,
@@ -235,6 +234,15 @@ side-effect-free.
   integration, Windows/POSIX, relay-equivalent, and affected native/platform
   lanes. Record commands/results; skipped required lanes remain open with owner
   and reason.
+  - [x] Local aggregate: `python -m pytest -q` passed 1257 tests with the two
+    declared platform/external-resource skips.
+  - [x] Lint: `python -m pylint src/hosting` passed at 10.00/10.
+  - [x] Type: `python -m mypy` passed all 130 hosting source files.
+  - [x] Focused security/redaction proof passed 172 tests.
+  - [x] Windows x64 native and relay-equivalent lanes passed as recorded in
+    `hosting_status.md`.
+  - [ ] External Windows ARM64, Linux x64/ARM64, macOS ARM64, and opt-in
+    Windows sensitive-sandbox lanes remain required.
 - [ ] **R9.8 Closeout:** reconcile every remaining checkbox and every target or
   locked rule in Sections 1–2 with evidence, verify schema/capability/docs/
   handoff agreement, verify no compatibility code escaped review, and mark
