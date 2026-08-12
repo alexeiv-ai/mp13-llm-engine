@@ -461,8 +461,6 @@ def test_corrupt_confirmed_artifact_fails_before_atomic_publication(tmp_path: Pa
     resolved = next(iter(receipt.resolved_environments.values()))
     corrupt = resolved["locked_artifacts"][-1]
     service._package_manager.artifact_path(corrupt["sha256"]).write_bytes(b"corrupt")  # noqa: SLF001
-    references = service.hosting_root / "toolbox_environment_cache" / "references.json"
-
     applied = service.toolbox_apply_definition(
         plan_id=plan["plan_id"],
         confirmation_ref=confirmation["confirmation_ref"],
@@ -478,8 +476,6 @@ def test_corrupt_confirmed_artifact_fails_before_atomic_publication(tmp_path: Pa
     assert terminal["lifecycle"] == "terminal_failure"
     assert service._toolbox_state_v2.get("custom-demo") is None  # noqa: SLF001
     assert service._toolbox_executor_registrations("custom-demo") == []  # noqa: SLF001
-    if references.exists():
-        assert json.loads(references.read_text(encoding="utf-8"))["environments"] == {}
 
 
 def test_confirmed_plan_prepares_durable_candidate_without_publication(tmp_path: Path) -> None:

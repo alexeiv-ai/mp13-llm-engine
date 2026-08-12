@@ -2,7 +2,7 @@
 
 Last updated: 2026-08-12
 
-Status: R9.3 lifecycle acceptance complete; R9.4 removals active
+Status: R9.4 removals complete; R9.5 permanent documentation active
 
 This is the current execution ledger for
 [`hosting_access_plan.md`](hosting_access_plan.md). Detailed completed-slice
@@ -12,7 +12,7 @@ compact evidence index, and external completion gates.
 
 ## 1. Current gate and resume order
 
-**R9.3 lifecycle acceptance is complete; R9.4 removals are active.** R7.2 candidate lifecycle is complete. R7.1 planning and selective revision is complete:
+**R9.4 removals are complete; R9.5 permanent documentation is active.** R7.2 candidate lifecycle is complete. R7.1 planning and selective revision is complete:
 generic locks/requests, CAS changes, evidence, child replanning, exact public
 projections, and stale/retry/restart/concurrency safety proofs are committed.
 The strict v3 candidate retention/quota policy, durable candidate repository,
@@ -27,11 +27,9 @@ lifecycle state and never moves generic package/environment state.
 
 Resume in this order:
 
-1. Perform the R9.4 production/test/doc removal scans and remove stale
-   surfaces and fixtures.
-2. Complete R9.5 permanent documentation alignment.
-3. Obtain dependent adoption evidence and run final matrices.
-4. Reconcile all remaining evidence and close R9.8.
+1. Complete R9.5 permanent documentation alignment.
+2. Obtain dependent adoption evidence and run final matrices.
+3. Reconcile all remaining evidence and close R9.8.
 
 Do not run the repository-wide aggregate at resume. Its last diagnostic run
 stopped after 509 passes and 100 expected legacy-fixture failures; rerun it only
@@ -76,16 +74,6 @@ are authoritative for unfinished item-level work.
 ### P0 before R7
 
 The pre-R7 P0 clean-cut items are complete.
-
-### R9.4 removal
-
-- Run the R1 vocabulary and constructor scans over production, tests, docs,
-  and examples; inspect intentional historical matches.
-- Remove old commands, fields, aliases, codes, filenames, roots, fallbacks,
-  and mandatory-signing language without adding compatibility translations.
-- Keep the 24 removed-constructor/missing-v3-config toolbox sandbox fixtures as
-  explicit R9.4 test-removal debt; the mixed diagnostic currently reaches 119
-  passes before those known failures.
 
 ### R9 closeout
 
@@ -151,6 +139,7 @@ The pre-R7 P0 clean-cut items are complete.
 | CODE/TEST-R9.4S | Removed the orphan toolbox-specific template constructor and its host-project config repository, signed artifact store/acquirer, built-in resolver/template adapters, private host fields, and legacy resolver fixtures. The supported generic environment-template API remains; plan, rollout, catalog, maintenance, definition, and revision coverage passed 97 tests. |
 | CODE/TEST-R9.4T | Removed the obsolete `toolbox_artifact_import` hosted-operation kind, selector namespace, progress phases, cancellation branch, and contract fixture. Generic package upload/commit and environment operations remain; focused operation/package/environment coverage passed 64 tests. |
 | DOC/TEST-R9.4U | Replaced the permanent contract's signed bundle/setup/built-in authority with the shipped generic package CAS/index, locks, active catalog, prewarm, and readiness behavior; removed the retired host-config state filename and mandatory-signing fixture vocabulary. Contract/catalog/plan/definition/rollout coverage passed 57 tests. |
+| TEST-R9.4V | Final production/test/doc vocabulary and constructor scans leave only explicit rejection, absence, and historical handoff matches. Removed-surface, strict-startup, generic-root, CLI/settings rejection, builder, contract, and definition-resolution coverage passed 102 tests. |
 | CODE-R8A–C | Versioned neutral state, Python/JS shared manager adoption, GC/repair controls passed focused coverage. |
 | CODE/TEST-R9 partial | Structured auth, role/hash authority, redaction, startup modes, generic lifecycle, and retry/restart identity passed focused coverage. |
 | TEST-R8.2C checkpoint | Workflow operation suite passed; full helper suite passed 116 tests on resume. |

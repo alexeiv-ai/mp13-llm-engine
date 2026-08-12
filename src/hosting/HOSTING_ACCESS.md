@@ -894,9 +894,10 @@ Family-specific fingerprints bind all dispatch-relevant inputs:
   and confirmation identities, expected active revision, exact selected
   artifacts/locks, approval identity when required, host/source/catalog/policy
   revisions, and target;
-- toolbox setup/import/template/environment/maintenance operations: their exact
-  host-owned selector, configuration/source/target pins, immutable artifact or
-  environment identity, and mutation-specific options;
+- package upload/lock, environment template/build/remove, hosting GC, and
+  toolbox maintenance operations: their exact host-owned selector, unified
+  configuration revision, immutable artifact/environment identity, and
+  mutation-specific options;
 - toolbox live describe refresh: the exact toolbox or engine selector; and
 - template prewarm: template selector, exact template digest, target ABI and
   platform, and catalog revision.

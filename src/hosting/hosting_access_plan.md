@@ -220,7 +220,7 @@ side-effect-free.
   replacement, release, removal, repair, GC, toolbox/second-worker concurrency,
   the frequent-edit candidate matrix above, disconnect/retry/restart, and prove
   one authorized logical request causes at most one durable/execution effect.
-- [ ] **R9.4 Removal:** run the R1 searches over production, tests, docs, and
+- [x] **R9.4 Removal:** run the R1 searches over production, tests, docs, and
   examples; remove old fields, commands, aliases, codes, contract IDs,
   filenames, roots, fallbacks, and mandatory-signing language. Inspect any
   intentionally retained historical match.
