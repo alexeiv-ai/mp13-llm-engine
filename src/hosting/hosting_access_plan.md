@@ -1,7 +1,7 @@
 # Unified hosting configuration and package/environment cutover plan
 
-Status: active breaking-change plan; local and native R9.7 acceptance complete,
-with R9.6 consumer adoption and the sensitive Windows R9.7 lane still gated
+Status: active breaking-change plan; R9.7 acceptance complete, with R9.6
+consumer adoption still gated
 
 This is the current execution plan, not a history log. Completed-slice detail is
 retained in Git history and summarized in `hosting_status.md`. Exact external
@@ -130,11 +130,9 @@ only in `HOSTING_CLIENT_BREAKING_CHANGES.md`.
 Resume in this order:
 
 1. Obtain the R9.6 dependent-owner adoption receipt.
-2. Run the opt-in Windows sensitive-sandbox lane with an external engine model
-   or configuration.
-3. Reconcile that external result and the receipt, then perform R9.8
-   closeout. Do not repeat locally green lanes unless intervening code changes
-   or an external lane exposes a regression.
+2. Reconcile that receipt, then perform R9.8 closeout. Do not repeat locally
+   green lanes unless intervening code changes or an external lane exposes a
+   regression.
 
 Completed foundations that remain usable include shared roots/setup, strict v3
 configuration loading, single-path startup, generic package ingress/locks,
@@ -230,10 +228,10 @@ side-effect-free.
   dependent owner, implementation revision, and tests. A daemon shim is not an
   adoption receipt.
   - [x] Final parent handoff is frozen against implementation commit
-    `cb39c0ee73d0beb7f1b852b4e4a9e80a5220883e`.
+    `4d01307f664366c3149bef539aaa1b4e3f98a82f`.
   - [ ] Named dependent owner, full dependent revision, and reproducible test
     receipt remain required.
-- [ ] **R9.7 Full matrix:** after removals, run required aggregate, lint, type,
+- [x] **R9.7 Full matrix:** after removals, run required aggregate, lint, type,
   integration, Windows/POSIX, relay-equivalent, and affected native/platform
   lanes. Record commands/results; skipped required lanes remain open with owner
   and reason.
@@ -244,10 +242,11 @@ side-effect-free.
   - [x] Focused security/redaction proof passed 172 tests.
   - [x] Windows x64 native and relay-equivalent lanes passed as recorded in
     `hosting_status.md`.
-  - [x] External native workflow run `31605912784` passed Windows x64/ARM64,
+  - [x] External native workflow run `31608128010` passed Windows x64/ARM64,
     Linux x64/ARM64, and macOS ARM64 at implementation commit
-    `cb39c0ee73d0beb7f1b852b4e4a9e80a5220883e`.
-  - [ ] Opt-in Windows sensitive-sandbox lane remains required.
+    `4d01307f664366c3149bef539aaa1b4e3f98a82f`.
+  - [x] Opt-in Windows sensitive-sandbox lane passed with a real external tiny
+    Llama model under a restricted token, Low Integrity, and a job object.
 - [ ] **R9.8 Closeout:** reconcile every remaining checkbox and every target or
   locked rule in Sections 1–2 with evidence, verify schema/capability/docs/
   handoff agreement, verify no compatibility code escaped review, and mark

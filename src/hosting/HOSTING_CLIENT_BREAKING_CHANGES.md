@@ -861,7 +861,7 @@ parent implementation pin against which they ran.
 | Field | Required value | Current value |
 |---|---|---|
 | Parent contract major | Exact version | `hosting.control.v3` / `3` |
-| Parent implementation pin | Full commit | `cb39c0ee73d0beb7f1b852b4e4a9e80a5220883e` |
+| Parent implementation pin | Full commit | `4d01307f664366c3149bef539aaa1b4e3f98a82f` |
 | Dependent owner | Team/person | Pending |
 | Dependent revision | Full commit | Pending |
 | Configuration/startup tests | Commands and result | Pending |
