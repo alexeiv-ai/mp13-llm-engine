@@ -7,6 +7,8 @@ import sys
 import types
 from pathlib import Path
 
+from tests.hosting_v3_fixtures import write_hosting_configuration
+
 _MODULE_PATH = Path(__file__).resolve().parents[1] / "src" / "app" / "config.py"
 _SPEC = importlib.util.spec_from_file_location("app_config_module", _MODULE_PATH)
 if _SPEC is None or _SPEC.loader is None:
@@ -35,13 +37,13 @@ def test_shared_config_ui_exposes_host_owned_roots() -> None:
 
 
 def test_host_auth_status_and_upsert_key(tmp_path: Path, capsys) -> None:
-    control_state = tmp_path / "access_control.json"
+    mp13_config = write_hosting_configuration(tmp_path)
 
     rc = _run_main(
         [
             "mp13config",
-            "--host-control-state-file",
-            str(control_state),
+            "--host-mp13-config-file",
+            str(mp13_config),
             "--host-auth-upsert-key",
             "mgmt1",
             "--host-auth-role",
@@ -58,8 +60,8 @@ def test_host_auth_status_and_upsert_key(tmp_path: Path, capsys) -> None:
     rc = _run_main(
         [
             "mp13config",
-            "--host-control-state-file",
-            str(control_state),
+            "--host-mp13-config-file",
+            str(mp13_config),
             "--host-auth-status",
         ]
     )
@@ -70,13 +72,13 @@ def test_host_auth_status_and_upsert_key(tmp_path: Path, capsys) -> None:
 
 
 def test_host_auth_issue_session_prints_remote_shared_secret_guidance(tmp_path: Path, capsys) -> None:
-    control_state = tmp_path / "access_control.json"
+    mp13_config = write_hosting_configuration(tmp_path)
 
     rc = _run_main(
         [
             "mp13config",
-            "--host-control-state-file",
-            str(control_state),
+            "--host-mp13-config-file",
+            str(mp13_config),
             "--host-auth-upsert-key",
             "mgmt1",
             "--host-auth-role",
@@ -88,18 +90,13 @@ def test_host_auth_issue_session_prints_remote_shared_secret_guidance(tmp_path: 
     assert rc == 0
     _ = capsys.readouterr()
 
-    payload = json.loads(control_state.read_text(encoding="utf-8"))
-    cfg = dict(payload.get("control_config") or {})
-    cfg["require_auth"] = True
-    cfg["access_profile"] = {"connectivity_mode": "ssh_tunnel_only"}
-    payload["control_config"] = cfg
-    control_state.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    write_hosting_configuration(tmp_path, require_auth=True, connectivity_mode="ssh_tunnel_only")
 
     rc = _run_main(
         [
             "mp13config",
-            "--host-control-state-file",
-            str(control_state),
+            "--host-mp13-config-file",
+            str(mp13_config),
             "--host-auth-issue-session",
             "mgmt1",
             "--host-auth-secret",

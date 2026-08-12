@@ -679,6 +679,18 @@ the slice.
 - Remaining: R4.2 stays open until removal searches clear the other fixtures,
   help text, and documentation matches
 
+### TEST-R3.2E — shared configuration auth fixture cut
+
+- Date: 2026-08-12
+- Plan IDs: R3.2 fixture removal and R9.4 (partial); P0/P2; high expertise
+- Outcome: the shared MP13 configuration CLI auth tests now load the v3 static
+  authority through `--host-mp13-config-file`; the remote shared-secret denial
+  activates changed connectivity policy by rewriting v3 configuration before a
+  new service invocation, without editing runtime control state
+- Proof: `python -m pytest tests/test_app_config_host_auth.py -q --maxfail=20`
+  passed 10 tests, including key/status persistence and remote shared-secret
+  denial guidance
+
 Append one concise entry per completed slice. Include exact commands, counts,
 durations where useful, negative-path results, commit pin, and dependent receipt
 impact. Do not paste an unstructured full test transcript.
