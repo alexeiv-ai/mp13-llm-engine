@@ -24,7 +24,7 @@ import time
 from dataclasses import dataclass, field
 from multiprocessing.connection import Listener
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Coroutine, Dict, Optional, TypeAlias, cast
 
 from .._process_utils import hidden_subprocess_kwargs, terminate_process_tree
 from .child_runtime import (
@@ -34,7 +34,7 @@ from .child_runtime import (
 )
 
 
-NodeEventCallback = ChildRuntimeEventCallback
+NodeEventCallback: TypeAlias = ChildRuntimeEventCallback
 _LOGGER = logging.getLogger(__name__)
 _ACTIVE_NODE_PROCS: set[subprocess.Popen[Any]] = set()
 _ACTIVE_NODE_PROCS_LOCK = threading.Lock()
@@ -283,7 +283,7 @@ class WorkflowPythonNodeRuntime:
         try:
             dispatched = host_dispatcher(dict(payload or {}))
             if inspect.isawaitable(dispatched):
-                dispatched = asyncio.run(dispatched)
+                dispatched = asyncio.run(cast(Coroutine[Any, Any, Any], dispatched))
             self.respond_host_call(host_call_id=str(payload.get("host_call_id") or ""), result=dict(dispatched or {}))
         except Exception as exc:
             reason = str(getattr(exc, "reason", "") or "host_call_failed")

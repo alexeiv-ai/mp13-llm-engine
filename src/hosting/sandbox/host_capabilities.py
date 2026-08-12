@@ -746,6 +746,11 @@ class HostCapabilityBroker:
     ) -> _HostConcurrencyLease:
         policy = self._concurrency_policy(session, method, arguments)
         controller = _host_concurrency_controller(f"{session.session_id}:{policy['group']}")
+
+        def cancel_checker() -> bool:
+            self._check_canceled()
+            return False
+
         acquire_task = asyncio.create_task(
             asyncio.to_thread(
                 controller.acquire,
@@ -758,7 +763,7 @@ class HostCapabilityBroker:
                     float(timeout_seconds or 30.0),
                     float(policy["queue_timeout_seconds"] or timeout_seconds or 30.0),
                 ),
-                cancel_checker=self._check_canceled,
+                cancel_checker=cancel_checker,
             )
         )
         try:
@@ -1244,7 +1249,7 @@ class HostCapabilityBroker:
                     )
                     event_call_id = host_call_id or provider_call_id
                     timeout_seconds = self._provider_timeout_for_call(row)
-                    call = HostCapabilityProviderCall(
+                    provider_call = HostCapabilityProviderCall(
                         provider_call_id=provider_call_id,
                         method=method_name,
                         arguments=dict(row.get("arguments") or {}),
@@ -1278,17 +1283,17 @@ class HostCapabilityBroker:
                             "instance_id": self.instance_id or None,
                         },
                     )
-                    lease: Optional[_HostConcurrencyLease] = None
+                    provider_lease: Optional[_HostConcurrencyLease] = None
                     try:
-                        lease = await self._acquire_concurrency(
+                        provider_lease = await self._acquire_concurrency(
                             session=session,
                             method=method,
                             request_id=provider_call_id,
-                            arguments=dict(call.arguments or {}),
+                            arguments=dict(provider_call.arguments or {}),
                             timeout_seconds=timeout_seconds,
                         )
-                        await self._request_approval(session=session, method=method, provider_call=call, host_call_id=host_call_id)
-                        response = self.provider_invoker(session, call)
+                        await self._request_approval(session=session, method=method, provider_call=provider_call, host_call_id=host_call_id)
+                        response = self.provider_invoker(session, provider_call)
                         if inspect.isawaitable(response):
                             response = await self._await_provider_response(response, timeout_seconds=timeout_seconds)
                         self._check_canceled()
@@ -1357,8 +1362,8 @@ class HostCapabilityBroker:
                         self._emit_event("host_response", {"status": "error", "method": method_name, "call_id": event_call_id, "host_call_id": host_call_id or None, "provider_call_id": provider_call_id, "reason": "host_call_failed"})
                         raise
                     finally:
-                        if lease is not None:
-                            lease.release()
+                        if provider_lease is not None:
+                            provider_lease.release()
                 host_call_id = _clean(row.get("host_call_id") or row.get("call_id"))
                 execution_request_id = f"cap_call_{uuid.uuid4().hex}"
                 self._emit_event(
@@ -1374,9 +1379,9 @@ class HostCapabilityBroker:
                         "instance_id": self.instance_id or None,
                     },
                 )
-                lease: Optional[_HostConcurrencyLease] = None
+                broker_lease: Optional[_HostConcurrencyLease] = None
                 try:
-                    lease = await self._acquire_concurrency(
+                    broker_lease = await self._acquire_concurrency(
                         session=session,
                         method=method,
                         request_id=execution_request_id,
@@ -1391,8 +1396,8 @@ class HostCapabilityBroker:
                     self._emit_event("host_response", {"status": "error", "method": method_name, "call_id": host_call_id or None, "host_call_id": host_call_id or None, "provider_id": session.provider_id, "reason": reason})
                     raise
                 finally:
-                    if lease is not None:
-                        lease.release()
+                    if broker_lease is not None:
+                        broker_lease.release()
         raise RuntimeError(f"unsupported_host_method:{method_name}")
 
     def dispatch(self, call: Dict[str, Any]) -> Dict[str, Any]:

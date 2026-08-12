@@ -12,7 +12,7 @@ import threading
 from dataclasses import dataclass, field
 from multiprocessing.connection import Listener
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Coroutine, Dict, Optional, cast
 
 from mp13_engine.mp13_toolbox import ToolsView
 
@@ -182,7 +182,7 @@ class _HostedToolCallbackRelay:
         except TypeError:
             result = processor(callback_name, payload, context)
         if inspect.isawaitable(result):
-            return asyncio.run(result)
+            return asyncio.run(cast(Coroutine[Any, Any, Any], result))
         return result
 
     def _handle_connection(self, conn: Any) -> None:
