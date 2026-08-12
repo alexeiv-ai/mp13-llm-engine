@@ -77,7 +77,14 @@ class ToolboxRuntimeMixin:
                 "hosting.toolbox.package_policy.v1",
                 {**policy_payload, "package_policy": package_policy.to_dict()},
             ),
-            **policy_payload,
+            allowed_template_ids=tuple(sorted(template.template_id for template in templates)),
+            allowed_targets=(f"{python_abi}-{platform}",),
+            package_allowlist=(),
+            package_denylist=(),
+            allow_custom=bool(policy_payload["allow_custom"]),
+            custom_requires_approval=True,
+            online_resolution_allowed=False,
+            allowed_index_origins=(),
         )
         return {
             "templates": templates,
@@ -1303,15 +1310,15 @@ class ToolboxRuntimeMixin:
             if any(item.change != "removed" for item in offer.tool_mutations)
         }
         planned_environment_records = {}
-        for profile in draft.profiles:
-            offer = offers_by_tools.get(frozenset(profile.assigned_tool_keys))
+        for resolved_profile in draft.profiles:
+            offer = offers_by_tools.get(frozenset(resolved_profile.assigned_tool_keys))
             planned = (
                 selected_planned_environment_records.get(offer.environment_id)
                 if offer is not None
                 else None
             )
             if planned is not None:
-                planned_environment_records[profile.profile_id] = planned.to_dict()
+                planned_environment_records[resolved_profile.profile_id] = planned.to_dict()
         if set(planned_environment_records) != {item.profile_id for item in draft.profiles}:
             raise ValueError("toolbox_planned_environment_selection_incomplete")
         return {
@@ -3495,7 +3502,8 @@ class ToolboxRuntimeMixin:
             sibling_request_ids: List[str] = []
             target_request_status: Dict[str, Any] = {}
             if pool is not None and call_id:
-                target_request_status = dict(pool.request_status(call_id).get("request") or {})
+                raw_request_status = pool.request_status(call_id).get("request")
+                target_request_status = dict(raw_request_status) if isinstance(raw_request_status, dict) else {}
                 for worker in list(pool.workers or []):
                     if str(worker.engine_id or "").strip() != target_engine_id:
                         continue

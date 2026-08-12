@@ -1114,32 +1114,32 @@ def plan_toolbox_definition(
                 for file in member.request.files:
                     files_by_path.setdefault(file.normalized_path(), file)
             if member.kind == "auto":
-                auto_request = member.request
-                assert isinstance(auto_request, ToolboxAutoAssignmentRequestV2)
+                member_auto_request = member.request
+                assert isinstance(member_auto_request, ToolboxAutoAssignmentRequestV2)
                 auto_tools.append(
                     ToolboxBundleAutoTool(
-                        module_name=auto_request.module_name,
-                        callable_name=auto_request.callable_name,
-                        activate=auto_request.activate,
-                        hidden=auto_request.hidden,
-                        non_restartable=auto_request.non_restartable,
-                        guide_content=dict(auto_request.guide_content) if auto_request.guide_content is not None else None,
-                        guide_description=auto_request.guide_description,
-                        callback_signature=dict(auto_request.callback_signature) if auto_request.callback_signature is not None else None,
-                        concurrency=dict(auto_request.concurrency) if auto_request.concurrency is not None else None,
+                        module_name=member_auto_request.module_name,
+                        callable_name=member_auto_request.callable_name,
+                        activate=member_auto_request.activate,
+                        hidden=member_auto_request.hidden,
+                        non_restartable=member_auto_request.non_restartable,
+                        guide_content=dict(member_auto_request.guide_content) if member_auto_request.guide_content is not None else None,
+                        guide_description=member_auto_request.guide_description,
+                        callback_signature=dict(member_auto_request.callback_signature) if member_auto_request.callback_signature is not None else None,
+                        concurrency=dict(member_auto_request.concurrency) if member_auto_request.concurrency is not None else None,
                     )
                 )
             elif member.kind == "manual":
-                manual_request = member.request
-                assert isinstance(manual_request, ToolboxManualAssignmentRequestV2)
+                member_manual_request = member.request
+                assert isinstance(member_manual_request, ToolboxManualAssignmentRequestV2)
                 manual_tools.append(
                     ToolboxBundleTool(
-                        definition=dict(manual_request.tool_definition),
-                        entrypoint=f"{manual_request.module_name}:{manual_request.callable_name}",
-                        hidden=manual_request.hidden,
-                        non_restartable=manual_request.non_restartable,
-                        callback_signature=dict(manual_request.callback_signature) if manual_request.callback_signature is not None else None,
-                        concurrency=dict(manual_request.concurrency) if manual_request.concurrency is not None else None,
+                        definition=dict(member_manual_request.tool_definition),
+                        entrypoint=f"{member_manual_request.module_name}:{member_manual_request.callable_name}",
+                        hidden=member_manual_request.hidden,
+                        non_restartable=member_manual_request.non_restartable,
+                        callback_signature=dict(member_manual_request.callback_signature) if member_manual_request.callback_signature is not None else None,
+                        concurrency=dict(member_manual_request.concurrency) if member_manual_request.concurrency is not None else None,
                     )
                 )
             else:

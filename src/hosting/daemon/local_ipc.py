@@ -3342,7 +3342,7 @@ class EngineHostDaemon:
             actor = str(payload.get("_claim_actor_id") or "service:local")
             return svc.toolbox_renew_definition_candidate(
                 candidate_ref=str(payload.get("candidate_ref") or ""),
-                requested_lifetime_ms=payload.get("requested_lifetime_ms"),
+                requested_lifetime_ms=cast(int, payload.get("requested_lifetime_ms")),
                 request_id=str(payload.get("request_id") or ""),
                 owner_actor_id=actor,
                 authority_id=actor,
